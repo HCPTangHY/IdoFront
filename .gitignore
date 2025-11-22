@@ -1,5 +1,5 @@
-edge-extension.*
-edge-extension.*
+*.crx
+*.pem
 output.md
 *.zip
 
