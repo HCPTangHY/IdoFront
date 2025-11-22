@@ -1,0 +1,393 @@
+/**
+ * Gemini Channel Adapter
+ * Handles communication with Google Gemini API
+ */
+(function() {
+    window.IdoFront = window.IdoFront || {};
+    window.IdoFront.channels = window.IdoFront.channels || {};
+
+    const registry = window.IdoFront.channelRegistry;
+    const CHANNEL_ID = 'gemini';
+
+    // Helper: Convert Gemini parts to displayable content and reasoning
+    function partsToContent(parts) {
+        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null };
+        
+        let content = '';
+        let reasoning = '';
+        
+        for (const part of parts) {
+            if (part.text) {
+                // Check if this is a thought part
+                if (part.thought === true) {
+                    reasoning += part.text;
+                } else {
+                    content += part.text;
+                }
+            }
+            if (part.inlineData) {
+                const { mimeType, data } = part.inlineData;
+                content += `\n![Generated Image](data:${mimeType};base64,${data})\n`;
+            }
+        }
+        
+        return {
+            content,
+            reasoning: reasoning || null
+        };
+    }
+
+    // Helper: Convert message to Gemini format
+    function convertMessages(messages) {
+        const contents = [];
+        let systemInstruction = undefined;
+
+        for (const msg of messages) {
+            if (msg.role === 'system') {
+                // System instruction - check metadata first, fallback to content
+                const geminiData = msg.metadata?.gemini;
+                systemInstruction = {
+                    parts: geminiData?.parts || [{ text: msg.content || '' }]
+                };
+            } else {
+                const role = msg.role === 'assistant' ? 'model' : 'user';
+                const geminiData = msg.metadata?.gemini;
+                
+                let parts = [];
+                
+                // 如果有 gemini 元数据，直接使用
+                if (geminiData?.parts) {
+                    parts = geminiData.parts;
+                } else {
+                    // 否则构建 parts
+                    // 1. 添加文本内容
+                    if (msg.content) {
+                        parts.push({ text: msg.content });
+                    }
+                    
+                    // 2. 添加附件（仅用户消息）
+                    if (role === 'user' && msg.metadata?.attachments) {
+                        for (const attachment of msg.metadata.attachments) {
+                            if (attachment.type && attachment.type.startsWith('image/')) {
+                                // 提取 base64 数据
+                                const base64Data = attachment.dataUrl.split(',')[1];
+                                parts.push({
+                                    inlineData: {
+                                        mimeType: attachment.type,
+                                        data: base64Data
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                const geminiMsg = {
+                    role: role,
+                    parts: parts
+                };
+                
+                // Include thoughtSignature if present (for assistant messages)
+                if (geminiData?.thoughtSignature && role === 'model') {
+                    geminiMsg.thoughtSignature = geminiData.thoughtSignature;
+                }
+                
+                contents.push(geminiMsg);
+            }
+        }
+        return { contents, systemInstruction };
+    }
+
+    const adapter = {
+        /**
+         * Send message to Gemini API
+         * @param {Array} messages - Chat history
+         * @param {Object} config - Channel configuration
+         * @param {Function} onUpdate - Optional callback for streaming updates
+         * @returns {Promise<Object>} - Response content
+         */
+        async call(messages, config, onUpdate) {
+            let baseUrl = config.baseUrl;
+            if (!baseUrl || !baseUrl.trim()) {
+                baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+            }
+            // Normalize URL: remove trailing slash
+            baseUrl = baseUrl.replace(/\/+$/, '');
+            
+            // Handle model name (strip models/ prefix if present to avoid double prefixing)
+            let model = config.model;
+            if (model.startsWith('models/')) {
+                model = model.substring(7);
+            }
+
+            // Use SSE for streaming if requested
+            const isStream = !!onUpdate;
+            const action = isStream ? 'streamGenerateContent' : 'generateContent';
+            
+            // Construct URL
+            // Standard: https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}
+            // If streaming, add alt=sse
+            let url = `${baseUrl}/models/${model}:${action}`;
+            if (isStream) {
+                url += '?alt=sse';
+            }
+
+            const { contents, systemInstruction } = convertMessages(messages);
+
+            const body = {
+                contents: contents
+            };
+            
+            if (systemInstruction) {
+                body.systemInstruction = systemInstruction;
+            }
+
+            // Generation Config
+            const generationConfig = {};
+            if (config.temperature !== undefined) generationConfig.temperature = parseFloat(config.temperature);
+            if (config.topP !== undefined) generationConfig.topP = parseFloat(config.topP);
+            if (config.maxTokens !== undefined) generationConfig.maxOutputTokens = parseInt(config.maxTokens);
+            
+            if (Object.keys(generationConfig).length > 0) {
+                body.generationConfig = generationConfig;
+            }
+
+            // Apply params override
+            if (config.paramsOverride && typeof config.paramsOverride === 'object') {
+                Object.assign(body, config.paramsOverride);
+            }
+
+            const headers = {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': config.apiKey
+            };
+
+            // Apply custom headers
+            if (config.customHeaders && Array.isArray(config.customHeaders)) {
+                config.customHeaders.forEach(header => {
+                    if (header.key && header.value) {
+                        headers[header.key] = header.value;
+                    }
+                });
+            }
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(body)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorMsg = `Gemini API Error ${response.status}`;
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        if (errorJson.error && errorJson.error.message) {
+                            errorMsg += `: ${errorJson.error.message}`;
+                        } else {
+                            errorMsg += `: ${errorText}`;
+                        }
+                    } catch (e) {
+                        errorMsg += `: ${errorText}`;
+                    }
+                    throw new Error(errorMsg);
+                }
+
+                if (isStream) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder("utf-8");
+                    let buffer = '';
+                    let accumulatedParts = [];
+                    let lastThoughtSignature = null;
+
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split('\n');
+                            buffer = lines.pop(); // Keep the last incomplete line
+
+                            for (const line of lines) {
+                                const trimmed = line.trim();
+                                if (!trimmed) continue;
+                                
+                                // SSE format: data: {json}
+                                if (trimmed.startsWith('data: ')) {
+                                    const jsonStr = trimmed.substring(6);
+                                    if (jsonStr === '[DONE]') continue;
+
+                                    try {
+                                        const json = JSON.parse(jsonStr);
+                                        const candidate = json.candidates?.[0];
+                                        if (candidate && candidate.content && candidate.content.parts) {
+                                            const newParts = candidate.content.parts;
+                                            const thoughtSignature = candidate.thoughtSignature;
+                                            
+                                            // Accumulate parts incrementally
+                                            accumulatedParts = accumulatedParts.concat(newParts);
+                                            lastThoughtSignature = thoughtSignature;
+                                            
+                                            const { content, reasoning } = partsToContent(accumulatedParts);
+                                            
+                                            const updateData = {
+                                                content: content,
+                                                reasoning: reasoning,
+                                                metadata: {
+                                                    gemini: {
+                                                        parts: accumulatedParts,
+                                                        thoughtSignature: thoughtSignature
+                                                    }
+                                                }
+                                            };
+                                            
+                                            onUpdate(updateData);
+                                        }
+                                    } catch (e) {
+                                        console.warn('Error parsing Gemini stream data:', e);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (streamError) {
+                        console.error('Stream reading error:', streamError);
+                        throw streamError;
+                    }
+
+                    const { content, reasoning } = partsToContent(accumulatedParts);
+                    
+                    const result = {
+                        choices: [{
+                            message: {
+                                role: 'assistant',
+                                content: content,
+                                reasoning_content: reasoning,
+                                metadata: {
+                                    gemini: {
+                                        parts: accumulatedParts,
+                                        thoughtSignature: lastThoughtSignature
+                                    }
+                                }
+                            }
+                        }]
+                    };
+                    
+                    return result;
+
+                } else {
+                    // Non-streaming response
+                    const data = await response.json();
+                    const candidate = data.candidates?.[0];
+                    const parts = candidate?.content?.parts || [];
+                    const thoughtSignature = candidate?.thoughtSignature;
+                    const { content, reasoning } = partsToContent(parts);
+                    
+                    // Mimic OpenAI response structure for compatibility
+                    const result = {
+                        choices: [{
+                            message: {
+                                role: 'assistant',
+                                content: content,
+                                reasoning_content: reasoning,
+                                metadata: {
+                                    gemini: {
+                                        parts: parts,
+                                        thoughtSignature: thoughtSignature
+                                    }
+                                }
+                            }
+                        }]
+                    };
+                    
+                    return result;
+                }
+
+            } catch (error) {
+                console.error('Gemini Channel Error:', error);
+                throw error;
+            }
+        },
+
+        /**
+         * Fetch available models from Gemini API
+         * @param {Object} config - Channel configuration
+         * @returns {Promise<Array>} - List of model IDs
+         */
+        async fetchModels(config) {
+            let baseUrl = config.baseUrl;
+            if (!baseUrl || !baseUrl.trim()) {
+                baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+            }
+            baseUrl = baseUrl.replace(/\/+$/, '');
+            
+            let allModels = [];
+            let pageToken = null;
+            
+            try {
+                do {
+                    // Construct URL with pageSize and pageToken
+                    let url = `${baseUrl}/models?pageSize=1000`;
+                    if (pageToken) {
+                        url += `&pageToken=${encodeURIComponent(pageToken)}`;
+                    }
+                    
+                    const response = await fetch(url, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-goog-api-key': config.apiKey
+                        }
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`获取模型失败 ${response.status}: ${errorText}`);
+                    }
+
+                    const data = await response.json();
+                    
+                    if (data.models && Array.isArray(data.models)) {
+                        // Extract model names and strip 'models/' prefix
+                        const models = data.models.map(m => m.name.replace(/^models\//, ''));
+                        allModels = allModels.concat(models);
+                    }
+                    
+                    // Update pageToken for next iteration
+                    pageToken = data.nextPageToken;
+                    
+                } while (pageToken); // Continue until no next page token
+
+                return allModels.sort();
+                
+            } catch (error) {
+                console.error('Fetch Gemini Models Error:', error);
+                throw error;
+            }
+        }
+    };
+
+    // Register with channelRegistry
+    if (registry) {
+        registry.registerType(CHANNEL_ID, {
+            adapter: adapter,
+            label: 'Google Gemini',
+            source: 'core',
+            version: '1.0.0',
+            defaults: {
+                baseUrl: 'https://generativelanguage.googleapis.com/v1beta'
+            },
+            capabilities: {
+                streaming: true,
+                vision: true
+            },
+            metadata: {
+                provider: 'google'
+            }
+        });
+    } else {
+        // Fallback for older versions or if registry is not available
+        window.IdoFront.channels[CHANNEL_ID] = adapter;
+    }
+})();

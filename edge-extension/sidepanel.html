@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>IdoFront</title>
+    
+    <!-- Local Tailwind (CSP Compliant) -->
+    <script src="scripts/tailwind.js"></script> 
+    
+    <!-- Icons (requires host permission in manifest) -->
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+    
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="styles/custom.css">
+</head>
+<body class="bg-gray-50 h-screen w-screen overflow-hidden text-sm font-sans flex flex-col">
+
+<!-- App Container -->
+<div class="flex flex-1 h-full relative overflow-hidden" id="app-container">
+
+    <!-- ================= LEFT PANEL ================= -->
+    <aside id="left-panel" class="bg-white border-r border-gray-200 flex flex-col flex-shrink-0 overflow-hidden transition-width" style="width: 0px;">
+        <!-- 左侧面板内容由插件动态创建 -->
+        <!-- Plugin slots: sidebar-header, slot-sidebar-top, history-list, slot-sidebar-bottom -->
+        <div id="sidebar-header" class="h-12 border-b border-gray-100 flex items-center justify-between px-3 flex-shrink-0"></div>
+        <div class="p-2 flex-shrink-0" id="slot-sidebar-top"></div>
+        <div class="flex-1 overflow-y-auto p-2 space-y-1" id="history-list"></div>
+        <div class="p-3 border-t border-gray-100 bg-gray-50 flex-shrink-0" id="slot-sidebar-bottom"></div>
+    </aside>
+
+    <!-- Resizer Left -->
+    <div class="resizer hidden" id="resizer-left"></div>
+
+    <!-- ================= MIDDLE PANEL (CHAT) ================= -->
+    <main class="flex-1 flex flex-col min-w-0 bg-white relative z-0">
+        <!-- Header will be dynamically created by framework -->
+        <div id="main-header"></div>
+
+        <!-- Chat Stream -->
+        <div class="flex-1 overflow-y-auto p-4 scroll-smooth" id="chat-stream">
+            <div class="h-full flex flex-col items-center justify-center text-gray-400 select-none">
+                <span class="material-symbols-outlined text-4xl mb-2 opacity-20">chat</span>
+                <p>准备就绪</p>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div id="input-area" class="p-4 border-t border-gray-100 bg-white">
+            <!-- Plugin Slot: Input Toolbar -->
+            <div class="flex gap-2 mb-2 text-xs text-gray-500 empty:hidden" id="slot-input-top"></div>
+            
+            <div class="relative border border-gray-300 shadow-sm rounded-xl bg-white focus-within:border-blue-500 transition-colors">
+                <textarea id="user-input" rows="1" class="w-full p-3 bg-transparent resize-none outline-none max-h-40" placeholder="输入消息..."></textarea>
+                
+                <div class="flex justify-between items-center px-2 pb-2">
+                    <!-- Plugin Slot: Left Actions -->
+                    <div class="flex gap-1" id="slot-input-actions-left"></div>
+                    
+                    <div class="flex gap-2 items-center">
+                        <!-- Plugin Slot: Right Actions -->
+                        <div class="flex gap-1" id="slot-input-actions-right"></div>
+                        <button id="btn-send" class="bg-blue-600 text-white rounded-lg w-8 h-8 flex items-center justify-center hover:bg-blue-700 transition-colors">
+                            <span class="material-symbols-outlined text-[18px]">arrow_upward</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Resizer Right -->
+    <div class="resizer hidden" id="resizer-right"></div>
+
+    <!-- ================= RIGHT PANEL ================= -->
+    <aside id="right-panel" class="bg-gray-50 border-l border-gray-200 flex flex-col flex-shrink-0 overflow-hidden transition-width" style="width: 0px;">
+        <!-- 右侧面板内容由插件动态创建 -->
+        <!-- 默认容器，可被 setCustomPanel 替换 -->
+        <div id="right-panel-default" class="flex flex-col h-full w-full">
+            <!-- 默认为空，由插件填充 -->
+        </div>
+    </aside>
+
+    <!-- Mobile Backdrop -->
+    <div id="backdrop" class="fixed inset-0 bg-black/20 backdrop-blur-sm z-30 hidden"></div>
+
+    <!-- Bottom Sheet Backdrop -->
+    <div id="bottom-sheet-backdrop" class="fixed inset-0 bg-black/30 backdrop-blur-sm hidden transition-opacity duration-300" style="z-index: 50; opacity: 0;"></div>
+
+    <!-- ================= BOTTOM SHEET ================= -->
+    <div id="bottom-sheet" class="fixed inset-x-0 bottom-0 hidden transition-transform duration-300 ease-out" style="z-index: 51; transform: translateY(100%);">
+        <!-- 底部抽屉内容由插件动态创建 -->
+        <div id="bottom-sheet-content" class="bg-white rounded-t-2xl shadow-2xl flex flex-col overflow-hidden" style="height: 80vh;">
+            <!-- 内容将由 JavaScript 动态填充 -->
+        </div>
+    </div>
+
+</div>
+
+<!-- Scripts -->
+<script src="scripts/ui-kit.js"></script>
+<script src="scripts/framework.js"></script>
+<script src="scripts/ido-front/loader.js"></script>
+<script src="scripts/plugins.js"></script>
+<script src="scripts/marked.min.js"></script>
+</body>
+</html>

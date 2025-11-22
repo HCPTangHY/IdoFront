@@ -1,0 +1,1610 @@
+/* Global cursor behavior:
+ * - Default: arrow cursor everywhere
+ * - Text cursor: only on real editable areas (input/textarea/contenteditable)
+ * - Pointer: on clickable elements
+ * - Selection: disabled by default, re-enabled only where needed
+ */
+body,
+body * {
+    cursor: default;
+    -webkit-user-select: text;
+    user-select: text;
+    caret-color: transparent;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+    cursor: text;
+    -webkit-user-select: text;
+    user-select: text;
+    caret-color: auto;
+}
+
+/* Areas where text selection is allowed but content is not editable */
+#chat-stream,
+#network-list,
+#detail-json,
+pre,
+code,
+.selectable,
+.message-content,
+.markdown-body,
+.reasoning-content {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+button,
+a,
+[role="button"],
+.cursor-pointer {
+    cursor: pointer;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Syntax Highlighting */
+.json-key { color: #e11d48; }
+.json-string { color: #16a34a; }
+.json-number { color: #2563eb; }
+.json-boolean { color: #7c3aed; }
+.json-null { color: #9ca3af; }
+
+/* Settings Mode */
+body.settings-mode #chat-stream,
+body.settings-mode #input-area {
+    display: none;
+}
+
+body.settings-mode #settings-view {
+    display: flex;
+}
+
+/* Resizer Handles */
+.resizer {
+    width: 4px;
+    cursor: col-resize;
+    background-color: transparent;
+    transition: background-color 0.2s;
+    z-index: 50;
+    flex-shrink: 0;
+}
+.resizer:hover, .resizer.active {
+    background-color: #3b82f6; /* Blue-500 */
+}
+
+/* Transitions */
+/* We only apply transitions when NOT dragging to ensure smooth toggling */
+.transition-width {
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Prevent text selection during drag */
+body.is-resizing {
+    user-select: none;
+    cursor: col-resize;
+}
+
+/* Mobile Overlay behavior for Left Panel */
+@media (max-width: 768px) {
+    #left-panel {
+        position: absolute;
+        height: 100%;
+        z-index: 40;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+    }
+    #right-panel {
+        position: absolute;
+        right: 0;
+        height: 100%;
+        z-index: 40;
+        box-shadow: -4px 0 24px rgba(0,0,0,0.1);
+    }
+    /* Hide resizers on mobile */
+    .resizer { display: none; }
+}
+
+/* ========================================
+   Panel Transition Animations
+   ======================================== */
+
+/* 面板内容切换动画 - 使用 transform 和 opacity 避免 reflow */
+.panel-transition-exit {
+    animation: panelExit 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.panel-transition-enter {
+    animation: panelEnter 250ms cubic-bezier(0, 0, 0.2, 1) forwards;
+}
+
+@keyframes panelExit {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+}
+
+@keyframes panelEnter {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* 为动画容器添加性能优化提示 */
+.panel-transition-container {
+    will-change: transform, opacity;
+    /* 确保容器在动画期间保持固定尺寸，避免影响父容器布局 */
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* 尊重用户的减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+    .panel-transition-exit,
+    .panel-transition-enter {
+        animation: none !important;
+    }
+    
+    .panel-transition-exit {
+        opacity: 0;
+    }
+    
+    .panel-transition-enter {
+        opacity: 1;
+    }
+}
+
+/* Reasoning / Chain of Thought Styles */
+.reasoning-block {
+    margin-bottom: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.reasoning-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    color: #64748b; /* slate-500 */
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+    background-color: #f1f5f9; /* slate-100 */
+    border-radius: 0.375rem;
+    transition: background-color 0.2s;
+    user-select: none;
+}
+
+.reasoning-toggle:hover {
+    background-color: #e2e8f0; /* slate-200 */
+    color: #475569; /* slate-600 */
+}
+
+.reasoning-content {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    background-color: #f8fafc; /* slate-50 */
+    border: 1px solid #e2e8f0; /* slate-200 */
+    border-radius: 0.5rem;
+    color: #475569; /* slate-600 */
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    white-space: pre-wrap;
+    display: none; /* Hidden by default, toggled by JS */
+}
+
+.reasoning-content.open {
+    display: block;
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ========================================
+   Markdown Styles
+   ======================================== */
+
+.markdown-body {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: inherit;
+}
+
+.markdown-body > *:first-child {
+    margin-top: 0 !important;
+}
+
+.markdown-body > *:last-child {
+    margin-bottom: 0 !important;
+}
+
+/* Headings */
+.markdown-body h1, .markdown-body h2, .markdown-body h3, 
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+    font-weight: 600;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.25;
+}
+
+.markdown-body h1 { font-size: 1.5em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.3em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+.markdown-body h3 { font-size: 1.15em; }
+.markdown-body h4 { font-size: 1em; }
+.markdown-body h5 { font-size: 0.9em; }
+.markdown-body h6 { font-size: 0.85em; color: #6b7280; }
+
+/* Paragraphs */
+.markdown-body p {
+    margin-top: 0;
+    margin-bottom: 0.2em;
+}
+
+/* Lists */
+.markdown-body ul, .markdown-body ol {
+    margin-top: 0;
+    margin-bottom: 0.75em;
+    padding-left: 2em;
+}
+
+.markdown-body li {
+    margin-bottom: 0.25em;
+}
+
+.markdown-body li > p {
+    margin-bottom: 0.5em;
+}
+
+/* Code */
+.markdown-body code {
+    background-color: rgba(175, 184, 193, 0.2);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85em;
+}
+
+.markdown-body pre {
+    background-color: #f6f8fa;
+    border-radius: 6px;
+    padding: 1em;
+    overflow-x: auto;
+    margin-top: 0;
+    margin-bottom: 0.75em;
+}
+
+.markdown-body pre code {
+    background-color: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.9em;
+    line-height: 1.45;
+}
+
+/* Blockquotes */
+.markdown-body blockquote {
+    margin: 0 0 0.75em 0;
+    padding: 0 1em;
+    color: #6b7280;
+    border-left: 0.25em solid #d1d5db;
+}
+
+.markdown-body blockquote > :first-child {
+    margin-top: 0;
+}
+
+.markdown-body blockquote > :last-child {
+    margin-bottom: 0;
+}
+
+/* Links */
+.markdown-body a {
+    color: #3b82f6;
+    text-decoration: none;
+}
+
+.markdown-body a:hover {
+    text-decoration: underline;
+}
+
+/* Horizontal Rule */
+.markdown-body hr {
+    height: 0.25em;
+    padding: 0;
+    margin: 1.5em 0;
+    background-color: #e5e7eb;
+    border: 0;
+}
+
+/* Tables */
+.markdown-body table {
+    border-collapse: collapse;
+    border-spacing: 0;
+    margin-top: 0;
+    margin-bottom: 0.75em;
+    width: 100%;
+}
+
+.markdown-body table th,
+.markdown-body table td {
+    padding: 6px 13px;
+    border: 1px solid #d1d5db;
+}
+
+.markdown-body table th {
+    font-weight: 600;
+    background-color: #f9fafb;
+}
+
+.markdown-body table tr {
+    background-color: #fff;
+    border-top: 1px solid #d1d5db;
+}
+
+.markdown-body table tr:nth-child(2n) {
+    background-color: #f9fafb;
+}
+
+/* Images */
+.markdown-body img {
+    max-width: 100%;
+    box-sizing: content-box;
+    background-color: #fff;
+}
+
+/* Task Lists */
+.markdown-body input[type="checkbox"] {
+    margin-right: 0.5em;
+}
+
+/* Strong and Emphasis */
+.markdown-body strong {
+    font-weight: 600;
+}
+
+.markdown-body em {
+    font-style: italic;
+}
+
+/* Strikethrough */
+.markdown-body del {
+    text-decoration: line-through;
+}
+
+/* Reasoning content also gets markdown styling */
+.reasoning-content.markdown-body {
+    font-size: 0.875rem;
+}
+
+/* ========================================
+   IdoFront CSS Class System
+   ======================================== */
+
+/* ========================================
+   Design Tokens (CSS Variables)
+   ======================================== */
+:root {
+    /* Colors - Primary */
+    --ido-color-primary: #3b82f6;
+    --ido-color-primary-hover: #2563eb;
+    --ido-color-primary-active: #1d4ed8;
+    
+    /* Colors - Secondary */
+    --ido-color-secondary: #6b7280;
+    --ido-color-secondary-hover: #4b5563;
+    
+    /* Colors - Semantic */
+    --ido-color-success: #10b981;
+    --ido-color-success-hover: #059669;
+    --ido-color-warning: #f59e0b;
+    --ido-color-warning-hover: #d97706;
+    --ido-color-danger: #ef4444;
+    --ido-color-danger-hover: #dc2626;
+    --ido-color-info: #06b6d4;
+    --ido-color-info-hover: #0891b2;
+    
+    /* Colors - Background */
+    --ido-color-bg-primary: #ffffff;
+    --ido-color-bg-secondary: #f9fafb;
+    --ido-color-bg-tertiary: #f3f4f6;
+    --ido-color-bg-hover: #f3f4f6;
+    --ido-color-bg-active: #e5e7eb;
+    
+    /* Colors - Text */
+    --ido-color-text-primary: #111827;
+    --ido-color-text-secondary: #6b7280;
+    --ido-color-text-tertiary: #9ca3af;
+    --ido-color-text-disabled: #d1d5db;
+    
+    /* Colors - Border */
+    --ido-color-border: #e5e7eb;
+    --ido-color-border-hover: #d1d5db;
+    --ido-color-border-focus: #3b82f6;
+    
+    /* Spacing */
+    --ido-spacing-xs: 0.25rem;   /* 4px */
+    --ido-spacing-sm: 0.5rem;    /* 8px */
+    --ido-spacing-md: 0.75rem;   /* 12px */
+    --ido-spacing-lg: 1rem;      /* 16px */
+    --ido-spacing-xl: 1.5rem;    /* 24px */
+    --ido-spacing-2xl: 2rem;     /* 32px */
+    
+    /* Border Radius */
+    --ido-radius-sm: 0.375rem;   /* 6px */
+    --ido-radius-md: 0.5rem;     /* 8px */
+    --ido-radius-lg: 0.75rem;    /* 12px */
+    --ido-radius-xl: 1rem;       /* 16px */
+    --ido-radius-2xl: 1.5rem;    /* 24px */
+    --ido-radius-full: 9999px;
+    
+    /* Shadows */
+    --ido-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --ido-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    --ido-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+    --ido-shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    
+    /* Transitions */
+    --ido-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --ido-transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    --ido-transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ========================================
+   Button System
+   ======================================== */
+
+/* Base Button */
+.ido-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ido-spacing-sm);
+    padding: var(--ido-spacing-sm) var(--ido-spacing-lg);
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.5;
+    border-radius: var(--ido-radius-md);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+    user-select: none;
+    white-space: nowrap;
+}
+
+.ido-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Button Variants */
+.ido-btn--primary {
+    background-color: var(--ido-color-primary);
+    color: white;
+}
+
+.ido-btn--primary:hover:not(:disabled) {
+    background-color: var(--ido-color-primary-hover);
+}
+
+.ido-btn--primary:active:not(:disabled) {
+    background-color: var(--ido-color-primary-active);
+}
+
+.ido-btn--secondary {
+    background-color: var(--ido-color-bg-secondary);
+    color: var(--ido-color-text-primary);
+    border-color: var(--ido-color-border);
+}
+
+.ido-btn--secondary:hover:not(:disabled) {
+    background-color: var(--ido-color-bg-hover);
+    border-color: var(--ido-color-border-hover);
+}
+
+.ido-btn--ghost {
+    background-color: transparent;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-btn--ghost:hover:not(:disabled) {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-primary);
+}
+
+.ido-btn--danger {
+    background-color: var(--ido-color-danger);
+    color: white;
+}
+
+.ido-btn--danger:hover:not(:disabled) {
+    background-color: var(--ido-color-danger-hover);
+}
+
+/* Button Sizes */
+.ido-btn--sm {
+    padding: var(--ido-spacing-xs) var(--ido-spacing-md);
+    font-size: 0.75rem;
+}
+
+.ido-btn--md {
+    padding: var(--ido-spacing-sm) var(--ido-spacing-lg);
+    font-size: 0.875rem;
+}
+
+.ido-btn--lg {
+    padding: var(--ido-spacing-md) var(--ido-spacing-xl);
+    font-size: 1rem;
+}
+
+/* Icon Button */
+.ido-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--ido-spacing-sm);
+    border-radius: var(--ido-radius-md);
+    color: var(--ido-color-text-secondary);
+    background-color: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+}
+
+.ido-icon-btn:hover {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-primary);
+}
+
+.ido-icon-btn--active {
+    background-color: var(--ido-color-bg-active);
+    color: var(--ido-color-primary);
+}
+
+/* ========================================
+   Panel System
+   ======================================== */
+
+.ido-panel {
+    display: flex;
+    flex-direction: column;
+    background-color: var(--ido-color-bg-primary);
+    border-radius: var(--ido-radius-lg);
+    overflow: hidden;
+}
+
+.ido-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--ido-spacing-md) var(--ido-spacing-lg);
+    border-bottom: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-primary);
+    flex-shrink: 0;
+}
+
+.ido-panel__title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--ido-color-text-primary);
+}
+
+.ido-panel__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+}
+
+.ido-panel__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--ido-spacing-lg);
+}
+
+.ido-panel__footer {
+    padding: var(--ido-spacing-md) var(--ido-spacing-lg);
+    border-top: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-secondary);
+    flex-shrink: 0;
+}
+
+/* ========================================
+   Card System
+   ======================================== */
+
+.ido-card {
+    background-color: var(--ido-color-bg-primary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-lg);
+    padding: var(--ido-spacing-md);
+    transition: all var(--ido-transition-base);
+}
+
+.ido-card--compact {
+    padding: var(--ido-spacing-sm);
+}
+
+.ido-card--hover:hover {
+    border-color: var(--ido-color-primary);
+    box-shadow: var(--ido-shadow-md);
+}
+
+.ido-card--selected {
+    border-color: var(--ido-color-primary);
+    background-color: #eff6ff;
+}
+
+.ido-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--ido-spacing-sm);
+}
+
+.ido-card__body {
+    color: var(--ido-color-text-secondary);
+    font-size: 0.875rem;
+}
+
+.ido-card__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--ido-spacing-sm);
+    padding-top: var(--ido-spacing-sm);
+    border-top: 1px solid var(--ido-color-border);
+}
+
+/* ========================================
+   Form System
+   ======================================== */
+
+.ido-form-group {
+    margin-bottom: var(--ido-spacing-lg);
+}
+
+.ido-form-label {
+    display: block;
+    margin-bottom: var(--ido-spacing-xs);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--ido-color-text-primary);
+}
+
+.ido-form-input,
+.ido-form-textarea,
+.ido-form-select {
+    width: 100%;
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    font-size: 0.875rem;
+    color: var(--ido-color-text-primary);
+    background-color: var(--ido-color-bg-primary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-md);
+    transition: all var(--ido-transition-base);
+}
+
+.ido-form-input:focus,
+.ido-form-textarea:focus,
+.ido-form-select:focus {
+    outline: none;
+    border-color: var(--ido-color-border-focus);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.ido-form-textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+/* Form Switch */
+.ido-form-switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.ido-form-switch__input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ido-form-switch__slider {
+    position: relative;
+    width: 2.25rem;
+    height: 1.25rem;
+    background-color: var(--ido-color-bg-active);
+    border-radius: var(--ido-radius-full);
+    transition: background-color var(--ido-transition-base);
+}
+
+.ido-form-switch__slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 1rem;
+    height: 1rem;
+    background-color: white;
+    border-radius: var(--ido-radius-full);
+    transition: transform var(--ido-transition-base);
+}
+
+.ido-form-switch__input:checked + .ido-form-switch__slider {
+    background-color: var(--ido-color-primary);
+}
+
+.ido-form-switch__input:checked + .ido-form-switch__slider::after {
+    transform: translateX(1rem);
+}
+
+/* ========================================
+   Badge System
+   ======================================== */
+
+.ido-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 500;
+    border-radius: var(--ido-radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.ido-badge--primary {
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+.ido-badge--success {
+    background-color: #d1fae5;
+    color: #065f46;
+}
+
+.ido-badge--warning {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+.ido-badge--danger {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.ido-badge--info {
+    background-color: #cffafe;
+    color: #155e75;
+}
+
+.ido-badge--secondary {
+    background-color: var(--ido-color-bg-tertiary);
+    color: var(--ido-color-text-secondary);
+}
+
+/* ========================================
+   List System
+   ======================================== */
+
+.ido-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ido-spacing-xs);
+}
+
+.ido-list__item {
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    border-radius: var(--ido-radius-md);
+    transition: all var(--ido-transition-base);
+    cursor: pointer;
+}
+
+.ido-list__item:hover {
+    background-color: var(--ido-color-bg-hover);
+}
+
+.ido-list__item--active {
+    background-color: #eff6ff;
+    color: var(--ido-color-primary);
+    font-weight: 500;
+}
+
+/* ========================================
+   Message System
+   ======================================== */
+
+.ido-message {
+    display: flex;
+    width: 100%;
+    margin-bottom: var(--ido-spacing-lg);
+}
+
+.ido-message--user {
+    justify-content: flex-end;
+}
+
+.ido-message--ai {
+    justify-content: flex-start;
+}
+
+.ido-message__avatar {
+    width: 2rem;
+    height: 2rem;
+    border-radius: var(--ido-radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    box-shadow: var(--ido-shadow-sm);
+}
+
+.ido-message--user .ido-message__avatar {
+    background-color: #dbeafe;
+    color: #1e40af;
+    margin-left: var(--ido-spacing-sm);
+    order: 2;
+}
+
+.ido-message--ai .ido-message__avatar {
+    background-color: #d1fae5;
+    color: #065f46;
+    margin-right: var(--ido-spacing-sm);
+}
+
+.ido-message__bubble {
+    padding: var(--ido-spacing-md) var(--ido-spacing-lg);
+    border-radius: var(--ido-radius-2xl);
+    box-shadow: var(--ido-shadow-sm);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    /* 防止长文本/URL撑破气泡 */
+    max-width: 95%;
+    min-width: 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+
+.ido-message--user .ido-message__bubble {
+    background-color: var(--ido-color-primary);
+    color: white;
+    border-bottom-right-radius: var(--ido-spacing-xs);
+}
+
+.ido-message--user .message-content {
+    white-space: pre-wrap;
+}
+
+.ido-message--ai .ido-message__bubble {
+    background-color: var(--ido-color-bg-primary);
+    border: 1px solid var(--ido-color-border);
+    color: var(--ido-color-text-primary);
+    border-bottom-left-radius: var(--ido-spacing-xs);
+}
+
+/* 移动端优化：气泡占据更多空间 */
+@media (max-width: 768px) {
+    .ido-message__bubble {
+        max-width: 90%;
+    }
+}
+
+.ido-message__footer {
+    display: flex;
+    gap: var(--ido-spacing-sm);
+    margin-top: var(--ido-spacing-xs);
+    padding: 0 var(--ido-spacing-xs);
+    opacity: 0;
+    transition: opacity var(--ido-transition-base);
+}
+
+.ido-message--user .ido-message__footer {
+    justify-content: flex-end;
+}
+
+.ido-message:hover .ido-message__footer {
+    opacity: 1;
+}
+
+/* ========================================
+   Utility Classes
+   ======================================== */
+
+.ido-divider {
+    height: 1px;
+    background-color: var(--ido-color-border);
+    margin: var(--ido-spacing-lg) 0;
+}
+
+.ido-divider--vertical {
+    width: 1px;
+    height: 1rem;
+    background-color: var(--ido-color-border);
+    margin: 0 var(--ido-spacing-sm);
+}
+
+.ido-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--ido-spacing-2xl);
+    color: var(--ido-color-text-tertiary);
+    text-align: center;
+}
+
+.ido-status-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: var(--ido-radius-full);
+    background-color: var(--ido-color-bg-active);
+}
+
+.ido-status-dot--active {
+    background-color: var(--ido-color-success);
+}
+
+.ido-status-dot--inactive {
+    background-color: var(--ido-color-text-tertiary);
+}
+
+.ido-status-dot--error {
+    background-color: var(--ido-color-danger);
+}
+
+.ido-status-dot--warning {
+    background-color: var(--ido-color-warning);
+}
+
+/* ========================================
+   Header System
+   ======================================== */
+
+.ido-header {
+    height: 3rem;
+    border-bottom: 1px solid var(--ido-color-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--ido-spacing-lg);
+    background-color: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(8px);
+    flex-shrink: 0;
+}
+
+.ido-header__left {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+    flex-shrink: 0; /* 防止左侧按钮被压缩 */
+}
+
+.ido-header__right {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+    flex-shrink: 0; /* 防止右侧按钮被压缩 */
+}
+
+.ido-header__center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0; /* 允许 flex 子元素缩小 */
+    overflow: hidden; /* 隐藏溢出内容 */
+}
+
+.ido-header__title {
+    font-weight: 500;
+    color: var(--ido-color-text-primary);
+    truncate: true;
+}
+
+.ido-header__subtitle {
+    font-size: 0.625rem;
+    color: var(--ido-color-text-tertiary);
+    truncate: true;
+}
+
+/* ========================================
+   Sidebar System
+   ======================================== */
+
+.ido-sidebar {
+    display: flex;
+    flex-direction: column;
+    background-color: var(--ido-color-bg-primary);
+    border-right: 1px solid var(--ido-color-border);
+    overflow: hidden;
+}
+
+.ido-sidebar__header {
+    height: 3rem;
+    border-bottom: 1px solid var(--ido-color-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--ido-spacing-md);
+    flex-shrink: 0;
+}
+
+.ido-sidebar__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--ido-spacing-sm);
+}
+
+.ido-sidebar__footer {
+    padding: var(--ido-spacing-md);
+    border-top: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-secondary);
+    flex-shrink: 0;
+}
+
+/* ========================================
+   Action Group
+   ======================================== */
+
+.ido-action-group {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    opacity: 0;
+    transition: opacity var(--ido-transition-base);
+}
+
+.ido-card:hover .ido-action-group,
+.ido-list__item:hover .ido-action-group {
+    opacity: 1;
+}
+
+/* ========================================
+   Loading Indicator (Typing Dots)
+   ======================================== */
+
+.ido-loading-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 0;
+}
+
+.ido-loading-dots__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background-color: currentColor;
+    opacity: 0.4;
+    animation: loadingDotPulse 1.4s infinite ease-in-out;
+}
+
+.ido-loading-dots__dot:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.ido-loading-dots__dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.ido-loading-dots__dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes loadingDotPulse {
+    0%, 60%, 100% {
+        opacity: 0.4;
+        transform: translateY(0);
+    }
+    30% {
+        opacity: 1;
+        transform: translateY(-0.5rem);
+    }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    .ido-loading-dots__dot {
+        animation: loadingDotFade 1.4s infinite ease-in-out;
+    }
+    
+    @keyframes loadingDotFade {
+        0%, 60%, 100% {
+            opacity: 0.4;
+        }
+        30% {
+            opacity: 1;
+        }
+    }
+}
+
+/* ========================================
+   Message Streaming Indicator
+   ======================================== */
+
+.message-streaming-indicator {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--ido-color-border);
+}
+
+/* ========================================
+   Channel Settings - Mobile Optimization
+   ======================================== */
+
+/* 移动端隐藏渠道状态文字，仅保留切换开关和颜色区分 */
+@media (max-width: 768px) {
+    .channel-status-text {
+        display: none !important;
+    }
+}
+
+/* ========================================
+   Message Edit Styles - New Design
+   ======================================== */
+
+/* 新版编辑容器 */
+.message-edit-container-new {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--ido-spacing-sm);
+    row-gap: var(--ido-spacing-sm);
+    width: 100%;
+    margin-top: var(--ido-spacing-sm);
+}
+
+/* 输入框包装器 - 整行圆角设计 */
+.message-edit-input-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    background-color: var(--ido-color-bg-primary);
+    border: 2px solid var(--ido-color-primary);
+    border-radius: var(--ido-radius-2xl);
+    padding: var(--ido-spacing-md);
+    transition: all var(--ido-transition-base);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    grid-column: 1 / -1; /* 在网格中占满整行 */
+}
+
+.message-edit-input-wrapper:focus-within {
+    border-color: var(--ido-color-primary-hover);
+    box-shadow: 0 6px 16px rgba(59, 130, 246, 0.25);
+}
+
+/* 输入框 */
+.message-edit-input {
+    flex: 1;
+    min-height: 40px;
+    max-height: 60vh; /* 允许长文本占据更多高度，由 JS 自动高度控制，最多占视口 60% 高度 */
+    padding: 0;
+    font-size: 0.9375rem;
+    font-family: inherit;
+    line-height: 1.6;
+    color: var(--ido-color-text-primary);
+    background-color: transparent;
+    border: none;
+    resize: none;
+    outline: none;
+    overflow-y: auto;
+}
+
+.message-edit-input::placeholder {
+    color: var(--ido-color-text-tertiary);
+}
+
+/* 按钮组（位于下方同一行右侧） */
+.message-edit-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--ido-spacing-sm);
+    flex-shrink: 0;
+}
+
+/* Icon按钮 */
+.message-edit-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--ido-radius-full);
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+    flex-shrink: 0;
+}
+
+.message-edit-icon-btn .material-symbols-outlined {
+    font-size: 1.25rem;
+}
+
+/* 取消按钮 */
+.message-edit-icon-btn--cancel {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-secondary);
+}
+
+/* User Bubble: Cancel Button */
+.ido-message--user .message-edit-icon-btn--cancel {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.message-edit-icon-btn--cancel:hover {
+    background-color: var(--ido-color-bg-active);
+    color: var(--ido-color-danger);
+    transform: scale(1.05);
+}
+
+.ido-message--user .message-edit-icon-btn--cancel:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+}
+
+/* 发送按钮 */
+.message-edit-icon-btn--send {
+    background: linear-gradient(135deg, var(--ido-color-primary) 0%, var(--ido-color-primary-hover) 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+/* User Bubble: Send Button (White bg, Blue icon) */
+.ido-message--user .message-edit-icon-btn--send {
+    background: white;
+    color: var(--ido-color-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.message-edit-icon-btn--send:hover {
+    background: linear-gradient(135deg, var(--ido-color-primary-hover) 0%, var(--ido-color-primary-active) 100%);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    transform: scale(1.05);
+}
+
+.ido-message--user .message-edit-icon-btn--send:hover {
+    background: #f8fafc;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.message-edit-icon-btn--send:active {
+    transform: scale(0.95);
+}
+
+/* 附件管理区域（与发送/取消同一行，贴近输入框底部） */
+.message-edit-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+}
+
+.message-edit-attachment-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ido-spacing-sm);
+}
+
+/* 附件预览项 */
+.message-edit-attachment-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    padding: var(--ido-spacing-xs) var(--ido-spacing-sm);
+    background-color: var(--ido-color-bg-secondary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-lg);
+    max-width: 200px;
+    transition: all var(--ido-transition-base);
+}
+
+.message-edit-attachment-item:hover {
+    border-color: var(--ido-color-primary);
+    box-shadow: var(--ido-shadow-sm);
+}
+
+.message-edit-attachment-item img {
+    width: 3rem;
+    height: 3rem;
+    object-fit: cover;
+    border-radius: var(--ido-radius-md);
+    flex-shrink: 0;
+}
+
+.message-edit-attachment-item .material-symbols-outlined {
+    font-size: 2rem;
+    color: var(--ido-color-text-secondary);
+    flex-shrink: 0;
+}
+
+.message-edit-attachment-item .attachment-name {
+    flex: 1;
+    font-size: 0.75rem;
+    color: var(--ido-color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 附件删除按钮 */
+.attachment-remove-btn {
+    position: absolute;
+    top: -0.375rem;
+    right: -0.375rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--ido-color-danger);
+    color: white;
+    border: 2px solid white;
+    border-radius: var(--ido-radius-full);
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--ido-transition-base);
+    box-shadow: var(--ido-shadow-sm);
+}
+
+.message-edit-attachment-item:hover .attachment-remove-btn {
+    opacity: 1;
+}
+
+.attachment-remove-btn:hover {
+    background-color: var(--ido-color-danger-hover);
+    transform: scale(1.1);
+}
+
+.attachment-remove-btn .material-symbols-outlined {
+    font-size: 0.875rem;
+}
+
+/* 添加附件按钮 */
+.message-edit-add-attachment {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    padding: var(--ido-spacing-xs) var(--ido-spacing-md);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ido-color-primary);
+    background-color: transparent;
+    border: 1px dashed var(--ido-color-primary);
+    border-radius: var(--ido-radius-lg);
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+}
+
+.message-edit-add-attachment:hover {
+    background-color: rgba(59, 130, 246, 0.05);
+    border-style: solid;
+}
+
+/* User Bubble: Add Attachment Button (White text/border) */
+.ido-message--user .message-edit-add-attachment {
+    color: rgba(255, 255, 255, 0.9);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.ido-message--user .message-edit-add-attachment:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: white;
+}
+
+.message-edit-add-attachment .material-symbols-outlined {
+    font-size: 1rem;
+}
+
+/* 编辑模式下，统一控制消息布局 */
+.ido-message:has(.message-editing-new) {
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
+    gap: var(--ido-spacing-sm);
+}
+
+.ido-message:has(.message-editing-new) > .ido-message__avatar {
+    width: 2.5rem;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ido-message--user:has(.message-editing-new) {
+    justify-content: flex-start !important;
+}
+
+.ido-message:has(.message-editing-new) .message-edit-shell {
+    flex: 1;
+    min-width: 0;
+    width: calc(100% - 3rem);
+    max-width: calc(100% - 3rem);
+}
+
+@media (max-width: 768px) {
+    .ido-message:has(.message-editing-new) {
+        flex-direction: column;
+    }
+    
+    /* 仅让编辑外壳占满宽度，头像保持固定圆形尺寸，避免在移动端被拉伸 */
+    .ido-message:has(.message-editing-new) .message-edit-shell {
+        width: 100%;
+        max-width: 100%;
+    }
+    
+    .ido-message:has(.message-editing-new) > .ido-message__avatar {
+        order: -1;
+        justify-content: flex-start;
+        margin-bottom: var(--ido-spacing-sm);
+    }
+}
+
+/* 气泡本身也占满，并移除原有样式以适应输入框设计 */
+.ido-message__bubble.message-editing-new {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 0 !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    display: block !important; /* 确保块级显示 */
+}
+
+/* 编辑模式下隐藏气泡内原始图片附件（上方预览），仅保留下方可编辑缩略图 */
+.ido-message__bubble.message-editing-new .flex.gap-2.flex-wrap.mb-2 {
+    display: none !important;
+}
+
+/* 编辑模式下的取消按钮：统一高对比度样式，避免在不同气泡背景下不可见 */
+.ido-message:has(.message-editing-new) .message-edit-icon-btn--cancel {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-message:has(.message-editing-new) .message-edit-icon-btn--cancel:hover {
+    background-color: var(--ido-color-bg-active);
+    color: var(--ido-color-danger);
+}
+
+/* 强制覆盖 User 气泡的背景色 */
+.ido-message--user .ido-message__bubble.message-editing-new {
+    background-color: transparent !important;
+    color: inherit !important;
+    border-bottom-right-radius: 0 !important; /* 移除圆角 */
+}
+
+/* 确保输入框容器占满 */
+.message-edit-container-new {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+@media (max-width: 768px) {
+    .message-edit-input-wrapper {
+        padding: var(--ido-spacing-sm);
+    }
+    
+    .message-edit-attachment-item {
+        max-width: 100%;
+    }
+}
+
+/* 动画效果 */
+@keyframes editSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message-edit-container-new {
+    animation: editSlideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 尊重用户的减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+    .message-edit-container-new {
+        animation: none;
+    }
+    
+    .message-edit-icon-btn:hover,
+    .message-edit-icon-btn--send:hover,
+    .attachment-remove-btn:hover {
+        transform: none;
+    }
+}
+
+/* ========================================
+   Legacy Message Edit Styles (保留兼容)
+   ======================================== */
+
+.message-edit-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ido-spacing-sm);
+    width: 100%;
+    margin-top: var(--ido-spacing-sm);
+}
+
+.message-edit-textarea {
+    width: 100%;
+    min-height: 80px;
+    max-height: 400px;
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    font-size: 0.875rem;
+    font-family: inherit;
+    line-height: 1.5;
+    color: var(--ido-color-text-primary);
+    background-color: var(--ido-color-bg-primary);
+    border: 2px solid var(--ido-color-primary);
+    border-radius: var(--ido-radius-md);
+    resize: vertical;
+    transition: all var(--ido-transition-base);
+    box-sizing: border-box;
+}
+
+.ido-message__bubble.message-editing {
+    width: 100% !important;
+    max-width: none !important;
+}
+
+.ido-message:has(.message-editing) > div {
+    max-width:100% !important;
+}
+
+.message-edit-textarea:focus {
+    outline: none;
+    border-color: var(--ido-color-primary-hover);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.message-edit-buttons {
+    display: flex;
+    gap: var(--ido-spacing-sm);
+    justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+    .message-edit-buttons {
+        flex-direction: column;
+    }
+    
+    .message-edit-buttons .ido-btn {
+        width: 100%;
+        justify-content: center;
+    }
+}
