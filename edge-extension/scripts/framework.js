@@ -127,16 +127,25 @@ const Framework = (function() {
         if (!customContainers[type]) {
             const el = document.createElement('div');
             el.className = "flex-1 flex flex-col min-h-0 overflow-hidden h-full w-full panel-transition-container";
-            parent.appendChild(el);
+            if (type === 'main' && ui.mainSlots && ui.mainSlots.input && ui.mainSlots.input.parentNode === parent) {
+                // 主视图容器插入到输入区之前，保证输入区始终处于底部
+                parent.insertBefore(el, ui.mainSlots.input);
+            } else {
+                parent.appendChild(el);
+            }
             customContainers[type] = el;
         }
         return customContainers[type];
     }
 
     async function setMode(mode, renderers = {}) {
+        const previousMode = currentMode;
         currentMode = mode;
         
-        // Helper to toggle standard elements
+        // Helper to toggle 标准布局元素
+        // 默认：输入区在大多数模式下始终保留（复用底部输入框），
+        // 但某些"全屏视图"（如 settings）需要隐藏输入。
+        const hideInputInThisMode = (mode === 'settings');
         const toggleStandard = (show) => {
             const display = show ? '' : 'none';
             
@@ -145,12 +154,40 @@ const Framework = (function() {
                 if (el) el.style.display = display;
             });
             
-            // Main
-            Object.values(ui.mainSlots).forEach(el => {
-                if (el) el.style.display = display;
-            });
+            // Main header & stream
+            if (ui.mainSlots.header) ui.mainSlots.header.style.display = display;
+            if (ui.mainSlots.stream) ui.mainSlots.stream.style.display = display;
+            
+            // 输入区按当前 mode 决定是否显示，使用 CSS class 控制动画，尽量避免内联样式
+            if (ui.mainSlots.input) {
+                const inputArea = ui.mainSlots.input;
+                
+                if (hideInputInThisMode) {
+                    // 使用 CSS 类触发隐藏动画（translateY / opacity / max-height）
+                    inputArea.classList.add('ido-input-area--hidden');
+                    
+                    // 动画结束后完全隐藏，避免影响布局高度
+                    setTimeout(() => {
+                        if (currentMode === mode && hideInputInThisMode) {
+                            inputArea.style.display = 'none';
+                        }
+                    }, 300);
+                } else {
+                    // 恢复显示：先清除 display:none，再移除隐藏类
+                    inputArea.style.display = '';
+                    
+                    // 清理可能残留的内联样式（兼容旧版本）
+                    inputArea.style.transform = '';
+                    inputArea.style.opacity = '';
+                    inputArea.style.maxHeight = '';
+                    inputArea.style.overflow = '';
+                    inputArea.style.pointerEvents = '';
+                    
+                    inputArea.classList.remove('ido-input-area--hidden');
+                }
+            }
         };
-
+ 
         if (mode === 'chat') {
             toggleStandard(true);
             if (customContainers.sidebar) customContainers.sidebar.style.display = 'none';
@@ -162,12 +199,21 @@ const Framework = (function() {
             const sbContainer = getOrCreateContainer('sidebar', ui.leftPanel);
             sbContainer.style.display = 'flex';
             await animatePanelTransition(sbContainer, renderers.sidebar || null);
-
+ 
             // Setup Custom Main with animation
             const mainParent = ui.mainSlots.header.parentNode; // <main>
             const mContainer = getOrCreateContainer('main', mainParent);
             mContainer.style.display = 'flex';
             await animatePanelTransition(mContainer, renderers.main || null);
+        }
+ 
+        // 通知模式切换（供主视图插件/外部模块感知）
+        if (events && typeof events.emit === 'function') {
+            try {
+                events.emit('mode:changed', { mode, previousMode });
+            } catch (e) {
+                console.warn('Framework mode:changed handler error:', e);
+            }
         }
     }
 
@@ -243,38 +289,30 @@ const Framework = (function() {
             renderer(ui.bottomSheetContent);
         }
         
-        // 重置初始状态
-        ui.bottomSheetBackdrop.style.opacity = '0';
-        ui.bottomSheet.style.transform = 'translateY(100%)';
+        // 清理旧版残留的内联样式，避免覆盖 CSS 规则
+        ui.bottomSheetBackdrop.style.opacity = '';
+        ui.bottomSheet.style.transform = '';
         
-        // 显示元素
+        // 显示元素本身
         ui.bottomSheetBackdrop.classList.remove('hidden');
         ui.bottomSheet.classList.remove('hidden');
         
-        // 强制重排以确保初始状态生效
-        ui.bottomSheet.offsetHeight;
-        
-        // 触发动画
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                ui.bottomSheetBackdrop.style.opacity = '1';
-                ui.bottomSheet.style.transform = 'translateY(0)';
-            });
-        });
+        // 使用 CSS 状态类触发过渡动画（不再直接写 style.opacity/transform）
+        ui.bottomSheetBackdrop.classList.add('ido-bottom-sheet-backdrop--visible');
+        ui.bottomSheet.classList.add('ido-bottom-sheet--visible');
     }
     
     function hideBottomSheet() {
         if (!ui.bottomSheet || !ui.bottomSheetBackdrop) return;
         
-        // 隐藏动画
-        ui.bottomSheetBackdrop.style.opacity = '0';
-        ui.bottomSheet.style.transform = 'translateY(100%)';
+        // 移除可见状态类，由 CSS 负责过渡动画
+        ui.bottomSheetBackdrop.classList.remove('ido-bottom-sheet-backdrop--visible');
+        ui.bottomSheet.classList.remove('ido-bottom-sheet--visible');
         
-        // 动画结束后隐藏元素
+        // 动画结束后隐藏元素并清空内容
         setTimeout(() => {
             ui.bottomSheetBackdrop.classList.add('hidden');
             ui.bottomSheet.classList.add('hidden');
-            // 清空内容以释放内存
             if (ui.bottomSheetContent) {
                 ui.bottomSheetContent.innerHTML = '';
             }
@@ -517,22 +555,47 @@ const Framework = (function() {
         // 兼容旧签名：第三个参数为函数时，视为 render 函数
         let plugin;
         if (typeof definition === 'function' || definition == null) {
+            // 函数签名的插件：只有渲染函数，没有显式元数据
             plugin = {
                 id,
                 enabled: true,
                 renderStatic: definition || null,
                 renderDynamic: definition || null,
                 init: null,
-                destroy: null
+                destroy: null,
+                meta: {
+                    id: id,
+                    name: id,
+                    description: '',
+                    version: '',
+                    icon: '',
+                    author: '',
+                    homepage: '',
+                    source: 'internal',
+                    tags: undefined
+                }
             };
         } else {
+            // 对象签名的插件：支持 meta / name / description 等元数据字段
+            var meta = definition.meta || {};
             plugin = {
                 id,
                 enabled: definition.enabled !== false,
                 renderStatic: definition.render || definition.renderStatic || definition.renderer || null,
                 renderDynamic: definition.renderDynamic || definition.render || definition.renderer || null,
                 init: definition.init || null,
-                destroy: definition.destroy || null
+                destroy: definition.destroy || null,
+                meta: {
+                    id: meta.id || id,
+                    name: meta.name || definition.name || id,
+                    description: meta.description || definition.description || '',
+                    version: meta.version || definition.version || '',
+                    icon: meta.icon || definition.icon || '',
+                    author: meta.author || definition.author || '',
+                    homepage: meta.homepage || definition.homepage || '',
+                    source: meta.source || definition.source || 'internal',
+                    tags: meta.tags || definition.tags || undefined
+                }
             };
         }
     
@@ -626,7 +689,8 @@ const Framework = (function() {
                 all.push({
                     slot,
                     id: p.id,
-                    enabled: p.enabled
+                    enabled: p.enabled,
+                    meta: p.meta || null
                 });
             });
         });
@@ -646,23 +710,17 @@ const Framework = (function() {
         const header = createCustomHeader({
             center: () => {
                 const centerContent = document.createElement('div');
-                centerContent.className = "flex flex-col min-w-0 max-w-full";
-                centerContent.style.overflow = "hidden";
+                // 使用 Tailwind 类控制溢出，避免重复写内联样式
+                centerContent.className = "flex flex-col min-w-0 max-w-full overflow-hidden";
                 
                 const title = document.createElement('div');
                 title.id = "chat-title";
                 title.className = "font-medium text-gray-700 truncate";
-                title.style.overflow = "hidden";
-                title.style.textOverflow = "ellipsis";
-                title.style.whiteSpace = "nowrap";
                 title.textContent = "新对话";
                 
                 const modelInfo = document.createElement('div');
                 modelInfo.id = "model-info";
                 modelInfo.className = "text-[10px] text-gray-400 truncate";
-                modelInfo.style.overflow = "hidden";
-                modelInfo.style.textOverflow = "ellipsis";
-                modelInfo.style.whiteSpace = "nowrap";
                 
                 centerContent.appendChild(title);
                 centerContent.appendChild(modelInfo);
@@ -690,6 +748,17 @@ const Framework = (function() {
         });
         
         headerContainer.appendChild(header);
+
+        // Header actions 插槽是在这里动态创建的，
+        // 此时需要主动刷新该插槽，让通过 Framework.registerPlugin
+        // 注册到 HEADER_ACTIONS 的插件（如 builtin-theme-toggle）真正渲染出来。
+        try {
+            if (typeof refreshSlot === 'function' && SLOTS && SLOTS.HEADER_ACTIONS) {
+                refreshSlot(SLOTS.HEADER_ACTIONS);
+            }
+        } catch (e) {
+            console.warn('Framework: failed to refresh HEADER_ACTIONS slot:', e);
+        }
     }
     
     // --- 2.5 UI Helper Components ---
@@ -892,17 +961,13 @@ const Framework = (function() {
         avatar.className = 'ido-message__avatar';
         avatar.textContent = role === 'user' ? 'U' : 'AI';
 
+        // 使用语义化容器类，替代内联 flex 样式
         const bubbleContainer = document.createElement('div');
-        bubbleContainer.style.display = 'flex';
-        bubbleContainer.style.flexDirection = 'column';
-        bubbleContainer.style.width = '100%';
-        bubbleContainer.style.maxWidth = '100%';
-        bubbleContainer.style.alignItems = 'stretch';
+        bubbleContainer.className = 'ido-message__container';
 
+        // 使用语义化气泡类 + 紧凑宽度修饰符，替代内联 alignSelf / maxWidth
         const bubble = document.createElement('div');
-        bubble.className = 'ido-message__bubble';
-        bubble.style.alignSelf = role === 'user' ? 'flex-end' : 'flex-start';
-        bubble.style.maxWidth = '85%';
+        bubble.className = 'ido-message__bubble ido-message__bubble--compact';
 
         // Add attachments preview (for user messages with images)
         if (attachments && attachments.length > 0 && role === 'user') {
@@ -912,8 +977,8 @@ const Framework = (function() {
             attachments.forEach(attachment => {
                 if (attachment.type && attachment.type.startsWith('image/')) {
                     const imgWrapper = document.createElement('div');
-                    imgWrapper.className = 'rounded-lg overflow-hidden border border-gray-200';
-                    imgWrapper.style.maxWidth = '200px';
+                    // 使用语义类控制最大宽度，避免在 JS 中写死像素值
+                    imgWrapper.className = 'rounded-lg overflow-hidden border border-gray-200 ido-message__attachment-wrapper';
                     
                     const img = document.createElement('img');
                     img.src = attachment.dataUrl;
@@ -949,13 +1014,13 @@ const Framework = (function() {
             
             if (reasoningDuration !== null && reasoningDuration !== undefined) {
                 // 有存储时间：显示存储的时间
-                toggle.innerHTML = `<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer" style="margin-left: 8px; font-size: 11px; color: #666;">${reasoningDuration.toFixed(1)}s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>`;
+                toggle.innerHTML = `<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">${reasoningDuration.toFixed(1)}s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>`;
             } else if (isHistoricalMessage) {
                 // 历史消息但没有存储时间：不显示时间，不启动计时器
                 toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
             } else {
                 // 流式消息：显示计时器并启动
-                toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer" style="margin-left: 8px; font-size: 11px; color: #666;">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
+                toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
                 
                 // 启动计时器
                 const timerSpan = toggle.querySelector('.reasoning-timer');
@@ -1038,11 +1103,9 @@ const Framework = (function() {
         avatar.className = 'ido-message__avatar';
         avatar.textContent = 'AI';
         
+        // 使用专用容器类，控制 loading 气泡宽度和对齐
         const bubbleContainer = document.createElement('div');
-        bubbleContainer.style.display = 'flex';
-        bubbleContainer.style.flexDirection = 'column';
-        bubbleContainer.style.maxWidth = '85%';
-        bubbleContainer.style.alignItems = 'flex-start';
+        bubbleContainer.className = 'ido-message__container ido-message__container--loading';
         
         const bubble = document.createElement('div');
         bubble.className = 'ido-message__bubble';
@@ -1295,7 +1358,7 @@ const Framework = (function() {
                 
                 const toggle = document.createElement('div');
                 toggle.className = 'reasoning-toggle';
-                toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer" style="margin-left: 8px; font-size: 11px; color: #666;">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
+                toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
                 
                 // 启动计时器
                 const timerSpan = toggle.querySelector('.reasoning-timer');
@@ -1533,6 +1596,7 @@ const Framework = (function() {
         removeMessageStreamingIndicator,
         // RenderMessageEdit will be injected by messageActions
         renderMessageEdit: null,
+        getCurrentMode: () => currentMode,
         events,
         storage,
         ui: uiHelpers
@@ -1568,6 +1632,7 @@ const Framework = (function() {
         get renderMessageEdit() {
             return publicApi.renderMessageEdit;
         },
+        getCurrentMode: () => currentMode,
         events,
         storage,
         ui: uiHelpers,

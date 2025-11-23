@@ -11,6 +11,7 @@
         'utils.js',
         'idb-storage.js',  // IndexedDB 存储层（store.js 依赖）
         'store.js',
+        'runtime.js',      // Runtime: 统一对外暴露 store 等核心能力
         'network-logger.js',
         'channels/channel-registry.js',
         'plugin-loader.js',  // 外部插件加载器（依赖 channel-registry）
@@ -26,7 +27,13 @@
         'plugins/model-selector.js',
         'plugins/network-log-panel.js',
         'plugins/file-upload.js',
+        // Builtin image gallery plugin（拆分为 core / view / 入口三层）
+        'plugins/image-gallery/core.js',
+        'plugins/image-gallery/view.js',
+        'plugins/image-gallery.js',
         'plugins/core-plugins.js',
+        // Builtin theme toggle (light / dark / system)
+        'plugins/theme-toggle.js',
         
         // 4. Settings 模块（依赖基础模块）
         'settings/channel-editor.js',

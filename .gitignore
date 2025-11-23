@@ -2,4 +2,9 @@
 *.pem
 output.md
 *.zip
+# Build outputs
+dist/
+web-dist/
+node_modules/
+package-lock.json
 

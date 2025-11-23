@@ -10,6 +10,8 @@
     let store = null;
     let service = null;
     let utils = null;
+    // 每个对话当前活跃的生成请求标识（用于忽略旧请求的流式更新和清理）
+    const activeGenerationTokens = {};
 
     /**
      * 初始化消息处理模块
@@ -51,8 +53,16 @@
      * 发送消息
      */
     window.IdoFront.messageActions.send = async function(text, attachments = null) {
+        // 在非 chat 主视图模式下，不走聊天消息管线（例如 image-gallery 等自定义主视图）
+        if (context && typeof context.getCurrentMode === 'function') {
+            const mode = context.getCurrentMode();
+            if (mode && mode !== 'chat') {
+                return;
+            }
+        }
+ 
         if (!text && (!attachments || attachments.length === 0)) return;
-
+ 
         const now = Date.now();
         const timestamp = new Date(now).toISOString();
         const conv = store.ensureActiveConversation();
@@ -304,62 +314,8 @@
         // 隐藏原内容，显示编辑界面
         contentSpan.style.display = 'none';
         bubble.classList.add('message-editing-new');
-        
-        // 终极方案：完全移除align-items限制
-        
-        // 1. 确保messageWrapper占满整行
-        messageWrapper.style.setProperty('width', '100%', 'important');
-        messageWrapper.style.setProperty('max-width', '100%', 'important');
-        
-        // 2. 修改bubbleContainer的布局方式
-        if (bubbleContainer) {
-            // 完全移除所有可能的限制属性
-            bubbleContainer.style.removeProperty('max-width');
-            bubbleContainer.style.removeProperty('width');
-            bubbleContainer.style.removeProperty('flex');
-            bubbleContainer.style.removeProperty('align-items'); // 关键：移除align-items
-            bubbleContainer.style.removeProperty('flex-direction');
-            bubbleContainer.style.removeProperty('display');
-            
-            // 重新设置：使用block布局，移除flex-direction限制
-            bubbleContainer.style.setProperty('display', 'block', 'important');
-            // 不设置flex-direction，让容器能够正常延展
-            bubbleContainer.style.setProperty('width', '100%', 'important');
-            bubbleContainer.style.setProperty('max-width', 'none', 'important');
-            bubbleContainer.style.setProperty('box-sizing', 'border-box', 'important');
-        }
-        
-        // 3. 对于user消息，调整wrapper布局
-        if (targetMsg.role === 'user') {
-            // 使用 flex-start 确保头像在左侧，内容在右侧占满剩余空间
-            messageWrapper.style.setProperty('justify-content', 'flex-start', 'important');
-            
-            // 调整头像顺序：默认 user 头像在右侧 (order: 2)，现在需要保持在右侧但布局改变
-            // 实际上，我们希望编辑框占据左侧大部分空间，头像保持在最右侧
-            // 所以 justify-content: space-between 是合理的，但需要确保宽度计算正确
-            messageWrapper.style.setProperty('justify-content', 'space-between', 'important');
+        // 布局交由 CSS (.message-editing-new / .message-edit-shell) 控制，JS 不再强制注入内联宽度样式
 
-            if (bubbleContainer) {
-                bubbleContainer.style.setProperty('margin-right', 'var(--ido-spacing-sm)', 'important');
-                // 计算实际可用宽度：总宽度 - 头像宽度 - 间距
-                bubbleContainer.style.setProperty('width', 'calc(100% - 3rem)', 'important');
-                bubbleContainer.style.setProperty('flex', '1', 'important');
-            }
-        } else {
-            // AI 消息
-            if (bubbleContainer) {
-                bubbleContainer.style.setProperty('width', 'calc(100% - 3rem)', 'important');
-                bubbleContainer.style.setProperty('flex', '1', 'important');
-            }
-        }
-        
-        // 4. 强制bubble占满容器宽度
-        bubble.style.removeProperty('max-width');
-        bubble.style.removeProperty('width');
-        bubble.style.setProperty('width', '100%', 'important');
-        bubble.style.setProperty('max-width', 'none', 'important');
-        bubble.style.setProperty('box-sizing', 'border-box', 'important');
-        
         bubble.appendChild(editContainer);
 
         // 聚焦并再次校正高度（确保插入 DOM 之后 scrollHeight 正确）
@@ -509,6 +465,36 @@
         const targetMsg = conv.messages.find(m => m.id === messageId);
         if (!targetMsg) return;
 
+        // 如果当前对话仍有进行中的请求，先清理其 loading / 流式状态并标记为已结束，
+        // 避免旧请求和新的重试请求同时更新 UI，导致多个助手气泡同时 loading。
+        if (store.state.isTyping && store.state.typingConversationId === conv.id) {
+            store.state.isTyping = false;
+            store.state.typingConversationId = null;
+            store.state.typingMessageId = null;
+            store.persist();
+
+            if (context) {
+                // 清理消息下方的流式指示器
+                if (context.removeMessageStreamingIndicator) {
+                    try {
+                        context.removeMessageStreamingIndicator(null);
+                    } catch (e) {
+                        console.warn('removeMessageStreamingIndicator error during retry:', e);
+                    }
+                }
+                // 清理任何遗留的独立 loading 气泡
+                try {
+                    const chatStream = document.getElementById('chat-stream');
+                    if (chatStream) {
+                        chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
+                        chatStream.querySelectorAll('.message-streaming-indicator').forEach(el => el.remove());
+                    }
+                } catch (e) {
+                    console.warn('cleanup loading indicators during retry failed:', e);
+                }
+            }
+        }
+
         let truncateTargetId = null;
 
         // 确定截断点
@@ -546,7 +532,17 @@
     async function generateResponse(conv, relatedUserMessageId) {
         const isActiveConv = () => store.state.activeConversationId === conv.id;
 
+        // 为当前对话生成一个唯一的请求标识，用于忽略旧请求的流式更新/清理
+        const generationToken = (utils && typeof utils.createId === 'function')
+            ? utils.createId('gen')
+            : `${Date.now()}_${Math.random()}`;
+        activeGenerationTokens[conv.id] = generationToken;
+        const isCurrentGeneration = () => activeGenerationTokens[conv.id] === generationToken;
+
+        // 标记当前正在生成回复的对话，用于在切换对话后恢复 loading 状态
         store.state.isTyping = true;
+        store.state.typingConversationId = conv.id;
+        store.state.typingMessageId = null;
         store.persist();
 
         // 显示加载指示器（仅在当前对话处于激活状态时渲染到 UI）
@@ -688,6 +684,11 @@
             let fullReasoning = null;
 
             const onUpdate = (data) => {
+                // 如果本对话已经发起了新的请求，忽略旧请求的流式更新，避免多个助手气泡同时 loading 或内容错乱
+                if (!isCurrentGeneration()) {
+                    return;
+                }
+
                 let currentContent = '';
                 let currentReasoning = null;
                 let currentMetadata = null;
@@ -715,6 +716,9 @@
                         reasoning: fullReasoning,
                         metadata: currentMetadata
                     });
+
+                    // 记录当前流式消息的 ID，方便在切换对话后复原 loading 到这条消息上
+                    store.state.typingMessageId = assistantMessage.id;
                     
                     // 将加载指示器附着到消息下方（仅对当前激活的对话操作 UI）
                     if (context && context.attachLoadingIndicatorToMessage && isActiveConv()) {
@@ -806,6 +810,11 @@
                 context.completeRequest(logId, 500, { error: error.message });
             }
         } finally {
+            // 如果本对话已经有了更新的请求，则不再负责清理全局打字状态和 UI，交由最新请求处理
+            if (!isCurrentGeneration()) {
+                return;
+            }
+
             // 清理加载指示器：同时尝试两种方式，确保清理干净
             // 仅对当前激活的对话执行 UI 清理，避免误删其他对话中的加载状态
             if (assistantMessage && context && context.removeMessageStreamingIndicator && isActiveConv()) {
@@ -815,7 +824,10 @@
                 context.removeLoadingIndicator(loadingId);
             }
             
+            // 重置全局打字状态和当前流式消息标记
             store.state.isTyping = false;
+            store.state.typingConversationId = null;
+            store.state.typingMessageId = null;
             store.persist();
         }
     }

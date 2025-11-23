@@ -9,9 +9,14 @@
     let context = null;
     let store = null;
     let activeSettingsTab = 'channels';
-
+    // 记录进入设置前的主视图模式（chat / image-gallery 等）
+    let previousMode = 'chat';
+ 
     // 设置标签注册表
     const settingsTabs = [];
+    
+    // 通用设置分区注册表（供主插件 / 其他插件往“通用设置”标签注入内容）
+    const generalSections = [];
     
     // 保存容器引用，用于局部更新
     let mainContainer = null;
@@ -42,6 +47,41 @@
         
         // 按 order 排序
         settingsTabs.sort((a, b) => (a.order || 999) - (b.order || 999));
+    };
+    
+    /**
+     * 注册“通用设置”页面中的一个分区
+     * @param {Object} section
+     * @param {string} section.id - 分区 ID
+     * @param {string} section.title - 分区标题
+     * @param {string} [section.description] - 分区说明
+     * @param {string} [section.icon] - Material 图标名或 SVG 片段
+     * @param {number} [section.order] - 排序权重（越小越靠前）
+     * @param {Function} section.render - 渲染函数 (container, context, store) => void
+     */
+    window.IdoFront.settingsManager.registerGeneralSection = function(section) {
+        if (!section || !section.id || typeof section.render !== 'function') {
+            console.error('Invalid general settings section registration:', section);
+            return;
+        }
+        
+        const normalized = {
+            id: section.id,
+            title: section.title || section.id,
+            description: section.description || '',
+            icon: section.icon || 'tune',
+            order: section.order || 999,
+            render: section.render
+        };
+        
+        const existingIndex = generalSections.findIndex(s => s.id === normalized.id);
+        if (existingIndex !== -1) {
+            generalSections[existingIndex] = normalized;
+        } else {
+            generalSections.push(normalized);
+        }
+        
+        generalSections.sort((a, b) => (a.order || 999) - (b.order || 999));
     };
 
     /**
@@ -150,14 +190,14 @@
             }
         });
 
-        // 4. 通用设置（占位）
+        // 4. 通用设置（支持通过 registerGeneralSection 动态扩展）
         window.IdoFront.settingsManager.registerTab({
             id: 'general',
             icon: 'tune',
             label: '通用设置',
             order: 40,
-            render: (container) => {
-                container.innerHTML = '<div class="text-gray-400 text-center mt-10">暂未开放</div>';
+            render: (container, ctx, st) => {
+                renderGeneralTab(container, ctx, st);
             }
         });
 
@@ -171,6 +211,75 @@
                 container.innerHTML = '<div class="text-gray-400 text-center mt-10">暂未开放</div>';
             }
         });
+    }
+    
+    /**
+     * 渲染“通用设置”标签页内容
+     */
+    function renderGeneralTab(container, ctx, st) {
+        container.innerHTML = '';
+        
+        if (!generalSections.length) {
+            const empty = document.createElement('div');
+            empty.className = 'ido-empty';
+            empty.textContent = '暂无通用设置';
+            container.appendChild(empty);
+            return;
+        }
+        
+        const list = document.createElement('div');
+        list.className = 'space-y-4';
+        
+        generalSections.forEach(section => {
+            const card = document.createElement('div');
+            card.className = 'ido-card p-4 space-y-2';
+            
+            const header = document.createElement('div');
+            header.className = 'flex items-center gap-2';
+            
+            if (section.icon) {
+                if (section.icon.indexOf('<svg') === 0 || section.icon.indexOf('<svg') === 0) {
+                    const iconWrapper = document.createElement('div');
+                    iconWrapper.className = 'text-gray-500 flex items-center justify-center w-[18px] h-[18px]';
+                    iconWrapper.innerHTML = section.icon;
+                    header.appendChild(iconWrapper);
+                } else {
+                    const iconSpan = document.createElement('span');
+                    iconSpan.className = 'material-symbols-outlined text-[18px] text-gray-500';
+                    iconSpan.textContent = section.icon;
+                    header.appendChild(iconSpan);
+                }
+            }
+            
+            const title = document.createElement('span');
+            title.className = 'font-medium text-gray-800';
+            title.textContent = section.title || section.id;
+            header.appendChild(title);
+            
+            card.appendChild(header);
+            
+            if (section.description) {
+                const desc = document.createElement('p');
+                desc.className = 'text-xs text-gray-500';
+                desc.textContent = section.description;
+                card.appendChild(desc);
+            }
+            
+            const body = document.createElement('div');
+            body.className = 'mt-2 space-y-2';
+            
+            try {
+                section.render(body, ctx, st);
+            } catch (e) {
+                console.error('General settings section render error:', e);
+                body.innerHTML = '<div class="text-red-500 text-xs">渲染错误: ' + (e.message || e) + '</div>';
+            }
+            
+            card.appendChild(body);
+            list.appendChild(card);
+        });
+        
+        container.appendChild(list);
     }
 
     /**
@@ -201,6 +310,15 @@
         if (tab) {
             activeSettingsTab = tab;
         }
+
+        // 记录进入设置前的模式（避免从 settings 再次进入 settings 覆盖）
+        if (context && typeof context.getCurrentMode === 'function') {
+            const modeNow = context.getCurrentMode();
+            if (modeNow && modeNow !== 'settings') {
+                previousMode = modeNow;
+            }
+        }
+
         context.setMode('settings', {
             sidebar: renderSettingsSidebar,
             main: renderSettingsMain
@@ -221,7 +339,27 @@
         const backBtn = document.createElement('button');
         backBtn.className = "p-1 hover:bg-gray-100 rounded text-gray-500";
         backBtn.innerHTML = '<span class="material-symbols-outlined text-[20px]">arrow_back</span>';
-        backBtn.onclick = () => context.setMode('chat');
+        backBtn.onclick = () => {
+            // 计算返回目标模式（默认为 chat）
+            const targetMode = previousMode && previousMode !== 'settings' ? previousMode : 'chat';
+
+            // 默认情况：直接回到 chat
+            if (targetMode === 'chat') {
+                if (context && typeof context.setMode === 'function') {
+                    context.setMode('chat');
+                }
+                return;
+            }
+
+            // 非 chat 模式（例如 image-gallery），交由对应主视图插件通过事件接管返回逻辑
+            if (context && context.events && typeof context.events.emit === 'function') {
+                try {
+                    context.events.emit('settings:back', { previousMode: targetMode });
+                } catch (e) {
+                    console.warn('[settingsManager] settings:back handler error:', e);
+                }
+            }
+        };
         
         const title = document.createElement('span');
         title.className = "font-semibold text-gray-700";

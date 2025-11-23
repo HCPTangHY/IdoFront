@@ -63,6 +63,81 @@
     const runtimeHandles = new Map(); // id -> cleanup hooks
 
     /**
+     * 内建插件列表（与外部插件共享同一执行/管理通道）
+     * - 与 IndexedDB 中的 external plugins 一起恢复并执行
+     * - 通过 pluginSettings 暴露 enable/disable 控制
+     * - source 固定为 'builtin'
+     */
+    const builtInPlugins = [
+        {
+            id: 'builtin-image-gallery',
+            name: 'Image Gallery (Built-in)',
+            code: `(function() {
+    if (!window.Framework || !window.Framework.registerPlugin) {
+        console.warn('[builtin-image-gallery] Framework API not available');
+        return;
+    }
+
+    const { registerPlugin, SLOTS, ui, setMode, getCurrentMode } = window.Framework;
+    const PLUGIN_SLOT = SLOTS.HEADER_ACTIONS;
+    const PLUGIN_ID = 'builtin-image-gallery';
+    const MODE_ID = 'image-gallery';
+
+    function renderGallerySidebar(container) {
+        container.innerHTML = '';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'p-3 text-xs text-gray-600';
+        wrapper.textContent = 'Image Gallery Sidebar (builtin plugin placeholder)';
+        container.appendChild(wrapper);
+    }
+
+    function renderGalleryMain(container) {
+        container.innerHTML = '';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'flex-1 flex flex-col items-center justify-center text-gray-400 text-xs';
+        wrapper.textContent = 'Image Gallery Main View (builtin plugin placeholder)';
+        container.appendChild(wrapper);
+    }
+
+    registerPlugin(PLUGIN_SLOT, PLUGIN_ID, {
+        render(frameworkApi) {
+            const button = frameworkApi.ui.createIconButton({
+                label: '生图',
+                icon: 'image',
+                title: '切换到生图视图（占位实现，后续替换为真实 gallery UI）',
+                className: 'ido-btn ido-btn--ghost text-xs gap-1',
+                iconClassName: 'material-symbols-outlined text-[16px]',
+                onClick() {
+                    const current = typeof frameworkApi.getCurrentMode === 'function'
+                        ? frameworkApi.getCurrentMode()
+                        : 'chat';
+                    if (current === MODE_ID) {
+                        frameworkApi.setMode('chat');
+                    } else {
+                        frameworkApi.setMode(MODE_ID, {
+                            sidebar: renderGallerySidebar,
+                            main: renderGalleryMain
+                        });
+                    }
+                }
+            });
+            return button;
+        }
+    });
+})();`,
+            enabled: true,
+            version: '0.1.0',
+            description: 'Builtin image gallery main-view plugin (placeholder implementation).',
+            author: 'IdoFront',
+            homepage: '',
+            icon: 'photo_library',
+            source: 'builtin',
+            createdAt: 'builtin',
+            updatedAt: 'builtin'
+        }
+    ];
+
+    /**
      * 初始化插件加载器
      */
     /**
@@ -273,21 +348,24 @@
             const requestId = ++requestCounter;
             pendingRequests.set(requestId, { resolve, reject, onUpdate });
 
-            sandboxWindow.postMessage({
-                type,
-                payload: {
-                    requestId,
-                    ...data
-                }
-            }, '*');
-            
-            // Timeout
-            setTimeout(() => {
-                if (pendingRequests.has(requestId)) {
-                    pendingRequests.delete(requestId);
-                    reject(new Error('Sandbox request timeout'));
-                }
-            }, 30000); // 30s timeout
+            try {
+                sandboxWindow.postMessage({
+                    type,
+                    payload: {
+                        requestId,
+                        ...data
+                    }
+                }, '*');
+            } catch (error) {
+                // 如果 postMessage 失败，立即清理并抛出错误，避免挂起
+                pendingRequests.delete(requestId);
+                reject(error);
+            }
+
+            // 不再对沙箱 RPC 施加额外超时限制，让其行为尽可能接近原生渠道：
+            // - 正常完成时由 CHANNEL_CALL_RESULT / CHANNEL_FETCH_MODELS_RESULT 解析并 resolve
+            // - 异常时由 CHANNEL_ERROR 解析并 reject
+            // 超时控制交由浏览器网络层或插件自身实现
         });
     }
 
@@ -320,6 +398,8 @@
 
     /**
      * 从存储加载所有外部插件并执行
+     * 注意：内建插件不走这里，而是通过 loader.js 加载对应文件，在文件内部直接使用
+     * Framework / IdoFront API 注册（即“文件直接执行”的方式）。
      */
     async function loadStoredPlugins() {
         const plugins = await window.IdoFront.storage.getAllPlugins();
@@ -382,7 +462,8 @@
             homepage: meta.homepage || parsedMeta.homepage || '',
             icon: meta.icon || parsedMeta.icon || '',
             createdAt: meta.createdAt || now,
-            updatedAt: now
+            updatedAt: now,
+            source: 'external'
         };
     
         await window.IdoFront.storage.savePlugin(plugin);
@@ -402,6 +483,8 @@
         const next = {
             ...plugin,
             ...patch,
+            // external 插件始终标记为 external
+            source: plugin.source || 'external',
             updatedAt: new Date().toISOString()
         };
     
@@ -416,6 +499,21 @@
     };
 
     window.IdoFront.pluginLoader.togglePlugin = async function(id, enabled) {
+        // 1) 内建插件：仅更新内存状态与运行态，不写入 IndexedDB
+        const inMemory = loadedPlugins.get(id);
+        if (inMemory && inMemory.source === 'builtin') {
+            inMemory.enabled = enabled;
+            loadedPlugins.set(id, inMemory);
+    
+            if (enabled) {
+                restartPlugin(id);
+            } else {
+                stopPlugin(id);
+            }
+            return;
+        }
+    
+        // 2) 外部插件：走原有存储路径
         const plugin = await window.IdoFront.storage.getPlugin(id);
         if (!plugin) return;
     
@@ -441,6 +539,7 @@
     window.IdoFront.pluginLoader.getPlugins = function() {
         return Array.from(loadedPlugins.values()).map(plugin => ({
             ...plugin,
+            source: plugin.source || 'external',
             runtime: runtimeHandles.has(plugin.id) ? 'running' : 'stopped'
         }));
     };

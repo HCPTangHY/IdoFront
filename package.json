@@ -1,0 +1,22 @@
+{
+  "name": "idofront",
+  "version": "1.0.0",
+  "description": "本项目是一个以插件系统为核心的大模型聊天前端。主功能和外部插件的任何功能都可以通过框架暴露的API来进行注册和应用。",
+  "main": "build-web.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples"
+  },
+  "scripts": {
+    "build:web": "node build-web.js",
+    "build:extension": "node pack.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "^0.27.0",
+    "terser": "^5.44.1"
+  }
+}

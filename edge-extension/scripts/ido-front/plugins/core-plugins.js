@@ -301,12 +301,14 @@
     }
 
     /**
-     * 4. 模型选择器（顶部栏）
+     * 4. 模型选择器（输入框工具栏）
+     * 原始行为：挂在顶部栏右侧 HEADER_ACTIONS。
+     * 现在改为：挂在输入框右侧操作区，更贴近发送区域。
      */
     function registerModelSelector() {
-        const headerActions = document.getElementById(context.SLOTS.HEADER_ACTIONS);
-        if (headerActions && window.IdoFront.modelSelector) {
-            window.IdoFront.modelSelector.render(headerActions);
+        const inputActionsRight = document.getElementById(context.SLOTS.INPUT_ACTIONS_RIGHT);
+        if (inputActionsRight && window.IdoFront.modelSelector) {
+            window.IdoFront.modelSelector.render(inputActionsRight);
         }
     }
 

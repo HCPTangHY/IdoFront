@@ -158,6 +158,29 @@
                     context.renderAllPendingMarkdown();
                 }, 0);
             }
+
+            // 如果当前对话正在生成回复，恢复对应的加载指示器 / 流式状态
+            if (store.state.isTyping && store.state.typingConversationId === active.id && context) {
+                const typingMsgId = store.state.typingMessageId;
+
+                // 先清理可能残留的流式指示器（例如上一次渲染留下的）
+                if (typingMsgId && context.removeMessageStreamingIndicator) {
+                    try {
+                        context.removeMessageStreamingIndicator(typingMsgId);
+                    } catch (e) {
+                        console.warn('removeMessageStreamingIndicator error:', e);
+                    }
+                }
+
+                if (typingMsgId && context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
+                    // 已经有助手消息，直接在该消息下方挂载 loading 指示器
+                    const loadingId = context.addLoadingIndicator();
+                    context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
+                } else if (!typingMsgId && context.addLoadingIndicator) {
+                    // 还没有助手消息（请求已发出但首个 chunk 未到达），显示独立的 loading 气泡
+                    context.addLoadingIndicator();
+                }
+            }
         } else {
             if (context.clearMessages) context.clearMessages();
             // 清空header
@@ -170,6 +193,7 @@
     
     /**
      * 渲染对话列表（仅显示当前面具的对话）
+     * 列表按最近更新时间倒序排列：最新有消息活动的对话排在最前
      */
     function renderConversationList() {
         const listContainer = document.getElementById('history-list');
@@ -177,7 +201,14 @@
         
         listContainer.innerHTML = '';
         
-        const personaConvs = getPersonaConversations();
+        // 根据 updatedAt / createdAt 倒序排序，最近活跃的对话排在前面
+        const personaConvs = getPersonaConversations()
+            .slice()
+            .sort((a, b) => {
+                const aTime = a.updatedAt || a.createdAt || 0;
+                const bTime = b.updatedAt || b.createdAt || 0;
+                return bTime - aTime;
+            });
         
         if (personaConvs.length === 0) {
             const empty = document.createElement('div');

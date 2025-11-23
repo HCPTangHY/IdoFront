@@ -61,16 +61,31 @@
 
     /**
      * 添加预览容器
+     * 位置策略：
+     *  - 不再挂在 slot-input-top 里面，避免和工具栏挤在一行
+     *  - 统一插在整个 input-area 的最上方，这样无论 chat 还是生图模式都在工具栏之上独立一行
      */
     function addPreviewContainer() {
-        const inputTop = document.getElementById('slot-input-top');
-        if (!inputTop) return;
-
+        // 已存在则不重复创建
+        if (document.getElementById('file-preview-container')) return;
+ 
+        const inputArea = document.getElementById('input-area');
+        if (!inputArea) return;
+ 
         const previewContainer = document.createElement('div');
         previewContainer.id = 'file-preview-container';
-        previewContainer.className = 'flex gap-2 flex-wrap empty:hidden';
-        
-        inputTop.appendChild(previewContainer);
+        previewContainer.className = 'flex gap-2 flex-wrap empty:hidden mb-2';
+        // 独占一整行
+        previewContainer.style.width = '100%';
+ 
+        const inputTop = document.getElementById('slot-input-top');
+        if (inputTop && inputArea.contains(inputTop)) {
+            // 插在工具栏所在 slot 之前
+            inputArea.insertBefore(previewContainer, inputTop);
+        } else {
+            // 没有工具栏时，插在 input-area 的最前面
+            inputArea.insertBefore(previewContainer, inputArea.firstChild);
+        }
     }
 
     /**

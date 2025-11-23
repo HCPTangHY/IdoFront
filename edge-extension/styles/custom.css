@@ -65,6 +65,20 @@ body.settings-mode #settings-view {
     display: flex;
 }
 
+/* Input Area Transitions */
+#input-area {
+    transition: transform var(--ido-transition-base), opacity var(--ido-transition-base), max-height var(--ido-transition-base);
+    transform-origin: bottom;
+}
+
+/* Hidden state for input area when certain modes want to hide it without changing layout logic */
+#input-area.ido-input-area--hidden {
+    transform: translateY(20px);
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
 /* Resizer Handles */
 .resizer {
     width: 4px;
@@ -107,6 +121,32 @@ body.is-resizing {
     }
     /* Hide resizers on mobile */
     .resizer { display: none; }
+}
+
+/* Bottom Sheet (Drawer) Transitions */
+#bottom-sheet-backdrop {
+    z-index: 50;
+    opacity: 0;
+    transition: opacity var(--ido-transition-base);
+}
+
+#bottom-sheet-backdrop.ido-bottom-sheet-backdrop--visible {
+    opacity: 1;
+}
+
+#bottom-sheet {
+    z-index: 51;
+    transform: translateY(100%);
+    transition: transform var(--ido-transition-base);
+}
+
+#bottom-sheet.ido-bottom-sheet--visible {
+    transform: translateY(0);
+}
+
+/* Default bottom sheet content height */
+#bottom-sheet-content {
+    height: 80vh;
 }
 
 /* ========================================
@@ -465,6 +505,9 @@ body.is-resizing {
     --ido-transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
     --ido-transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* Dark theme overrides are injected by the builtin theme plugin via <style> to keep core CSS neutral. */
+
 
 /* ========================================
    Button System
@@ -847,6 +890,23 @@ body.is-resizing {
     justify-content: flex-start;
 }
 
+/* 气泡容器：承载单条消息内部的内容（文本、思维链、footer 等） */
+.ido-message__container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    align-items: stretch;
+}
+
+/* 加载指示器等特殊气泡使用的容器 */
+.ido-message__container--loading {
+    display: flex;
+    flex-direction: column;
+    max-width: 85%;
+    align-items: flex-start;
+}
+
 .ido-message__avatar {
     width: 2rem;
     height: 2rem;
@@ -887,10 +947,16 @@ body.is-resizing {
     word-break: break-word;
 }
 
+/* 更紧凑的气泡宽度（由 JS 通过 class 控制，而不是内联样式） */
+.ido-message__bubble--compact {
+    max-width: 85%;
+}
+
 .ido-message--user .ido-message__bubble {
     background-color: var(--ido-color-primary);
     color: white;
     border-bottom-right-radius: var(--ido-spacing-xs);
+    align-self: flex-end;
 }
 
 .ido-message--user .message-content {
@@ -902,6 +968,7 @@ body.is-resizing {
     border: 1px solid var(--ido-color-border);
     color: var(--ido-color-text-primary);
     border-bottom-left-radius: var(--ido-spacing-xs);
+    align-self: flex-start;
 }
 
 /* 移动端优化：气泡占据更多空间 */

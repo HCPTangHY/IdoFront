@@ -18,7 +18,7 @@ document.addEventListener('IdoFrontLoaded', async () => {
     // Override Send Button
     const btnSend = document.getElementById('btn-send');
     const input = document.getElementById('user-input');
-
+ 
     // Remove default framework listener if any (it was set in init, but we can overwrite onclick)
     btnSend.onclick = () => {
         const val = input.value.trim();

@@ -40,21 +40,26 @@
             setStatus(`外部插件列表读取失败：${error.message}`, 'error');
         }
 
-        const internalPlugins = context.getPlugins();
+        const internalPlugins = context.getPlugins() || [];
         const userPlugins = internalPlugins.filter(p => !p.id.startsWith('core-'));
         const rerender = () => window.IdoFront.pluginSettings.render(container, context, store);
 
-        container.appendChild(renderExternalManager({
-            plugins: externalPlugins,
+        // 外部插件导入面板（只负责导入，和列表展示解耦）
+        container.appendChild(createImportPanel({
             loader,
             rerender,
             setStatus
         }));
 
-        container.appendChild(renderInternalManager({
-            plugins: userPlugins,
+        // 统一插件列表：内置插件与外部插件在同一列表中按平等地位展示
+        container.appendChild(renderPluginList({
+            internalPlugins: userPlugins,
+            externalPlugins,
+            loader,
             store,
-            context
+            context,
+            rerender,
+            setStatus
         }));
 
         if (loader.lastError) {
@@ -403,6 +408,223 @@
         });
 
         return listWrapper;
+    }
+
+    function renderPluginList({ internalPlugins, externalPlugins, loader, store, context, rerender, setStatus }) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'space-y-4 mt-8';
+
+        const heading = document.createElement('h2');
+        heading.className = 'text-base font-semibold text-gray-800';
+        heading.textContent = '插件列表';
+        wrapper.appendChild(heading);
+
+        const listWrapper = document.createElement('div');
+        listWrapper.className = 'space-y-2';
+
+        const combined = [];
+        if (internalPlugins && internalPlugins.length) {
+            internalPlugins.forEach((p) => combined.push({ plugin: p, source: 'internal' }));
+        }
+        if (externalPlugins && externalPlugins.length) {
+            externalPlugins.forEach((p) => combined.push({ plugin: p, source: 'external' }));
+        }
+
+        if (combined.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'ido-empty';
+            empty.textContent = '暂无插件';
+            wrapper.appendChild(empty);
+            return wrapper;
+        }
+
+        combined.forEach(({ plugin, source }) => {
+            const card = document.createElement('div');
+            card.className = 'ido-card flex flex-col gap-2 p-4';
+
+            const header = document.createElement('div');
+            header.className = 'flex items-start justify-between gap-4';
+
+            const info = document.createElement('div');
+            info.className = 'flex flex-col gap-1';
+
+            const nameRow = document.createElement('div');
+            nameRow.className = 'flex items-center gap-2';
+
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'material-symbols-outlined text-gray-400 text-lg';
+
+            let displayName = plugin.id;
+            let displayDescription = '';
+            let versionText = '';
+
+            if (source === 'external') {
+                const derivedMeta = (loader && typeof loader.parseMetadata === 'function' && plugin.code)
+                    ? loader.parseMetadata(plugin.code)
+                    : {};
+                displayName = plugin.name || derivedMeta.name || plugin.id;
+                displayDescription = plugin.description || derivedMeta.description || '';
+                versionText = plugin.version || derivedMeta.version || '';
+                const iconValue =
+                    (plugin.icon && plugin.icon.trim()) ||
+                    (derivedMeta.icon && derivedMeta.icon.trim()) ||
+                    'extension';
+                iconSpan.textContent = iconValue;
+            } else {
+                // 内置插件：使用注册时提供的 meta 信息作为展示元数据
+                const meta = plugin.meta || {};
+                displayName = meta.name || plugin.id;
+                displayDescription = meta.description || '';
+                versionText = meta.version || '';
+                const iconValue =
+                    (meta.icon && meta.icon.trim()) ||
+                    'extension';
+                iconSpan.textContent = iconValue;
+            }
+
+            nameRow.appendChild(iconSpan);
+
+            const name = document.createElement('span');
+            name.className = 'font-semibold text-gray-800';
+            name.textContent = displayName;
+            nameRow.appendChild(name);
+
+            if (versionText) {
+                const version = document.createElement('span');
+                version.className = 'text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded';
+                version.textContent = `v${versionText}`;
+                nameRow.appendChild(version);
+            }
+
+            const originBadge = document.createElement('span');
+            originBadge.className = `text-[10px] px-1.5 py-0.5 rounded-full border ${
+                source === 'external'
+                    ? 'bg-purple-50 text-purple-700 border-purple-200'
+                    : 'bg-gray-50 text-gray-500 border-gray-200'
+            }`;
+            originBadge.textContent = source === 'external' ? '外部插件' : '内置插件';
+            nameRow.appendChild(originBadge);
+
+            info.appendChild(nameRow);
+
+            if (displayDescription) {
+                const desc = document.createElement('span');
+                desc.className = 'text-xs text-gray-500 line-clamp-2';
+                desc.textContent = displayDescription;
+                info.appendChild(desc);
+            }
+
+            if (source === 'external') {
+                const metaRow = document.createElement('div');
+                metaRow.className = 'flex items-center gap-3 text-[11px] text-gray-400 mt-1';
+
+                if (plugin.author) {
+                    const author = document.createElement('span');
+                    author.textContent = `作者: ${plugin.author}`;
+                    metaRow.appendChild(author);
+                }
+
+                if (plugin.updatedAt) {
+                    const updated = document.createElement('span');
+                    updated.textContent = `更新: ${new Date(plugin.updatedAt).toLocaleDateString()}`;
+                    metaRow.appendChild(updated);
+                }
+
+                if (plugin.homepage) {
+                    const link = document.createElement('a');
+                    link.href = plugin.homepage;
+                    link.target = '_blank';
+                    link.className = 'hover:text-blue-500 flex items-center gap-0.5';
+
+                    const linkText = document.createElement('span');
+                    linkText.textContent = '主页';
+                    const linkIcon = document.createElement('span');
+                    linkIcon.className = 'material-symbols-outlined text-[10px]';
+                    linkIcon.textContent = 'open_in_new';
+
+                    link.appendChild(linkText);
+                    link.appendChild(linkIcon);
+                    metaRow.appendChild(link);
+                }
+
+                info.appendChild(metaRow);
+            }
+
+            header.appendChild(info);
+
+            const actions = document.createElement('div');
+            actions.className = 'flex items-center gap-2';
+
+            const toggleLabel = document.createElement('label');
+            toggleLabel.className = 'ido-form-switch';
+            toggleLabel.title = '启用/停用插件';
+            const toggle = document.createElement('input');
+            toggle.type = 'checkbox';
+            toggle.className = 'ido-form-switch__input';
+            if (source === 'external') {
+                toggle.checked = !!plugin.enabled;
+            } else {
+                toggle.checked = plugin.enabled !== false;
+            }
+
+            toggle.onchange = async (event) => {
+                const enabled = event.target.checked;
+                if (source === 'external') {
+                    try {
+                        await loader.togglePlugin(plugin.id, enabled);
+                        setStatus(`已${enabled ? '启用' : '停用'}插件 ${plugin.name || plugin.id}`, 'success');
+                        rerender();
+                    } catch (error) {
+                        setStatus(`切换插件失败：${error.message}`, 'error');
+                        event.target.checked = !enabled;
+                    }
+                } else {
+                    try {
+                        if (store && typeof store.setPluginState === 'function') {
+                            store.setPluginState(plugin.slot, plugin.id, enabled);
+                        }
+                        if (context && typeof context.setPluginEnabled === 'function') {
+                            context.setPluginEnabled(plugin.slot, plugin.id, enabled);
+                        }
+                    } catch (error) {
+                        setStatus(`切换插件失败：${error.message}`, 'error');
+                        event.target.checked = !enabled;
+                    }
+                }
+            };
+
+            const slider = document.createElement('div');
+            slider.className = 'ido-form-switch__slider';
+            toggleLabel.appendChild(toggle);
+            toggleLabel.appendChild(slider);
+            actions.appendChild(toggleLabel);
+
+            if (source === 'external') {
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'ido-icon-btn text-red-400 hover:text-red-600 hover:bg-red-50';
+                deleteBtn.title = '删除插件';
+                deleteBtn.innerHTML = '<span class="material-symbols-outlined text-lg">delete</span>';
+                deleteBtn.onclick = async () => {
+                    const confirmed = window.confirm(`确认删除插件 ${plugin.name || plugin.id} 吗？`);
+                    if (!confirmed) return;
+                    try {
+                        await loader.deletePlugin(plugin.id);
+                        setStatus(`插件 ${plugin.name || plugin.id} 已删除`, 'success');
+                        rerender();
+                    } catch (error) {
+                        setStatus(`删除失败：${error.message}`, 'error');
+                    }
+                };
+                actions.appendChild(deleteBtn);
+            }
+
+            header.appendChild(actions);
+            card.appendChild(header);
+            listWrapper.appendChild(card);
+        });
+
+        wrapper.appendChild(listWrapper);
+        return wrapper;
     }
 
     function renderInternalManager({ plugins, store, context }) {
