@@ -260,6 +260,11 @@
             const activeConv = this.getActiveConversation();
             const channelId = activeConv?.selectedChannelId || null;
             const model = activeConv?.selectedModel || null;
+
+            // 获取当前激活面具以继承默认流式和思考预算设置
+            const activePersona = this.state.personas.find(p => p.id === this.state.activePersonaId);
+            const defaultStream = activePersona ? activePersona.stream !== false : true;
+            const defaultReasoningEffort = 'medium';
             
             const conversation = {
                 id: window.IdoFront.utils.createId('conv'),
@@ -269,7 +274,10 @@
                 messages: [],
                 selectedChannelId: channelId, // 沿用当前对话的渠道
                 selectedModel: model, // 沿用当前对话的模型
-                personaId: this.state.activePersonaId // 绑定当前面具
+                personaId: this.state.activePersonaId, // 绑定当前面具
+                // 会话级别的流式开关（优先于面具），以及思考预算
+                streamOverride: defaultStream,
+                reasoningEffort: defaultReasoningEffort
             };
             this.state.conversations.unshift(conversation);
             if (!this.state.activeConversationId) {
@@ -467,6 +475,37 @@
             if (conv) {
                 conv.selectedChannelId = channelId;
                 conv.selectedModel = model;
+                this.persist();
+            }
+        },
+
+        /**
+         * 设置会话级别的流式开关
+         * @param {string} convId
+         * @param {boolean} streamOverride - true=流式, false=非流式
+         */
+        setConversationStreamOverride(convId, streamOverride) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (conv) {
+                conv.streamOverride = !!streamOverride;
+                this.persist();
+            }
+        },
+
+        /**
+         * 设置会话级别的思考预算（reasoning_effort）
+         * 仅当模型支持（如 gpt-5*）时由上层逻辑决定是否生效
+         * @param {string} convId
+         * @param {'low'|'medium'|'high'} effort
+         */
+        setConversationReasoningEffort(convId, effort) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (conv) {
+                let normalized = effort;
+                if (normalized !== 'low' && normalized !== 'medium' && normalized !== 'high') {
+                    normalized = 'medium';
+                }
+                conv.reasoningEffort = normalized;
                 this.persist();
             }
         }

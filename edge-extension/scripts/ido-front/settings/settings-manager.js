@@ -135,6 +135,17 @@
                 }
             });
         }
+
+        // 通知外部：“设置系统已就绪”，供主题等插件延迟注册通用设置分区
+        if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
+            try {
+                document.dispatchEvent(new CustomEvent('IdoFrontSettingsReady', {
+                    detail: { manager: window.IdoFront.settingsManager }
+                }));
+            } catch (e) {
+                console.warn('[settingsManager] failed to dispatch IdoFrontSettingsReady', e);
+            }
+        }
     };
 
     /**

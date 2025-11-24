@@ -1290,6 +1290,8 @@ body.is-resizing {
     justify-content: flex-end;
     gap: var(--ido-spacing-sm);
     flex-shrink: 0;
+    /* 默认放在右侧第二列，与附件同一行 */
+    grid-column: 2 / 3;
 }
 
 /* Icon按钮 */
@@ -1369,6 +1371,8 @@ body.is-resizing {
     flex-wrap: wrap;
     align-items: center;
     gap: var(--ido-spacing-sm);
+    /* 默认放在左侧第一列，与按钮同一行 */
+    grid-column: 1 / 2;
 }
 
 .message-edit-attachment-list {
@@ -1563,6 +1567,18 @@ body.is-resizing {
     color: var(--ido-color-danger);
 }
 
+/* 编辑模式下隐藏消息 footer 操作区，避免误触其他操作 */
+.ido-message:has(.message-editing-new) .ido-message__footer {
+    display: none !important;
+}
+
+/* 编辑模式下统一附件按钮样式，避免在浅色背景下变成白色不可见 */
+.ido-message:has(.message-editing-new) .message-edit-add-attachment {
+    color: var(--ido-color-primary);
+    border-color: var(--ido-color-primary);
+    background-color: transparent;
+}
+
 /* 强制覆盖 User 气泡的背景色 */
 .ido-message--user .ido-message__bubble.message-editing-new {
     background-color: transparent !important;
@@ -1583,6 +1599,18 @@ body.is-resizing {
     
     .message-edit-attachment-item {
         max-width: 100%;
+    }
+
+    /* 移动端下改为单列堆叠，避免附件和按钮在一行过于拥挤 */
+    .message-edit-container-new {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .message-edit-attachments {
+        grid-column: 1 / -1;
+    }
+    .message-edit-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-end;
     }
 }
 

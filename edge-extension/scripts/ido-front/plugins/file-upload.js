@@ -133,14 +133,29 @@
             }
 
             // 读取文件为 Data URL
-            const dataUrl = await readFileAsDataURL(file);
+            let dataUrl = await readFileAsDataURL(file);
+            let finalType = file.type;
+            let finalName = file.name;
+            
+            // 如果是图片但不是标准格式，转换为PNG
+            if (file.type.startsWith('image/') && !isStandardImageFormat(file.type)) {
+                try {
+                    console.log(`转换图片格式: ${file.name} (${file.type}) -> PNG`);
+                    dataUrl = await convertImageToPNG(dataUrl, file.type);
+                    finalType = 'image/png';
+                    finalName = file.name.replace(/\.[^.]+$/, '.png');
+                } catch (error) {
+                    console.error('图片格式转换失败:', error);
+                    alert(`图片 ${file.name} 格式转换失败，将使用原格式`);
+                }
+            }
             
             // 添加到附件列表
             const fileData = {
                 file: file,
                 dataUrl: dataUrl,
-                type: file.type,
-                name: file.name,
+                type: finalType,
+                name: finalName,
                 size: file.size
             };
             
@@ -160,6 +175,60 @@
             reader.onload = (e) => resolve(e.target.result);
             reader.onerror = reject;
             reader.readAsDataURL(file);
+        });
+    }
+
+    /**
+     * 检查是否为标准图片格式（PNG/JPG/JPEG）
+     */
+    function isStandardImageFormat(mimeType) {
+        const standardFormats = ['image/png', 'image/jpeg', 'image/jpg'];
+        return standardFormats.includes(mimeType.toLowerCase());
+    }
+
+    /**
+     * 将图片转换为PNG格式，并进行尺寸优化
+     */
+    function convertImageToPNG(dataUrl, originalType) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            
+            img.onload = () => {
+                try {
+                    let width = img.width;
+                    let height = img.height;
+                    
+                    // 限制最大尺寸为2048px，避免超大图片影响性能
+                    const MAX_SIZE = 2048;
+                    if (width > MAX_SIZE || height > MAX_SIZE) {
+                        const ratio = Math.min(MAX_SIZE / width, MAX_SIZE / height);
+                        width = Math.floor(width * ratio);
+                        height = Math.floor(height * ratio);
+                        console.log(`图片尺寸优化: ${img.width}x${img.height} -> ${width}x${height}`);
+                    }
+                    
+                    // 创建canvas
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    
+                    // 绘制图片（如果尺寸改变，会自动缩放）
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    
+                    // 转换为PNG格式的Data URL
+                    const pngDataUrl = canvas.toDataURL('image/png');
+                    resolve(pngDataUrl);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            
+            img.onerror = () => {
+                reject(new Error('图片加载失败'));
+            };
+            
+            img.src = dataUrl;
         });
     }
 

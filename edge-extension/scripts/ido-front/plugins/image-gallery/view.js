@@ -376,7 +376,7 @@
     saveBtn.className = 'ido-icon-btn';
     saveBtn.title = '保存当前画廊';
     saveBtn.innerHTML = '<span class="material-symbols-outlined text-[18px]">save</span>';
-    saveBtn.onclick = function() {
+    saveBtn.onclick = async function() {
       var currentState = gallery.getState();
       if (!currentState || !currentState.tasks || currentState.tasks.length === 0) {
         alert('当前画廊为空，无需保存');
@@ -391,18 +391,25 @@
         return Object.assign({}, t);
       });
       
-      // 简单实现：保存到 localStorage
+      var storageFacade = window.IdoFront && window.IdoFront.storage;
+      if (!storageFacade) {
+        alert('存储服务不可用');
+        return;
+      }
+      
       try {
-        var saved = JSON.parse(localStorage.getItem('image-gallery-saved') || '[]');
-        saved.unshift({
-          id: Date.now(),
-          name: name,
-          tasks: snapshotTasks,
-          savedAt: Date.now()
+        // 使用插件存储API保存画廊
+        var galleryId = 'image-gallery.saved.' + Date.now();
+        await storageFacade.savePlugin({
+          id: galleryId,
+          enabled: true,
+          updatedAt: Date.now(),
+          data: {
+            name: name,
+            tasks: snapshotTasks,
+            savedAt: Date.now()
+          }
         });
-        // 最多保存 20 个
-        if (saved.length > 20) saved = saved.slice(0, 20);
-        localStorage.setItem('image-gallery-saved', JSON.stringify(saved));
         
         // 重新渲染侧边栏
         renderSidebar(container);
@@ -418,82 +425,98 @@
     body.className = 'flex-1 overflow-y-auto px-3 py-2';
 
     // 加载已保存的画廊列表
-    try {
-      var saved = JSON.parse(localStorage.getItem('image-gallery-saved') || '[]');
-      
-      if (saved.length === 0) {
-        var empty = document.createElement('div');
-        empty.className = 'text-[11px] text-gray-400 text-center py-4';
-        empty.textContent = '暂无保存的画廊';
-        body.appendChild(empty);
-      } else {
-        saved.forEach(function(item) {
-          var card = document.createElement('div');
-          card.className = 'mb-2 p-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors';
-          
-          var cardHeader = document.createElement('div');
-          cardHeader.className = 'flex items-center justify-between mb-1';
-          
-          var cardTitle = document.createElement('div');
-          cardTitle.className = 'text-[11px] font-medium text-gray-800 truncate flex-1';
-          cardTitle.textContent = item.name;
-          
-          var deleteBtn = document.createElement('button');
-          deleteBtn.className = 'text-gray-400 hover:text-red-500 transition-colors';
-          deleteBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">delete</span>';
-          deleteBtn.title = '删除此画廊';
-          deleteBtn.onclick = function(e) {
-            e.stopPropagation();
-            if (!confirm('确定要删除画廊"' + item.name + '"吗？')) return;
-            
-            try {
-              var saved = JSON.parse(localStorage.getItem('image-gallery-saved') || '[]');
-              saved = saved.filter(function(s) { return s.id !== item.id; });
-              localStorage.setItem('image-gallery-saved', JSON.stringify(saved));
-              renderSidebar(container);
-            } catch (e) {
-              alert('删除失败：' + e.message);
-            }
-          };
-          
-          cardHeader.appendChild(cardTitle);
-          cardHeader.appendChild(deleteBtn);
-          
-          var cardMeta = document.createElement('div');
-          cardMeta.className = 'text-[10px] text-gray-400';
-          var taskCount = item.tasks ? item.tasks.length : 0;
-          var savedTime = new Date(item.savedAt).toLocaleString('zh-CN');
-          cardMeta.textContent = taskCount + ' 个任务 · ' + savedTime;
-          
-          card.appendChild(cardHeader);
-          card.appendChild(cardMeta);
-          
-          card.onclick = function() {
-            if (!confirm('加载画廊"' + item.name + '"？当前画廊将被替换。')) return;
-            
-            try {
-              if (gallery && typeof gallery.replaceTasks === 'function') {
-                // 使用 core 暴露的正规 API 完整替换画廊并触发通知
-                gallery.replaceTasks(item.tasks || []);
-              } else if (gallery && typeof gallery.clearAllTasks === 'function') {
-                // 降级方案：仅清空当前画廊
-                gallery.clearAllTasks();
-              } else {
-                alert('当前画廊模块不支持加载操作');
-              }
-            } catch (e) {
-              alert('加载失败：' + e.message);
-            }
-          };
-          
-          body.appendChild(card);
-        });
-      }
-    } catch (e) {
+    var storageFacade = window.IdoFront && window.IdoFront.storage;
+    
+    if (!storageFacade) {
       var error = document.createElement('div');
       error.className = 'text-[11px] text-red-500 text-center py-4';
-      error.textContent = '加载失败：' + e.message;
+      error.textContent = '存储服务不可用';
       body.appendChild(error);
+    } else {
+      storageFacade.getAllPlugins().then(function(allPlugins) {
+        // 筛选出画廊数据（ID以'image-gallery.saved.'开头）
+        var galleries = allPlugins.filter(function(p) {
+          return p.id && p.id.startsWith('image-gallery.saved.');
+        }).map(function(p) {
+          return {
+            id: p.id,
+            name: p.data && p.data.name || '未命名画廊',
+            tasks: p.data && p.data.tasks || [],
+            savedAt: p.data && p.data.savedAt || p.updatedAt
+          };
+        }).sort(function(a, b) {
+          return b.savedAt - a.savedAt;
+        });
+        
+        if (galleries.length === 0) {
+          var empty = document.createElement('div');
+          empty.className = 'text-[11px] text-gray-400 text-center py-4';
+          empty.textContent = '暂无保存的画廊';
+          body.appendChild(empty);
+        } else {
+          galleries.forEach(function(item) {
+            var card = document.createElement('div');
+            card.className = 'mb-2 p-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors';
+            
+            var cardHeader = document.createElement('div');
+            cardHeader.className = 'flex items-center justify-between mb-1';
+            
+            var cardTitle = document.createElement('div');
+            cardTitle.className = 'text-[11px] font-medium text-gray-800 truncate flex-1';
+            cardTitle.textContent = item.name;
+            
+            var deleteBtn = document.createElement('button');
+            deleteBtn.className = 'text-gray-400 hover:text-red-500 transition-colors';
+            deleteBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">delete</span>';
+            deleteBtn.title = '删除此画廊';
+            deleteBtn.onclick = function(e) {
+              e.stopPropagation();
+              if (!confirm('确定要删除画廊"' + item.name + '"吗？')) return;
+              
+              storageFacade.deletePlugin(item.id).then(function() {
+                renderSidebar(container);
+              }).catch(function(e) {
+                alert('删除失败：' + e.message);
+              });
+            };
+            
+            cardHeader.appendChild(cardTitle);
+            cardHeader.appendChild(deleteBtn);
+            
+            var cardMeta = document.createElement('div');
+            cardMeta.className = 'text-[10px] text-gray-400';
+            var taskCount = item.tasks ? item.tasks.length : 0;
+            var savedTime = new Date(item.savedAt).toLocaleString('zh-CN');
+            cardMeta.textContent = taskCount + ' 个任务 · ' + savedTime;
+            
+            card.appendChild(cardHeader);
+            card.appendChild(cardMeta);
+            
+            card.onclick = function() {
+              if (!confirm('加载画廊"' + item.name + '"？当前画廊将被替换。')) return;
+              
+              try {
+                if (gallery && typeof gallery.replaceTasks === 'function') {
+                  gallery.replaceTasks(item.tasks || []);
+                } else if (gallery && typeof gallery.clearAllTasks === 'function') {
+                  gallery.clearAllTasks();
+                } else {
+                  alert('当前画廊模块不支持加载操作');
+                }
+              } catch (e) {
+                alert('加载失败：' + e.message);
+              }
+            };
+            
+            body.appendChild(card);
+          });
+        }
+      }).catch(function(e) {
+        var error = document.createElement('div');
+        error.className = 'text-[11px] text-red-500 text-center py-4';
+        error.textContent = '加载失败：' + e.message;
+        body.appendChild(error);
+      });
     }
 
     // 底部设置按钮
@@ -909,20 +932,22 @@
 
     var ui = frameworkApi && frameworkApi.ui ? frameworkApi.ui : (window.Framework && window.Framework.ui ? window.Framework.ui : null);
 
-    // 保存 subtitle 引用以便后续更新
+    // 保存 subtitle 引用
     var subtitleElement = null;
     
     // 更新 subtitle 文本的函数
     function updateSubtitle() {
-      if (!subtitleElement) return;
+      // 优先使用保存的引用，如果没有则尝试查找（用于事件处理）
+      var element = subtitleElement || container.querySelector('[data-gallery-subtitle]');
+      if (!element) return;
       
       if (typeof gallery.getActiveChannelConfig === 'function') {
         var cfg = gallery.getActiveChannelConfig();
         if (cfg) {
           var label = (cfg.name || cfg.type || '渠道') + ' / ' + (cfg.model || '模型');
-          subtitleElement.textContent = label;
+          element.textContent = label;
         } else {
-          subtitleElement.textContent = '未选择渠道 / 模型';
+          element.textContent = '未选择渠道 / 模型';
         }
       }
     }
@@ -940,6 +965,7 @@
 
           subtitleElement = document.createElement('div');
           subtitleElement.className = 'text-[10px] text-gray-400 truncate';
+          subtitleElement.setAttribute('data-gallery-subtitle', 'true');
           
           // 初始化 subtitle
           updateSubtitle();
@@ -1029,9 +1055,10 @@
     // 订阅模型切换事件以更新 header subtitle
     var runtime = window.IdoFront && window.IdoFront.runtime;
     if (runtime && runtime.store && typeof runtime.store.subscribe === 'function') {
-      var modelUnsub = runtime.store.subscribe('conversation:updated', function() {
+      var modelUpdateHandler = function() {
         updateSubtitle();
-      });
+      };
+      var modelUnsub = runtime.store.subscribe('updated', modelUpdateHandler);
       container.__galleryModelUnsub = modelUnsub;
     }
   }

@@ -186,6 +186,7 @@ body.ido-theme-dark .hover\\:border-red-200:hover {
   let currentTheme = THEME_SYSTEM;
   let systemMedia = null;
   let systemMediaListener = null;
+  let settingsReadyListenerAttached = false;
 
   function getSystemTheme() {
     try {
@@ -392,7 +393,21 @@ body.ido-theme-dark .hover\\:border-red-200:hover {
       ensureDarkThemeStyle();
       loadInitialTheme();
       initSystemListener();
+
+      // 尝试立即注册（兼容 settingsManager 已就绪的情况）
       registerThemeSettingsSection();
+
+      // 监听设置管理器就绪事件，确保在 settingsManager.init 之后也能完成注册
+      if (typeof document !== 'undefined' && !settingsReadyListenerAttached) {
+        try {
+          document.addEventListener('IdoFrontSettingsReady', function() {
+            registerThemeSettingsSection();
+          });
+          settingsReadyListenerAttached = true;
+        } catch (e) {
+          console.warn('[builtin-theme-toggle] attach IdoFrontSettingsReady listener error:', e);
+        }
+      }
     },
     destroy: function() {
       cleanupSystemListener();

@@ -165,13 +165,13 @@
         textarea.value = originalContent;
         textarea.placeholder = '编辑消息...';
 
-        // 根据文本内容估算需要的行数（兼顾换行符和纯长段落）
+        // 根据文本内容估算需要的行数（兼顾换行符和纯长段落），更偏向紧凑展示
         const baseText = originalContent || '';
         const newlineLines = (baseText.match(/\n/g) || []).length + 1;
         // 粗略估算：每行约 60 个字符，避免没有换行符的长段落只占几行高度
         const lengthLines = Math.ceil(baseText.length / 60) || 1;
-        // 对长文本更激进：至少展开 10 行，最多 30 行，具体像素高度由 CSS max-height 再兜底
-        const estimatedLines = Math.max(10, Math.min(30, Math.max(newlineLines, lengthLines)));
+        // 默认最少展开 3 行，最多 20 行，具体像素高度仍由 CSS 的 max-height 兜底
+        const estimatedLines = Math.max(3, Math.min(20, Math.max(newlineLines, lengthLines)));
         textarea.rows = estimatedLines;
         
         // 自动调整高度（按内容真实高度展开，具体上限交给 CSS max-height 控制）
@@ -186,28 +186,7 @@
         inputWrapper.appendChild(textarea);
         editContainer.appendChild(inputWrapper);
 
-        // 创建按钮组
-        const buttonGroup = document.createElement('div');
-        buttonGroup.className = 'message-edit-actions';
-
-        // 取消按钮
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'message-edit-icon-btn message-edit-icon-btn--cancel';
-        cancelBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
-        cancelBtn.title = '取消编辑';
-        
-        // 发送按钮
-        const sendBtn = document.createElement('button');
-        sendBtn.className = 'message-edit-icon-btn message-edit-icon-btn--send';
-        sendBtn.innerHTML = '<span class="material-symbols-outlined">send</span>';
-        sendBtn.title = '保存并重新发送';
-
-        buttonGroup.appendChild(cancelBtn);
-        buttonGroup.appendChild(sendBtn);
-
-        editContainer.appendChild(buttonGroup);
-
-        // 创建附件管理区域
+        // 创建附件管理区域（优先放在按钮组上方，视觉上更贴近输入框）
         if (originalAttachments.length > 0 || targetMsg.role === 'user') {
             const attachmentArea = document.createElement('div');
             attachmentArea.className = 'message-edit-attachments';
@@ -310,6 +289,27 @@
 
             editContainer.appendChild(attachmentArea);
         }
+
+        // 创建按钮组
+        const buttonGroup = document.createElement('div');
+        buttonGroup.className = 'message-edit-actions';
+
+        // 取消按钮
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'message-edit-icon-btn message-edit-icon-btn--cancel';
+        cancelBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        cancelBtn.title = '取消编辑';
+        
+        // 发送按钮
+        const sendBtn = document.createElement('button');
+        sendBtn.className = 'message-edit-icon-btn message-edit-icon-btn--send';
+        sendBtn.innerHTML = '<span class="material-symbols-outlined">send</span>';
+        sendBtn.title = '保存并重新发送';
+
+        buttonGroup.appendChild(cancelBtn);
+        buttonGroup.appendChild(sendBtn);
+
+        editContainer.appendChild(buttonGroup);
 
         // 隐藏原内容，显示编辑界面
         contentSpan.style.display = 'none';
@@ -638,50 +638,74 @@
             messagesPayload.push(msg);
         });
         
-        // Log Request
-        const requestPayload = {
-            model: selectedModel,
-            messages: messagesPayload,
-            channel: channel.name
-        };
-        
-        const logId = (context && typeof context.logRequest === 'function')
-            ? context.logRequest('POST', '/chat/completions', requestPayload)
-            : null;
-        store.addLog({
-             id: utils.createId('log'),
-             direction: 'outgoing',
-             label: `POST ${channel.baseUrl || 'OpenAI'}`,
-             timestamp: Date.now(),
-             data: requestPayload,
-             relatedMessageId: relatedUserMessageId
-        });
-
-        // 3. Call Service with persona parameters
-        try {
-            // 构建配置，按优先级合并参数：chat基础 -> 面具覆写 -> 渠道覆写
-            const channelConfig = {
-                ...channel,
-                model: selectedModel,
-                // Apply persona parameters
-                temperature: activePersona?.temperature,
-                topP: activePersona?.topP,
-                stream: activePersona?.stream !== false
-            };
-            
-            // 合并paramsOverride：面具的paramsOverride会被渠道的paramsOverride覆盖
-            // 最终优先级：基础参数 < 面具paramsOverride < 渠道paramsOverride
-            if (activePersona?.paramsOverride || channel.paramsOverride) {
-                channelConfig.paramsOverride = {
-                    ...(activePersona?.paramsOverride || {}),
-                    ...(channel.paramsOverride || {})
+                // Log Request
+                const requestPayload = {
+                    model: selectedModel,
+                    messages: messagesPayload,
+                    channel: channel.name
                 };
-            }
-            
-            // 在外层作用域定义变量，确保在 catch 和 finally 块中可访问
-            let assistantMessage = null;
-            let fullContent = '';
-            let fullReasoning = null;
+                
+                const logId = (context && typeof context.logRequest === 'function')
+                    ? context.logRequest('POST', '/chat/completions', requestPayload)
+                    : null;
+                store.addLog({
+                     id: utils.createId('log'),
+                     direction: 'outgoing',
+                     label: `POST ${channel.baseUrl || 'OpenAI'}`,
+                     timestamp: Date.now(),
+                     data: requestPayload,
+                     relatedMessageId: relatedUserMessageId
+                });
+        
+                // 3. Call Service with persona parameters + 会话级别覆写（流式 / 思考预算）
+                try {
+                    // 判断当前模型是否为启用思考预算的模型（暂仅识别名称中包含 gpt-5）
+                    const isReasoningModel = typeof selectedModel === 'string'
+                        && selectedModel.toLowerCase().includes('gpt-5');
+        
+                    // 构建配置，按优先级合并参数：chat基础 -> 面具覆写 -> 渠道覆写 -> 会话覆写
+                    const personaStream = activePersona ? activePersona.stream !== false : true;
+                    const effectiveStream = typeof conv.streamOverride === 'boolean'
+                        ? conv.streamOverride
+                        : personaStream;
+        
+                    const channelConfig = {
+                        ...channel,
+                        model: selectedModel,
+                        // Apply persona parameters
+                        temperature: activePersona?.temperature,
+                        topP: activePersona?.topP,
+                        stream: effectiveStream
+                    };
+                    
+                    // 合并paramsOverride：面具的paramsOverride会被渠道的paramsOverride覆盖
+                    // 最终优先级：基础参数 < 面具paramsOverride < 渠道paramsOverride
+                    if (activePersona?.paramsOverride || channel.paramsOverride) {
+                        channelConfig.paramsOverride = {
+                            ...(activePersona?.paramsOverride || {}),
+                            ...(channel.paramsOverride || {})
+                        };
+                    }
+        
+                    // 会话级别思考预算（仅在 gpt-5* 模型上生效），优先级最高
+                    if (isReasoningModel) {
+                        let effort = conv.reasoningEffort || 'medium';
+                        if (typeof effort === 'string') {
+                            effort = effort.toLowerCase();
+                        }
+                        if (effort !== 'low' && effort !== 'medium' && effort !== 'high') {
+                            effort = 'medium';
+                        }
+                        if (!channelConfig.paramsOverride) {
+                            channelConfig.paramsOverride = {};
+                        }
+                        channelConfig.paramsOverride.reasoning_effort = effort;
+                    }
+                    
+                    // 在外层作用域定义变量，确保在 catch 和 finally 块中可访问
+                    let assistantMessage = null;
+                    let fullContent = '';
+                    let fullReasoning = null;
 
             const onUpdate = (data) => {
                 // 如果本对话已经发起了新的请求，忽略旧请求的流式更新，避免多个助手气泡同时 loading 或内容错乱
@@ -756,7 +780,9 @@
 
             let response = null;
             try {
-                response = await service.callAI(messagesPayload, channelConfig, onUpdate);
+                const streamingEnabled = !!channelConfig.stream;
+                const streamingCallback = streamingEnabled ? onUpdate : null;
+                response = await service.callAI(messagesPayload, channelConfig, streamingCallback);
             } catch (apiError) {
                 // API 调用失败，确保清理加载指示器
                 if (loadingId && context && context.removeLoadingIndicator) {

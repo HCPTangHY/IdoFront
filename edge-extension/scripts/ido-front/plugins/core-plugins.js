@@ -313,12 +313,242 @@
     }
 
     /**
-     * 5. 顶部栏操作按钮
-     * 注意："全屏打开"按钮已统一集成到 createCustomHeader 中，无需在此重复添加
+     * 5. 输入框上方工具栏按钮
+     * 注意：主插件在输入框上方的工具栏插槽 (INPUT_TOP) 注册按钮
+     * 这里注册：
+     *  - 流式开关：作用于当前对话，覆盖面具的 stream 设置
+     *  - 思考预算选择：仅在模型名包含 "gpt-5" 时显示，映射为 reasoning_effort 参数
      */
     function registerHeaderActions() {
-        // 预留插槽，供其他插件使用
-        // 例如：清空日志等功能可以在这里添加
+        if (!context || !store) return;
+
+        // 内部状态：缓存当前控件引用，便于在 store 事件中更新 UI
+        const headerState = {
+            container: null,
+            streamBtn: null,
+            divider: null,
+            reasoningGroup: null,
+            reasoningButtons: {}
+        };
+
+        /**
+         * 依据当前激活对话和面具，更新按钮显示状态
+         */
+        const updateHeaderControls = () => {
+            if (!store || !store.getActiveConversation) return;
+            if (!headerState.streamBtn) return;
+
+            const conv = store.getActiveConversation();
+            const activePersona = typeof store.getActivePersona === 'function'
+                ? store.getActivePersona()
+                : null;
+
+            // ---- 流式状态 - Toggle Switch ----
+            let streamEffective = true;
+            if (conv && typeof conv.streamOverride === 'boolean') {
+                streamEffective = conv.streamOverride;
+            } else if (activePersona) {
+                streamEffective = activePersona.stream !== false;
+            }
+
+            const streamBtn = headerState.streamBtn;
+            if (streamBtn) {
+                const slider = streamBtn.querySelector('[data-role="stream-slider"]');
+                
+                // 移除所有状态类
+                streamBtn.classList.remove('bg-blue-500', 'bg-gray-300');
+                
+                if (streamEffective) {
+                    // 开启状态：蓝色背景，滑块向右
+                    streamBtn.classList.add('bg-blue-500');
+                    if (slider) {
+                        slider.style.transform = 'translateX(1rem)'; // 16px = 1rem
+                    }
+                } else {
+                    // 关闭状态：灰色背景，滑块向左
+                    streamBtn.classList.add('bg-gray-300');
+                    if (slider) {
+                        slider.style.transform = 'translateX(0.125rem)'; // 2px = 0.125rem
+                    }
+                }
+            }
+
+            // ---- 思考预算：仅在 gpt-5* 模型时显示 ----
+            const reasoningGroup = headerState.reasoningGroup;
+            if (!reasoningGroup) return;
+
+            if (!conv || !conv.selectedModel) {
+                reasoningGroup.style.display = 'none';
+                if (headerState.divider) {
+                    headerState.divider.style.display = 'none';
+                }
+                return;
+            }
+
+            const modelName = String(conv.selectedModel).toLowerCase();
+            const isReasoningModel = modelName.includes('gpt-5');
+
+            if (!isReasoningModel) {
+                reasoningGroup.style.display = 'none';
+                if (headerState.divider) {
+                    headerState.divider.style.display = 'none';
+                }
+                return;
+            }
+
+            reasoningGroup.style.display = 'flex';
+            if (headerState.divider) {
+                headerState.divider.style.display = 'block';
+            }
+
+            // 当前会话的思考预算，默认 medium
+            let effort = conv.reasoningEffort || 'medium';
+            if (typeof effort === 'string') {
+                effort = effort.toLowerCase();
+            }
+            if (effort !== 'low' && effort !== 'medium' && effort !== 'high') {
+                effort = 'medium';
+            }
+
+            ['low', 'medium', 'high'].forEach((key) => {
+                const btn = headerState.reasoningButtons[key];
+                if (!btn) return;
+                btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
+                btn.classList.remove('bg-gray-50', 'text-gray-500', 'border-gray-200');
+                if (key === effort) {
+                    btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
+                } else {
+                    btn.classList.add('bg-gray-50', 'text-gray-500', 'border-gray-200');
+                }
+            });
+        };
+
+        // 监听全局状态变化，同步更新按钮显示（对话切换、模型变更等）
+        if (store.events && typeof store.events.on === 'function') {
+            store.events.on('updated', updateHeaderControls);
+        }
+
+        // 向 INPUT_TOP 插槽（输入框上方工具栏）注册实际渲染函数
+        context.registerPlugin(context.SLOTS.INPUT_TOP, 'core-chat-toggles', () => {
+            const container = document.createElement('div');
+            container.className = 'flex items-center gap-3';
+
+            // ---- 流式开关 - iOS风格Toggle Switch ----
+            const streamToggleWrapper = document.createElement('div');
+            streamToggleWrapper.className = 'flex items-center gap-2';
+            
+            const streamLabel = document.createElement('span');
+            streamLabel.className = 'text-xs text-gray-600 font-medium';
+            streamLabel.textContent = '流式';
+            
+            const streamToggle = document.createElement('button');
+            streamToggle.type = 'button';
+            streamToggle.className = 'relative inline-flex h-5 w-9 items-center rounded-full transition-all duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
+            streamToggle.title = '流式输出开关（仅作用于当前对话）';
+            
+            const streamSlider = document.createElement('span');
+            streamSlider.className = 'inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-300 ease-in-out';
+            streamSlider.dataset.role = 'stream-slider';
+            
+            streamToggle.appendChild(streamSlider);
+            streamToggleWrapper.appendChild(streamLabel);
+            streamToggleWrapper.appendChild(streamToggle);
+            
+            streamToggle.onclick = () => {
+                if (!store || !store.getActiveConversation) return;
+                const conv = store.getActiveConversation();
+                if (!conv) return;
+                
+                const activePersona = typeof store.getActivePersona === 'function'
+                    ? store.getActivePersona()
+                    : null;
+                
+                let current = true;
+                if (typeof conv.streamOverride === 'boolean') {
+                    current = conv.streamOverride;
+                } else if (activePersona) {
+                    current = activePersona.stream !== false;
+                }
+                
+                const next = !current;
+                if (typeof store.setConversationStreamOverride === 'function') {
+                    store.setConversationStreamOverride(conv.id, next);
+                } else {
+                    conv.streamOverride = next;
+                    if (typeof store.persist === 'function') {
+                        store.persist();
+                    }
+                }
+                
+                updateHeaderControls();
+            };
+            
+            container.appendChild(streamToggleWrapper);
+
+            // 垂直分隔线
+            const divider = document.createElement('div');
+            divider.className = 'h-5 w-px bg-gray-200';
+            container.appendChild(divider);
+
+            // ---- 思考预算选择控件 ----
+            const reasoningGroup = document.createElement('div');
+            reasoningGroup.className = 'flex items-center gap-1 text-[11px] text-gray-500';
+
+            const label = document.createElement('span');
+            label.className = 'text-[10px] text-gray-400';
+            label.textContent = '思考';
+
+            const createEffortBtn = (key, text, title) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
+                btn.textContent = text;
+                btn.title = title;
+                btn.onclick = () => {
+                    if (!store || !store.getActiveConversation) return;
+                    const conv = store.getActiveConversation();
+                    if (!conv) return;
+
+                    if (typeof store.setConversationReasoningEffort === 'function') {
+                        store.setConversationReasoningEffort(conv.id, key);
+                    } else {
+                        conv.reasoningEffort = key;
+                        if (typeof store.persist === 'function') {
+                            store.persist();
+                        }
+                    }
+
+                    updateHeaderControls();
+                };
+                return btn;
+            };
+
+            const lowBtn = createEffortBtn('low', 'L', '思考预算：低 (low)');
+            const mediumBtn = createEffortBtn('medium', 'M', '思考预算：中 (medium)');
+            const highBtn = createEffortBtn('high', 'H', '思考预算：高 (high)');
+
+            reasoningGroup.appendChild(label);
+            reasoningGroup.appendChild(lowBtn);
+            reasoningGroup.appendChild(mediumBtn);
+            reasoningGroup.appendChild(highBtn);
+
+            container.appendChild(reasoningGroup);
+
+            // 缓存引用并进行一次初始同步
+            headerState.container = container;
+            headerState.streamBtn = streamToggle;
+            headerState.divider = divider;
+            headerState.reasoningGroup = reasoningGroup;
+            headerState.reasoningButtons = {
+                low: lowBtn,
+                medium: mediumBtn,
+                high: highBtn
+            };
+
+            updateHeaderControls();
+
+            return container;
+        });
     }
 
     /**

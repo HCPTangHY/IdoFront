@@ -18,7 +18,8 @@ const Framework = (function() {
         leftOpen: window.innerWidth >= 768,   // Desktop default open
         rightOpen: window.innerWidth >= 768,  // Desktop default open
         messages: [],
-        isDragging: false
+        isDragging: false,
+        lastScreenWidth: window.innerWidth    // 记录上次屏幕宽度，用于检测真正的屏幕尺寸变化
     };
 
     const ui = {};
@@ -346,13 +347,20 @@ const Framework = (function() {
     }
 
     function checkResponsive() {
-        const isMobile = window.innerWidth < 768;
+        const currentWidth = window.innerWidth;
+        const isMobile = currentWidth < 768;
+        const wasMobile = state.lastScreenWidth < 768;
         
-        // If switching to mobile, auto-close panels to avoid clutter
-        if (isMobile) {
+        // 只在真正从桌面切换到移动端时才关闭侧边栏
+        // 避免移动端键盘弹出导致的 resize 事件误触发关闭
+        if (isMobile && !wasMobile) {
+            // 从桌面切换到移动端：关闭侧边栏
             if (state.leftOpen) state.leftOpen = false;
             if (state.rightOpen) state.rightOpen = false;
         }
+        
+        // 更新记录的屏幕宽度
+        state.lastScreenWidth = currentWidth;
         
         // Always update width visuals based on current state
         updatePanelWidths();

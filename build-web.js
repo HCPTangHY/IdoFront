@@ -227,8 +227,29 @@ if (fs.existsSync(indexTemplate)) {
 `;
   htmlContent = htmlContent.replace('</head>', `${faviconLinks}</head>`);
   
+  // 添加移动端视口高度修复脚本（解决移动端浏览器地址栏导致的布局问题）
+  const viewportHeightFix = `
+    <script>
+      // 修复移动端 100vh 问题（地址栏/工具栏导致的高度计算错误）
+      function setViewportHeight() {
+        const vh = window.innerHeight * 0.01;
+        document.documentElement.style.setProperty('--vh', vh + 'px');
+      }
+      setViewportHeight();
+      window.addEventListener('resize', setViewportHeight);
+      window.addEventListener('orientationchange', setViewportHeight);
+    </script>
+  `;
+  htmlContent = htmlContent.replace('</head>', `${viewportHeightFix}</head>`);
+  
+  // 修改 body 的高度样式，使用 CSS 变量而不是 h-screen
+  htmlContent = htmlContent.replace(
+    'class="bg-gray-50 h-screen w-screen overflow-hidden text-sm font-sans flex flex-col"',
+    'class="bg-gray-50 w-screen overflow-hidden text-sm font-sans flex flex-col" style="height: 100vh; height: calc(var(--vh, 1vh) * 100);"'
+  );
+  
   fs.writeFileSync(indexDest, htmlContent, 'utf8');
-  console.log(`✅ 已生成: ${indexDest} (自动转换)`);
+  console.log(`✅ 已生成: ${indexDest} (自动转换 + 移动端优化)`);
 }
 
 // 12. 读取版本号（用于日志）
