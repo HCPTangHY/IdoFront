@@ -479,49 +479,59 @@
     function setupEventListeners() {
         if (!store || !store.events) return;
 
+        // 使用 RAF 节流 UI 刷新，避免每个数据块都触发完整渲染
+        let rafId = null;
+        let pendingDetailId = null;
+
+        const scheduleRefresh = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => {
+                rafId = null;
+                refreshLogList();
+                if (pendingDetailId) {
+                    const log = window.IdoFront.networkLogger.getLog(pendingDetailId);
+                    if (log) showLogDetail(log);
+                    pendingDetailId = null;
+                }
+            });
+        };
+
+        const scheduleDetailIfSelected = (logId) => {
+            if (currentLogId === logId) {
+                pendingDetailId = logId;
+            }
+        };
+
         // 监听日志创建
         store.events.on('network-log:created', () => {
-            refreshLogList();
+            scheduleRefresh();
         });
 
         // 监听日志响应
         store.events.on('network-log:response', ({ logId }) => {
-            refreshLogList();
-            // 如果当前选中的是这个日志，更新详情
-            if (currentLogId === logId) {
-                const log = window.IdoFront.networkLogger.getLog(logId);
-                if (log) showLogDetail(log);
-            }
+            scheduleDetailIfSelected(logId);
+            scheduleRefresh();
         });
 
         // 监听流式数据块
         store.events.on('network-log:stream-chunk', ({ logId }) => {
-            refreshLogList();
-            if (currentLogId === logId) {
-                const log = window.IdoFront.networkLogger.getLog(logId);
-                if (log) showLogDetail(log);
-            }
+            scheduleDetailIfSelected(logId);
+            scheduleRefresh();
         });
 
         // 监听流式完成
         store.events.on('network-log:stream-complete', ({ logId }) => {
-            refreshLogList();
-            if (currentLogId === logId) {
-                const log = window.IdoFront.networkLogger.getLog(logId);
-                if (log) showLogDetail(log);
-            }
+            scheduleDetailIfSelected(logId);
+            scheduleRefresh();
         });
 
         // 监听错误
         store.events.on('network-log:error', ({ logId }) => {
-            refreshLogList();
-            if (currentLogId === logId) {
-                const log = window.IdoFront.networkLogger.getLog(logId);
-                if (log) showLogDetail(log);
-            }
+            scheduleDetailIfSelected(logId);
+            scheduleRefresh();
         });
 
-        // 监听清空
+        // 监听清空（立即处理）
         store.events.on('network-log:cleared', () => {
             currentLogId = null;
             refreshLogList();

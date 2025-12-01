@@ -104,7 +104,11 @@
             store.state.networkLogs = [];
             // 触发事件
             if (store.events) {
-                store.events.emit('network-log:cleared');
+                if (typeof store.events.emitAsync === 'function') {
+                    store.events.emitAsync('network-log:cleared');
+                } else {
+                    store.events.emit('network-log:cleared');
+                }
             }
         },
 
@@ -189,7 +193,11 @@
 
         // 触发事件
         if (store.events) {
-            store.events.emit('network-log:created', { logId, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:created', { logId, logEntry });
+            } else {
+                store.events.emit('network-log:created', { logId, logEntry });
+            }
         }
 
         return logId;
@@ -234,7 +242,11 @@
 
             // 触发事件
             if (store.events) {
-                store.events.emit('network-log:response', { logId, logEntry });
+                if (typeof store.events.emitAsync === 'function') {
+                    store.events.emitAsync('network-log:response', { logId, logEntry });
+                } else {
+                    store.events.emit('network-log:response', { logId, logEntry });
+                }
             }
         } catch (error) {
             console.error('Error handling response:', error);
@@ -271,7 +283,11 @@
 
         // 触发事件
         if (store.events) {
-            store.events.emit('network-log:response', { logId, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:response', { logId, logEntry });
+            } else {
+                store.events.emit('network-log:response', { logId, logEntry });
+            }
         }
 
         // 读取流
@@ -288,7 +304,11 @@
                     logEntry.duration = Date.now() - logEntry.timestamp;
 
                     if (store.events) {
-                        store.events.emit('network-log:stream-complete', { logId, logEntry });
+                        if (typeof store.events.emitAsync === 'function') {
+                            store.events.emitAsync('network-log:stream-complete', { logId, logEntry });
+                        } else {
+                            store.events.emit('network-log:stream-complete', { logId, logEntry });
+                        }
                     }
                     break;
                 }
@@ -303,7 +323,11 @@
                 
 
                 if (store.events) {
-                    store.events.emit('network-log:stream-chunk', { logId, chunk });
+                    if (typeof store.events.emitAsync === 'function') {
+                        store.events.emitAsync('network-log:stream-chunk', { logId, chunk });
+                    } else {
+                        store.events.emit('network-log:stream-chunk', { logId, chunk });
+                    }
                 }
             }
         } catch (error) {
@@ -331,7 +355,11 @@
 
         // 触发事件
         if (store.events) {
-            store.events.emit('network-log:error', { logId, error, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:error', { logId, error, logEntry });
+            } else {
+                store.events.emit('network-log:error', { logId, error, logEntry });
+            }
         }
     }
 

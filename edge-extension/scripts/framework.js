@@ -944,7 +944,8 @@ const Framework = (function() {
     
     // --- 3. MESSAGING ---
 
-    function addMessage(role, textOrObj) {
+    function addMessage(role, textOrObj, options) {
+        options = options || {};
         // Support object with {content, reasoning, id, attachments}
         let text = textOrObj;
         let reasoning = null;
@@ -977,8 +978,8 @@ const Framework = (function() {
         const bubble = document.createElement('div');
         bubble.className = 'ido-message__bubble ido-message__bubble--compact';
 
-        // Add attachments preview (for user messages with images)
-        if (attachments && attachments.length > 0 && role === 'user') {
+        // Add attachments preview (for messages with image attachments)
+        if (attachments && attachments.length > 0) {
             const attachmentsContainer = document.createElement('div');
             attachmentsContainer.className = 'flex gap-2 flex-wrap mb-2';
             
@@ -1091,7 +1092,9 @@ const Framework = (function() {
         wrapper.appendChild(avatar);
         wrapper.appendChild(bubbleContainer);
         ui.chatStream.appendChild(wrapper);
-        ui.chatStream.scrollTop = ui.chatStream.scrollHeight;
+        if (!options.noScroll) {
+            ui.chatStream.scrollTop = ui.chatStream.scrollHeight;
+        }
         
         return msg.id;
     }
@@ -1293,7 +1296,7 @@ const Framework = (function() {
         }
     }
  
-    // RAF 节流状态
+     // RAF 节流状态
     let rafUpdatePending = false;
     let pendingUpdate = null;
     
@@ -1303,10 +1306,17 @@ const Framework = (function() {
         // Determine content
         let text = textOrObj;
         let reasoning = null;
+        let attachments;
+        let streaming = false;
         
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
             reasoning = textOrObj.reasoning || null;
+            // 仅当调用方显式传入 attachments 字段时才更新，避免把已有附件意外清空
+            if (Object.prototype.hasOwnProperty.call(textOrObj, 'attachments')) {
+                attachments = textOrObj.attachments;
+            }
+            streaming = !!textOrObj.streaming;
         }
         
         // Update state immediately
@@ -1315,9 +1325,12 @@ const Framework = (function() {
         if (reasoning !== null) {
             lastMsg.reasoning = reasoning;
         }
+        if (typeof attachments !== 'undefined') {
+            lastMsg.attachments = attachments;
+        }
         
-        // 缓存待更新的内容
-        pendingUpdate = { text, reasoning };
+        // 缓存待更新的内容（附带 attachments 信息，供 UI 层按需使用）
+        pendingUpdate = { text, reasoning, streaming };
         
         // 使用 RAF 节流 UI 更新
         if (!rafUpdatePending) {
@@ -1333,7 +1346,7 @@ const Framework = (function() {
     function performUIUpdate(update) {
         if (!update) return;
         
-        const { text, reasoning } = update;
+        const { text, reasoning, streaming } = update;
         const lastMsg = state.messages[state.messages.length - 1];
         
         // Update UI
@@ -1342,6 +1355,37 @@ const Framework = (function() {
         
         const bubble = lastWrapper.querySelector('.ido-message__bubble');
         if (!bubble) return;
+        
+        // 如果当前消息包含图片附件且气泡尚未渲染附件，则在气泡顶部以 DOM 方式补渲染，
+        // 用于处理「流式响应后期才返回图片」的场景（例如 Gemini inlineData）。
+        const currentAttachments = lastMsg.attachments;
+        if (currentAttachments && currentAttachments.length > 0) {
+            const existingWrapper = bubble.querySelector('.ido-message__attachment-wrapper');
+            if (!existingWrapper) {
+                const attachmentsContainer = document.createElement('div');
+                attachmentsContainer.className = 'flex gap-2 flex-wrap mb-2';
+                
+                currentAttachments.forEach(attachment => {
+                    if (!attachment || !attachment.type || !attachment.type.startsWith('image/')) return;
+                    
+                    const imgWrapper = document.createElement('div');
+                    imgWrapper.className = 'rounded-lg overflow-hidden border border-gray-200 ido-message__attachment-wrapper';
+                    
+                    const img = document.createElement('img');
+                    img.src = attachment.dataUrl;
+                    img.className = 'w-full h-auto';
+                    img.alt = attachment.name || 'Attached image';
+                    
+                    imgWrapper.appendChild(img);
+                    attachmentsContainer.appendChild(imgWrapper);
+                });
+                
+                if (attachmentsContainer.children.length > 0) {
+                    // 将附件区域插入到正文/思维链之前，保持与 addMessage 相同的视觉顺序
+                    bubble.insertBefore(attachmentsContainer, bubble.firstChild);
+                }
+            }
+        }
         
         // Check for existing reasoning block
         let reasoningBlock = bubble.querySelector('.reasoning-block');
@@ -1443,10 +1487,15 @@ const Framework = (function() {
             }
         }
         
-        // 流式更新：直接同步渲染 Markdown 避免闪烁
+        // 流式更新期间避免频繁 Markdown 解析，待 finalize 再统一解析
         if (contentSpan && lastMsg.role !== 'user' && text) {
-            // 直接渲染 Markdown，不先设置 textContent
-            renderMarkdownSync(contentSpan, text);
+            if (streaming) {
+                contentSpan.textContent = text;
+                contentSpan.dataset.needsMarkdown = 'true';
+            } else {
+                // 非流式（一次性响应）再执行同步 Markdown 渲染
+                renderMarkdownSync(contentSpan, text);
+            }
         } else if (contentSpan) {
             contentSpan.textContent = text;
         }
@@ -1473,6 +1522,40 @@ const Framework = (function() {
         
         const lastMsg = state.messages[state.messages.length - 1];
         const lastMsgId = lastMsg?.id;
+        
+        // Fallback：如果流式结束时仍有思维链计时器在运行（例如仅有思维链或图片输出，正文为空），
+        // 在此处强制停止计时并上报 duration，避免计时器无限运行。
+        const reasoningBlock = bubble.querySelector('.reasoning-block');
+        if (reasoningBlock && reasoningBlock.dataset.timerId) {
+            const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
+            if (!Number.isNaN(timerId)) {
+                clearInterval(timerId);
+            }
+            
+            let finalDuration = 0;
+            if (reasoningBlock.dataset.startTime) {
+                const startTime = parseInt(reasoningBlock.dataset.startTime, 10);
+                if (!Number.isNaN(startTime)) {
+                    finalDuration = (Date.now() - startTime) / 1000;
+                }
+            }
+            
+            const toggle = reasoningBlock.querySelector('.reasoning-toggle');
+            const timerSpan = toggle && toggle.querySelector('.reasoning-timer');
+            if (timerSpan && finalDuration > 0) {
+                timerSpan.textContent = finalDuration.toFixed(1) + 's';
+            }
+            
+            delete reasoningBlock.dataset.timerId;
+            delete reasoningBlock.dataset.startTime;
+            
+            if (finalDuration > 0 && lastMsgId) {
+                events.emit('reasoning:completed', {
+                    messageId: lastMsgId,
+                    duration: finalDuration
+                });
+            }
+        }
         
         // 解析思维链的 Markdown
         const reasoningContent = bubble.querySelector('.reasoning-content[data-needs-markdown="true"]');

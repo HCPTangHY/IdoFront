@@ -97,8 +97,9 @@
         // 初始化设置 UI
         initSettingsUI();
         
-        // 监听渠道更新事件
+        // 监听渠道/面具更新事件
         if (store.events) {
+            // 渠道更新：保持原有刷新逻辑
             store.events.on('channels:updated', () => {
                 // 如果当前在渠道设置页面，刷新列表
                 if (activeSettingsTab === 'channels' && mainContainer) {
@@ -106,6 +107,23 @@
                     const channelSettings = window.IdoFront.channelSettings;
                     if (content && channelSettings && channelSettings.render) {
                         channelSettings.render(content, context, store);
+                    }
+                }
+            });
+
+            // 面具更新：若当前在“面具管理”标签，及时刷新列表
+            store.events.on('personas:updated', () => {
+                if (activeSettingsTab === 'personas' && mainContainer) {
+                    // 使用统一刷新逻辑，更新标题、内容与侧边栏选中状态
+                    try {
+                        updateSettingsContent();
+                    } catch (e) {
+                        // 兜底：直接重渲染当前标签内容
+                        const content = mainContainer.querySelector('.flex-1.overflow-y-auto');
+                        const personaSettings = window.IdoFront.personaSettings;
+                        if (content && personaSettings && personaSettings.render) {
+                            personaSettings.render(content, context, store);
+                        }
                     }
                 }
             });

@@ -9,12 +9,14 @@
     const registry = window.IdoFront.channelRegistry;
     const CHANNEL_ID = 'gemini';
 
-    // Helper: Convert Gemini parts to displayable content and reasoning
+     // Helper: Convert Gemini parts to displayable content, reasoning and binary attachments
     function partsToContent(parts) {
-        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null };
+        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null };
         
         let content = '';
         let reasoning = '';
+        const attachments = [];
+        let imageIndex = 1;
         
         for (const part of parts) {
             if (part.text) {
@@ -27,13 +29,35 @@
             }
             if (part.inlineData) {
                 const { mimeType, data } = part.inlineData;
-                content += `\n![Generated Image](data:${mimeType};base64,${data})\n`;
+                
+                // 将 Gemini 的 inlineData 转为浏览器可直接使用的 data URL，交给 DOM <img> 渲染，
+                // 避免把超长 Base64 串拼进 Markdown 再交给 marked 解析，降低性能开销。
+                if (mimeType && typeof data === 'string') {
+                    const dataUrl = `data:${mimeType};base64,${data}`;
+                    
+                    // 尽量估算原始字节大小（Base64 长度 * 3/4），仅作为展示/调试用途
+                    let approximateSize = undefined;
+                    try {
+                        approximateSize = Math.round((data.length * 3) / 4);
+                    } catch (e) {
+                        approximateSize = undefined;
+                    }
+                    
+                    attachments.push({
+                        dataUrl: dataUrl,
+                        type: mimeType,
+                        name: `Gemini Image ${imageIndex++}`,
+                        size: approximateSize,
+                        source: 'gemini'
+                    });
+                }
             }
         }
         
         return {
             content,
-            reasoning: reasoning || null
+            reasoning: reasoning || null,
+            attachments: attachments.length > 0 ? attachments : null
         };
     }
 
@@ -230,7 +254,7 @@
                                             accumulatedParts = accumulatedParts.concat(newParts);
                                             lastThoughtSignature = thoughtSignature;
                                             
-                                            const { content, reasoning } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments } = partsToContent(accumulatedParts);
                                             
                                             const updateData = {
                                                 content: content,
@@ -242,6 +266,11 @@
                                                     }
                                                 }
                                             };
+                                            
+                                            // 将图片作为附件挂到 metadata.attachments 上，交给上层以 DOM 方式渲染
+                                            if (attachments && attachments.length > 0) {
+                                                updateData.metadata.attachments = attachments;
+                                            }
                                             
                                             onUpdate(updateData);
                                         }
@@ -282,7 +311,19 @@
                     const candidate = data.candidates?.[0];
                     const parts = candidate?.content?.parts || [];
                     const thoughtSignature = candidate?.thoughtSignature;
-                    const { content, reasoning } = partsToContent(parts);
+                    const { content, reasoning, attachments } = partsToContent(parts);
+                    
+                    const metadata = {
+                        gemini: {
+                            parts: parts,
+                            thoughtSignature: thoughtSignature
+                        }
+                    };
+                    
+                    // 将图片作为附件挂到 metadata.attachments 上，交给上层以 DOM 方式渲染
+                    if (attachments && attachments.length > 0) {
+                        metadata.attachments = attachments;
+                    }
                     
                     // Mimic OpenAI response structure for compatibility
                     const result = {
@@ -291,12 +332,7 @@
                                 role: 'assistant',
                                 content: content,
                                 reasoning_content: reasoning,
-                                metadata: {
-                                    gemini: {
-                                        parts: parts,
-                                        thoughtSignature: thoughtSignature
-                                    }
-                                }
+                                metadata: metadata
                             }
                         }]
                     };

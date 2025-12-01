@@ -11,6 +11,10 @@
         
         _initialized: false,
         _initPromise: null,
+        // 持久化节流状态
+        _lastPersistAt: 0,
+        _persistTimer: null,
+        _pendingSnapshot: null,
         
         state: {
             personas: [], // 面具列表
@@ -45,6 +49,23 @@
                         console.error('Store event handler error:', event, e);
                     }
                 });
+            },
+            /**
+             * 异步派发事件：将每个回调放入微任务队列，避免阻塞主线程
+             * 不合并/不丢弃事件，仅异步化回调执行。
+             */
+            emitAsync(event, payload) {
+                if (!this.listeners[event]) return;
+                const handlers = this.listeners[event].slice(); // 防止回调修改监听数组
+                for (const cb of handlers) {
+                    Promise.resolve().then(() => {
+                        try {
+                            cb(payload);
+                        } catch (e) {
+                            console.error('Store event handler error:', event, e);
+                        }
+                    });
+                }
             }
         },
 
@@ -171,40 +192,70 @@
         },
 
         persist() {
-            // 异步保存，但不阻塞调用者
+            // 轻量节流 + 日志裁剪，避免频繁 JSON 序列化和 IDB 写入导致卡顿
+            const now = Date.now();
+    
+            // 构建快照，裁剪日志长度以降低序列化成本
+            const MAX_LOGS = 200;
             const snapshot = {
                 personas: this.state.personas,
                 activePersonaId: this.state.activePersonaId,
                 conversations: this.state.conversations,
                 activeConversationId: this.state.activeConversationId,
-                logs: this.state.logs,
+                logs: Array.isArray(this.state.logs) ? this.state.logs.slice(0, MAX_LOGS) : [],
                 channels: this.state.channels,
                 pluginStates: this.state.pluginStates
             };
-            
-            // 使用 IndexedDB 异步保存
-            if (window.IdoFront.idbStorage) {
-                window.IdoFront.idbStorage.save(snapshot).catch(error => {
-                    console.error('IndexedDB 保存失败:', error);
-                    // 降级到 localStorage
+    
+            // 合并并延后保存
+            this._pendingSnapshot = snapshot;
+    
+            const doSave = (snap) => {
+                // 使用 IndexedDB 异步保存，失败则回退 localStorage
+                if (window.IdoFront.idbStorage) {
+                    window.IdoFront.idbStorage.save(snap).catch(error => {
+                        console.error('IndexedDB 保存失败:', error);
+                        try {
+                            localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
+                        } catch (e) {
+                            console.error('localStorage 保存也失败:', e);
+                        }
+                    });
+                } else {
                     try {
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
                     } catch (e) {
-                        console.error('localStorage 保存也失败:', e);
+                        console.error('Storage save error:', e);
                     }
-                });
-            } else {
-                // 降级到 localStorage
-                try {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-                } catch (e) {
-                    console.error('Storage save error:', e);
                 }
+            };
+    
+            // 节流：250ms 内的重复持久化合并到一次保存
+            const THROTTLE_MS = 250;
+            if (now - this._lastPersistAt < THROTTLE_MS) {
+                if (!this._persistTimer) {
+                    this._persistTimer = setTimeout(() => {
+                        this._persistTimer = null;
+                        this._lastPersistAt = Date.now();
+                        const snap = this._pendingSnapshot;
+                        this._pendingSnapshot = null;
+                        doSave(snap);
+                    }, THROTTLE_MS);
+                }
+            } else {
+                this._lastPersistAt = now;
+                const snap = this._pendingSnapshot;
+                this._pendingSnapshot = null;
+                doSave(snap);
             }
-
+    
             // 通知所有订阅者：状态已更新（单一数据源）
-            if (this.events && typeof this.events.emit === 'function') {
-                this.events.emit('updated', this.state);
+            if (this.events) {
+                if (typeof this.events.emitAsync === 'function') {
+                    this.events.emitAsync('updated', this.state);
+                } else if (typeof this.events.emit === 'function') {
+                    this.events.emit('updated', this.state);
+                }
             }
         },
 
@@ -315,7 +366,13 @@
                 }
                 
                 this.persist();
-                this.events.emit('persona:changed', id);
+                if (this.events) {
+                    if (typeof this.events.emitAsync === 'function') {
+                        this.events.emitAsync('persona:changed', id);
+                    } else if (typeof this.events.emit === 'function') {
+                        this.events.emit('persona:changed', id);
+                    }
+                }
             }
         },
 
@@ -327,7 +384,13 @@
                 this.state.personas.push(persona);
             }
             this.persist();
-            this.events.emit('personas:updated', this.state.personas);
+            if (this.events) {
+                if (typeof this.events.emitAsync === 'function') {
+                    this.events.emitAsync('personas:updated', this.state.personas);
+                } else if (typeof this.events.emit === 'function') {
+                    this.events.emit('personas:updated', this.state.personas);
+                }
+            }
         },
 
         deletePersona(id) {
@@ -348,7 +411,13 @@
                 this.setActivePersona(this.state.activePersonaId);
             } else {
                 this.persist();
-                this.events.emit('personas:updated', this.state.personas);
+                if (this.events) {
+                    if (typeof this.events.emitAsync === 'function') {
+                        this.events.emitAsync('personas:updated', this.state.personas);
+                    } else if (typeof this.events.emit === 'function') {
+                        this.events.emit('personas:updated', this.state.personas);
+                    }
+                }
             }
             return true;
         },
@@ -376,6 +445,10 @@
 
         addLog(logEntry) {
             this.state.logs.unshift(logEntry);
+            // 裁剪日志长度，避免状态过大
+            if (this.state.logs.length > 200) {
+                this.state.logs.length = 200;
+            }
             this.persist();
         },
 

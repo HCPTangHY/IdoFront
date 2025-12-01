@@ -517,10 +517,43 @@
             store.truncateConversation(conv.id, truncateTargetId);
             
             // 同步UI
-            if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
-                window.IdoFront.conversationActions.syncUI();
+            // 局部更新 UI：避免完整重渲染导致卡顿
+            try {
+                const chatStream = document.getElementById('chat-stream');
+                if (chatStream) {
+                    // 移除聊天流中目标消息之后的所有节点（包括独立 loading 气泡）
+                    const targetWrapper = chatStream.querySelector(`[data-message-id="${truncateTargetId}"]`);
+                    if (targetWrapper) {
+                        // 先移除目标气泡内可能存在的流式指示器
+                        const indicators = targetWrapper.querySelectorAll('.message-streaming-indicator');
+                        indicators.forEach(ind => ind.remove());
+                        // 移除目标消息之后的所有兄弟节点
+                        let cursor = targetWrapper.nextElementSibling;
+                        while (cursor) {
+                            const next = cursor.nextElementSibling;
+                            cursor.remove();
+                            cursor = next;
+                        }
+                    } else {
+                        // 如果目标消息在屏幕上不可见（例如刚初始化或切换过视图），降级到清空并稍后增量渲染
+                        chatStream.querySelectorAll('[data-message-id]').forEach(el => el.remove());
+                        chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
+                    }
+                    // 兜底清理任何残留的独立 loading 提示
+                    chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
+                }
+            } catch (e) {
+                console.warn('Partial UI cleanup during retry failed:', e);
             }
 
+            // 更新侧边历史列表（不触发全部消息重绘）
+            if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.renderConversationList) {
+                try {
+                    window.IdoFront.conversationActions.renderConversationList();
+                } catch (e) {
+                    console.warn('renderConversationList error during retry:', e);
+                }
+            }
             // 重新生成响应
             await generateResponse(conv, truncateTargetId);
         }
@@ -638,10 +671,39 @@
             messagesPayload.push(msg);
         });
         
-                // Log Request
+                // Log Request（使用精简版，避免将大量 base64 附件写入日志导致卡顿）
+                const sanitizedMessages = [];
+                if (activePersona && activePersona.systemPrompt) {
+                    sanitizedMessages.push({ role: 'system', content: activePersona.systemPrompt });
+                }
+                if (activePersona && activePersona.contextMessages && activePersona.contextMessages.length > 0) {
+                    activePersona.contextMessages.forEach(msg => {
+                        sanitizedMessages.push({ role: msg.role, content: msg.content });
+                    });
+                }
+                // 精简实际对话消息：仅对触发本次生成的用户消息保留附件的元信息（去除 dataUrl）
+                conv.messages.forEach(m => {
+                    const out = { role: m.role, content: m.content };
+                    if (m.metadata) {
+                        const meta = { ...m.metadata };
+                        if (Array.isArray(meta.attachments)) {
+                            if (m.id === relatedUserMessageId) {
+                                meta.attachments = meta.attachments.map(att => ({
+                                    name: att.name,
+                                    type: att.type,
+                                    size: att.size
+                                }));
+                            } else {
+                                delete meta.attachments;
+                            }
+                        }
+                        out.metadata = meta;
+                    }
+                    sanitizedMessages.push(out);
+                });
                 const requestPayload = {
                     model: selectedModel,
-                    messages: messagesPayload,
+                    messages: sanitizedMessages,
                     channel: channel.name
                 };
                 
@@ -728,11 +790,21 @@
                 fullContent = currentContent;
                 fullReasoning = currentReasoning;
                 
+                // 从当前元数据中提取附件（例如 Gemini inlineData 转换的图片）
+                let currentAttachments = null;
+                if (currentMetadata && Array.isArray(currentMetadata.attachments)) {
+                    currentAttachments = currentMetadata.attachments;
+                }
+                
                 const updatePayload = {
                     content: fullContent,
                     reasoning: fullReasoning
                 };
-                
+                // 若本次增量包含附件，则一并传给 UI，便于框架层在流式过程中直接渲染图片
+                if (currentAttachments && currentAttachments.length > 0) {
+                    updatePayload.attachments = currentAttachments;
+                }
+                 
                 if (!assistantMessage) {
                     // 第一次收到内容：创建真实消息（总是写入 Store）
                     assistantMessage = addAssistantMessage(conv.id, {
@@ -764,6 +836,8 @@
                 } else {
                     // 仅当该对话当前处于激活状态时才更新屏幕上的最后一条消息
                     if (context && context.updateLastMessage && isActiveConv()) {
+                        // 标记为流式阶段，避免频繁 Markdown 解析
+                        updatePayload.streaming = true;
                         context.updateLastMessage(updatePayload);
                     }
                     assistantMessage.content = fullContent;
@@ -863,11 +937,18 @@
         let content = contentOrObj;
         let reasoning = null;
         let metadata = null;
+        let attachments = null;
         
         if (typeof contentOrObj === 'object' && contentOrObj !== null) {
             content = contentOrObj.content || '';
             reasoning = contentOrObj.reasoning || null;
             metadata = contentOrObj.metadata || null;
+        }
+        
+        // 从 metadata 中提取附件（用于 Gemini 等渠道返回的图片），
+        // 让 UI 层以 DOM <img> 方式渲染，而不是依赖 Markdown 图片语法。
+        if (metadata && Array.isArray(metadata.attachments)) {
+            attachments = metadata.attachments;
         }
         
         const msg = {
@@ -890,7 +971,11 @@
         // 仅当该对话当前处于激活状态时才立即写入当前聊天流 UI，
         // 否则只更新 Store，待下次 syncUI 时再统一渲染，避免串台。
         if (context && store.state.activeConversationId === convId) {
-            context.addMessage('ai', { content, reasoning, id: msg.id });
+            const payload = { content, reasoning, id: msg.id };
+            if (attachments && attachments.length > 0) {
+                payload.attachments = attachments;
+            }
+            context.addMessage('ai', payload);
         }
         return msg;
     }

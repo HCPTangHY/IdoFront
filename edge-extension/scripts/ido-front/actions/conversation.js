@@ -124,7 +124,7 @@
         const active = store.getActiveConversation();
         if (active) {
             if (context.clearMessages) context.clearMessages();
-            active.messages.forEach(msg => {
+            active.messages.forEach((msg, idx) => {
                 const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
                 const payload = {
                     content: msg.content,
@@ -146,17 +146,19 @@
                     payload.attachments = msg.metadata.attachments;
                 }
                 
-                context.addMessage(uiRole, payload);
+                // 仅最后一条触发滚动，减少滚动抖动
+                const noScroll = idx < active.messages.length - 1;
+                context.addMessage(uiRole, payload, { noScroll });
             });
             // 同步时也更新header
             updateHeader(active);
             
             // 批量渲染所有历史消息的 Markdown（性能优化）
             if (context.renderAllPendingMarkdown) {
-                // 使用 setTimeout 确保 DOM 已更新
-                setTimeout(() => {
+                // 使用 requestAnimationFrame 确保 DOM 已更新，避免宏任务排队带来的延迟
+                requestAnimationFrame(() => {
                     context.renderAllPendingMarkdown();
-                }, 0);
+                });
             }
 
             // 如果当前对话正在生成回复，恢复对应的加载指示器 / 流式状态

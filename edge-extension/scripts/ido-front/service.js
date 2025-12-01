@@ -80,7 +80,22 @@
         const originalChannel = ensureChannel(channel);
         const { adapter, entry } = resolveAdapter(originalChannel, 'call');
         const effectiveChannel = applyDefaults(originalChannel, entry);
-        return adapter.call(messages, effectiveChannel, onUpdate);
+
+        // 统一异步化 onUpdate（macrotask），覆盖所有渠道而不改变适配器实现
+        // 不丢数据、不合并事件，仅把回调放到下一个任务队列，避免同步阻塞渲染
+        const safeOnUpdate = (typeof onUpdate === 'function')
+            ? (payload) => {
+                setTimeout(() => {
+                    try {
+                        onUpdate(payload);
+                    } catch (e) {
+                        console.error('[Service] onUpdate error:', e);
+                    }
+                }, 0);
+            }
+            : null;
+
+        return adapter.call(messages, effectiveChannel, safeOnUpdate);
     };
 
     service.fetchModels = async function(channel) {
