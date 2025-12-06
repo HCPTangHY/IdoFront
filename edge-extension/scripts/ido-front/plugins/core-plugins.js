@@ -22,6 +22,9 @@
 
         if (!context) return;
 
+        // 覆盖 registerPlugin 以捕获 MESSAGE_MORE_ACTIONS
+        setupMoreActionsRegistry();
+
         // 注册所有核心插件
         registerSidebarHeader();
         registerNewChatButton();
@@ -552,77 +555,173 @@
     }
 
     /**
-     * 6. 消息操作按钮 (复制、重试、删除)
+     * 6. 消息操作按钮 - 新卡片设计
+     * 固定按钮：编辑、重试
+     * 更多操作：复制、删除 + 插件注册的按钮
      */
     function registerMessageActions() {
-        context.registerPlugin(context.SLOTS.MESSAGE_FOOTER, 'core-msg-actions', (msg) => {
-            const container = document.createElement('div');
-            container.className = 'flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity';
-            
-            // 1. Edit Button (All messages)
-            const editBtn = context.ui.createIconButton({
-                icon: 'edit',
-                title: '编辑',
-                className: 'p-1 hover:bg-gray-100 rounded text-gray-500',
-                iconClassName: 'material-symbols-outlined text-[16px]',
-                onClick: () => {
-                    // Use custom edit renderer if available in framework
-                    if (context.renderMessageEdit) {
-                        context.renderMessageEdit(msg.id);
-                    } else if (messageActions && messageActions.edit) {
-                        messageActions.edit(msg.id);
-                    }
-                }
-            });
-            container.appendChild(editBtn);
-            
-            // 2. Copy Button (All messages)
-            const copyBtn = context.ui.createIconButton({
-                icon: 'content_copy',
-                title: '复制',
-                className: 'p-1 hover:bg-gray-100 rounded text-gray-500',
-                iconClassName: 'material-symbols-outlined text-[16px]',
-                onClick: () => {
-                    const text = msg.text || msg.content; // Handle both structures
+        // 注册核心的复制和删除到 MESSAGE_MORE_ACTIONS 插槽
+        context.registerPlugin(context.SLOTS.MESSAGE_MORE_ACTIONS, 'core-copy', {
+            render: (msg) => {
+                const copyItem = document.createElement('button');
+                copyItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">content_copy</span><span>复制</span>';
+                copyItem.onclick = () => {
+                    const text = msg.text || msg.content;
                     navigator.clipboard.writeText(text);
-                    // Optional: Show toast/tooltip feedback
-                }
-            });
-            container.appendChild(copyBtn);
-
-            // 3. Retry Button (Latest message only, or specific logic?)
-            // Logic: User message -> Resend this message (clearing subsequent)
-            //        AI message -> Regenerate this message (clearing this and subsequent)
-            // For now, we allow retry on any message, which triggers truncation from that point
-            const retryBtn = context.ui.createIconButton({
-                icon: 'refresh',
-                title: '重试',
-                className: 'p-1 hover:bg-gray-100 rounded text-gray-500',
-                iconClassName: 'material-symbols-outlined text-[16px]',
-                onClick: () => {
-                    if (messageActions && messageActions.retry) {
-                        messageActions.retry(msg.id);
-                    }
-                }
-            });
-            container.appendChild(retryBtn);
-
-            // 4. Delete Button
-            const deleteBtn = context.ui.createIconButton({
-                icon: 'delete',
-                title: '删除',
-                className: 'p-1 hover:bg-gray-100 rounded text-gray-500',
-                iconClassName: 'material-symbols-outlined text-[16px]',
-                onClick: () => {
+                };
+                return copyItem;
+            }
+        });
+        
+        context.registerPlugin(context.SLOTS.MESSAGE_MORE_ACTIONS, 'core-delete', {
+            render: (msg) => {
+                const deleteItem = document.createElement('button');
+                deleteItem.className = 'danger';
+                deleteItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span><span>删除</span>';
+                deleteItem.onclick = () => {
                     if (conversationActions && conversationActions.deleteMessage) {
                         conversationActions.deleteMessage(msg.id);
                     }
+                };
+                return deleteItem;
+            }
+        });
+
+        // 主操作栏渲染
+        context.registerPlugin(context.SLOTS.MESSAGE_FOOTER, 'core-msg-actions', (msg) => {
+            const container = document.createElement('div');
+            container.className = 'flex items-center gap-1';
+            
+            // 1. 编辑按钮（固定）
+            const editBtn = document.createElement('button');
+            editBtn.className = 'material-symbols-outlined text-[14px]';
+            editBtn.textContent = 'edit';
+            editBtn.title = '编辑';
+            editBtn.onclick = () => {
+                if (context.renderMessageEdit) {
+                    context.renderMessageEdit(msg.id);
+                } else if (messageActions && messageActions.edit) {
+                    messageActions.edit(msg.id);
+                }
+            };
+            container.appendChild(editBtn);
+            
+            // 2. 重试按钮（固定）
+            const retryBtn = document.createElement('button');
+            retryBtn.className = 'material-symbols-outlined text-[14px]';
+            retryBtn.textContent = 'refresh';
+            retryBtn.title = '重试';
+            retryBtn.onclick = () => {
+                if (messageActions && messageActions.retry) {
+                    messageActions.retry(msg.id);
+                }
+            };
+            container.appendChild(retryBtn);
+            
+            // 3. 更多按钮（下拉菜单，开放插件注册）
+            const moreBtn = document.createElement('button');
+            moreBtn.className = 'material-symbols-outlined text-[14px]';
+            moreBtn.textContent = 'more_horiz';
+            moreBtn.title = '更多';
+            
+            // 创建 Popover
+            const popover = document.createElement('div');
+            popover.className = 'ido-message__popover';
+            
+            // 从 MESSAGE_MORE_ACTIONS 插槽获取插件注册的按钮
+            const moreActionPlugins = getDynamicPluginsForMoreActions(msg);
+            moreActionPlugins.forEach(item => {
+                if (item) {
+                    item.onclick = ((originalOnclick) => (e) => {
+                        if (originalOnclick) originalOnclick(e);
+                        popover.classList.remove('ido-message__popover--visible');
+                    })(item.onclick);
+                    popover.appendChild(item);
                 }
             });
-            container.appendChild(deleteBtn);
+            
+            // 更多按钮点击事件
+            let popoverVisible = false;
+            moreBtn.onclick = (e) => {
+                e.stopPropagation();
+                popoverVisible = !popoverVisible;
+                popover.classList.toggle('ido-message__popover--visible', popoverVisible);
+            };
+            
+            // 点击外部关闭 Popover
+            document.addEventListener('click', () => {
+                if (popoverVisible) {
+                    popover.classList.remove('ido-message__popover--visible');
+                    popoverVisible = false;
+                }
+            });
+            
+            // 相对定位容器
+            const moreWrapper = document.createElement('div');
+            moreWrapper.style.position = 'relative';
+            moreWrapper.appendChild(moreBtn);
+            moreWrapper.appendChild(popover);
+            container.appendChild(moreWrapper);
 
             return container;
         });
+    }
+    
+    /**
+     * 获取 MESSAGE_MORE_ACTIONS 插槽的插件
+     */
+    function getDynamicPluginsForMoreActions(msg) {
+        const slotName = context.SLOTS.MESSAGE_MORE_ACTIONS;
+        if (!slotName) return [];
+        
+        // 访问 Framework 内部 registry（通过 getPlugins 获取列表后手动渲染）
+        const allPlugins = context.getPlugins ? context.getPlugins() : [];
+        const moreActionPlugins = allPlugins.filter(p => p.slot === slotName && p.enabled !== false);
+        
+        // 手动渲染每个插件
+        const results = [];
+        moreActionPlugins.forEach(pluginInfo => {
+            // 需要从 registry 获取实际的 render 函数
+            // 由于 getPlugins 只返回元数据，我们需要另一种方式
+            // 这里使用一个 hack：通过 refreshSlot 的逻辑
+        });
+        
+        // 简化方案：直接使用 Framework 暴露的 getDynamicPlugins（如果存在）
+        // 或者在 core-plugins 内部维护一个 registry
+        return getMoreActionsFromRegistry(msg);
+    }
+    
+    // 内部 registry 用于 MESSAGE_MORE_ACTIONS
+    const moreActionsRegistry = [];
+    let originalRegisterPlugin = null;
+    
+    function getMoreActionsFromRegistry(msg) {
+        return moreActionsRegistry.map(plugin => {
+            if (!plugin.enabled) return null;
+            try {
+                return plugin.render(msg);
+            } catch (e) {
+                console.error('More action plugin error:', e);
+                return null;
+            }
+        }).filter(Boolean);
+    }
+    
+    // 在 init 时调用，覆盖 registerPlugin 以捕获 MESSAGE_MORE_ACTIONS
+    function setupMoreActionsRegistry() {
+        if (!context || originalRegisterPlugin) return; // 避免重复覆盖
+        
+        originalRegisterPlugin = context.registerPlugin;
+        context.registerPlugin = function(slotName, id, definition) {
+            if (slotName === context.SLOTS.MESSAGE_MORE_ACTIONS) {
+                const plugin = typeof definition === 'function'
+                    ? { id, enabled: true, render: definition }
+                    : { id, enabled: definition.enabled !== false, render: definition.render || definition.renderer };
+                moreActionsRegistry.push(plugin);
+                return;
+            }
+            return originalRegisterPlugin.call(context, slotName, id, definition);
+        };
     }
 
     /**

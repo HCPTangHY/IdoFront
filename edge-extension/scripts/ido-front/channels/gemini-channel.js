@@ -61,6 +61,42 @@
         };
     }
 
+    /**
+     * 判断 finishReason 是否表示正常结束
+     * @param {string} finishReason - Gemini 的结束原因
+     * @returns {boolean} 是否正常结束
+     */
+    function isNormalFinish(finishReason) {
+        // STOP: 正常结束
+        // OTHER: 其他原因但仍然正常
+        // FINISH_REASON_UNSPECIFIED: 未指定，视为正常
+        // null/undefined: 流式中尚未结束
+        return !finishReason || finishReason === 'STOP' || finishReason === 'OTHER' || finishReason === 'FINISH_REASON_UNSPECIFIED';
+    }
+
+    /**
+     * 根据 finishReason 返回警告提示
+     * @param {string} finishReason - Gemini 的结束原因
+     * @returns {string|null} 警告提示文本，正常结束返回 null
+     */
+    function getFinishReasonWarning(finishReason) {
+        if (isNormalFinish(finishReason)) return null;
+        
+        const warnings = {
+            'SAFETY': '⚠️ 内容因安全原因被过滤',
+            'IMAGE_SAFETY': '⚠️ 图片因安全原因被过滤',
+            'RECITATION': '⚠️ 内容因引用/版权问题被截断',
+            'MAX_TOKENS': '⚠️ 内容因达到最大 token 限制被截断',
+            'BLOCKLIST': '⚠️ 内容因触发屏蔽列表被过滤',
+            'PROHIBITED_CONTENT': '⚠️ 内容因包含禁止内容被过滤',
+            'SPII': '⚠️ 内容因包含敏感个人信息被过滤',
+            'MALFORMED_FUNCTION_CALL': '⚠️ 函数调用格式错误',
+            'LANGUAGE': '⚠️ 不支持的语言'
+        };
+        
+        return warnings[finishReason] || `⚠️ 生成异常终止 (${finishReason})`;
+    }
+
     // Helper: Convert message to Gemini format
     function convertMessages(messages) {
         const contents = [];
@@ -128,9 +164,10 @@
          * @param {Array} messages - Chat history
          * @param {Object} config - Channel configuration
          * @param {Function} onUpdate - Optional callback for streaming updates
+         * @param {AbortSignal} signal - Optional abort signal for cancellation
          * @returns {Promise<Object>} - Response content
          */
-        async call(messages, config, onUpdate) {
+        async call(messages, config, onUpdate, signal) {
             let baseUrl = config.baseUrl;
             if (!baseUrl || !baseUrl.trim()) {
                 baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
@@ -199,7 +236,8 @@
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(body),
+                    signal: signal // 传递取消信号
                 });
 
                 if (!response.ok) {
@@ -224,6 +262,7 @@
                     let buffer = '';
                     let accumulatedParts = [];
                     let lastThoughtSignature = null;
+                    let lastFinishReason = null;
 
                     try {
                         while (true) {
@@ -246,6 +285,12 @@
                                     try {
                                         const json = JSON.parse(jsonStr);
                                         const candidate = json.candidates?.[0];
+                                        
+                                        // 检测 finishReason - Gemini 的流式结束标志
+                                        if (candidate?.finishReason) {
+                                            lastFinishReason = candidate.finishReason;
+                                        }
+                                        
                                         if (candidate && candidate.content && candidate.content.parts) {
                                             const newParts = candidate.content.parts;
                                             const thoughtSignature = candidate.thoughtSignature;
@@ -272,6 +317,29 @@
                                                 updateData.metadata.attachments = attachments;
                                             }
                                             
+                                            // 传递 finishReason 给上层，用于判断流式是否结束
+                                            if (lastFinishReason) {
+                                                updateData.finishReason = lastFinishReason;
+                                            }
+                                            
+                                            onUpdate(updateData);
+                                        } else if (lastFinishReason) {
+                                            // 收到 finishReason 但没有新内容，仍需通知上层流式已结束
+                                            const { content, reasoning, attachments } = partsToContent(accumulatedParts);
+                                            const updateData = {
+                                                content: content,
+                                                reasoning: reasoning,
+                                                finishReason: lastFinishReason,
+                                                metadata: {
+                                                    gemini: {
+                                                        parts: accumulatedParts,
+                                                        thoughtSignature: lastThoughtSignature
+                                                    }
+                                                }
+                                            };
+                                            if (attachments && attachments.length > 0) {
+                                                updateData.metadata.attachments = attachments;
+                                            }
                                             onUpdate(updateData);
                                         }
                                     } catch (e) {
@@ -285,7 +353,13 @@
                         throw streamError;
                     }
 
-                    const { content, reasoning } = partsToContent(accumulatedParts);
+                    let { content, reasoning, attachments } = partsToContent(accumulatedParts);
+                    
+                    // 处理非正常结束的情况，添加警告提示
+                    const finishWarning = getFinishReasonWarning(lastFinishReason);
+                    if (finishWarning) {
+                        content = content ? `${content}\n\n${finishWarning}` : finishWarning;
+                    }
                     
                     const result = {
                         choices: [{
@@ -296,12 +370,18 @@
                                 metadata: {
                                     gemini: {
                                         parts: accumulatedParts,
-                                        thoughtSignature: lastThoughtSignature
+                                        thoughtSignature: lastThoughtSignature,
+                                        finishReason: lastFinishReason
                                     }
                                 }
-                            }
+                            },
+                            finish_reason: lastFinishReason
                         }]
                     };
+                    
+                    if (attachments && attachments.length > 0) {
+                        result.choices[0].message.metadata.attachments = attachments;
+                    }
                     
                     return result;
 
@@ -311,12 +391,20 @@
                     const candidate = data.candidates?.[0];
                     const parts = candidate?.content?.parts || [];
                     const thoughtSignature = candidate?.thoughtSignature;
-                    const { content, reasoning, attachments } = partsToContent(parts);
+                    const finishReason = candidate?.finishReason;
+                    let { content, reasoning, attachments } = partsToContent(parts);
+                    
+                    // 处理非正常结束的情况，添加警告提示
+                    const finishWarning = getFinishReasonWarning(finishReason);
+                    if (finishWarning) {
+                        content = content ? `${content}\n\n${finishWarning}` : finishWarning;
+                    }
                     
                     const metadata = {
                         gemini: {
                             parts: parts,
-                            thoughtSignature: thoughtSignature
+                            thoughtSignature: thoughtSignature,
+                            finishReason: finishReason
                         }
                     };
                     
@@ -333,7 +421,8 @@
                                 content: content,
                                 reasoning_content: reasoning,
                                 metadata: metadata
-                            }
+                            },
+                            finish_reason: finishReason
                         }]
                     };
                     

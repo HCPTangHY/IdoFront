@@ -76,26 +76,67 @@
 
     const service = window.IdoFront.service = window.IdoFront.service || {};
 
+    // 存储当前活跃的请求控制器
+    let currentAbortController = null;
+
     service.callAI = async function(messages = [], channel, onUpdate) {
         const originalChannel = ensureChannel(channel);
         const { adapter, entry } = resolveAdapter(originalChannel, 'call');
         const effectiveChannel = applyDefaults(originalChannel, entry);
 
-        // 统一异步化 onUpdate（macrotask），覆盖所有渠道而不改变适配器实现
-        // 不丢数据、不合并事件，仅把回调放到下一个任务队列，避免同步阻塞渲染
+        // 创建新的 AbortController
+        currentAbortController = new AbortController();
+        const signal = currentAbortController.signal;
+
+        // 收集所有待执行的更新 Promise，确保在 return 前全部完成
+        const pendingUpdates = [];
+        
+        // 统一异步化 onUpdate（microtask），覆盖所有渠道而不改变适配器实现
+        // 使用 Promise.resolve() 替代 setTimeout，确保在 call() return 前执行完毕
         const safeOnUpdate = (typeof onUpdate === 'function')
             ? (payload) => {
-                setTimeout(() => {
+                const updatePromise = Promise.resolve().then(() => {
                     try {
                         onUpdate(payload);
                     } catch (e) {
                         console.error('[Service] onUpdate error:', e);
                     }
-                }, 0);
+                });
+                pendingUpdates.push(updatePromise);
             }
             : null;
 
-        return adapter.call(messages, effectiveChannel, safeOnUpdate);
+        try {
+            // 传递 signal 给适配器
+            const result = await adapter.call(messages, effectiveChannel, safeOnUpdate, signal);
+            
+            // 等待所有 onUpdate 回调执行完毕，确保 UI 状态与返回结果同步
+            if (pendingUpdates.length > 0) {
+                await Promise.all(pendingUpdates);
+            }
+            
+            return result;
+        } finally {
+            // 清理当前控制器引用
+            if (currentAbortController && currentAbortController.signal === signal) {
+                currentAbortController = null;
+            }
+        }
+    };
+
+    // 取消当前请求
+    service.abortCurrentRequest = function() {
+        if (currentAbortController) {
+            currentAbortController.abort();
+            currentAbortController = null;
+            return true;
+        }
+        return false;
+    };
+
+    // 检查是否有活跃的请求
+    service.hasActiveRequest = function() {
+        return currentAbortController !== null;
     };
 
     service.fetchModels = async function(channel) {

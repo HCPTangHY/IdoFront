@@ -601,7 +601,11 @@
         }
 
         if (store.events) {
-            store.events.emit('network-log:created', { logId, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:created', { logId, logEntry });
+            } else {
+                store.events.emit('network-log:created', { logId, logEntry });
+            }
         }
     }
 
@@ -616,7 +620,11 @@
         logEntry.status = 'success';
 
         if (store.events) {
-            store.events.emit('network-log:response', { logId, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:response', { logId, logEntry });
+            } else {
+                store.events.emit('network-log:response', { logId, logEntry });
+            }
         }
     }
 
@@ -635,7 +643,11 @@
         logEntry.status = 'streaming';
 
         if (store.events) {
-            store.events.emit('network-log:response', { logId, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:response', { logId, logEntry });
+            } else {
+                store.events.emit('network-log:response', { logId, logEntry });
+            }
         }
     }
 
@@ -652,7 +664,11 @@
         logEntry.response.rawBody += chunk;
 
         if (store.events) {
-            store.events.emit('network-log:stream-chunk', { logId, chunk });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:stream-chunk', { logId, chunk });
+            } else {
+                store.events.emit('network-log:stream-chunk', { logId, chunk });
+            }
         }
     }
 
@@ -666,7 +682,11 @@
         logEntry.duration = duration;
 
         if (store.events) {
-            store.events.emit('network-log:stream-complete', { logId, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:stream-complete', { logId, logEntry });
+            } else {
+                store.events.emit('network-log:stream-complete', { logId, logEntry });
+            }
         }
     }
 
@@ -681,7 +701,11 @@
         logEntry.duration = duration;
 
         if (store.events) {
-            store.events.emit('network-log:error', { logId, error, logEntry });
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('network-log:error', { logId, error, logEntry });
+            } else {
+                store.events.emit('network-log:error', { logId, error, logEntry });
+            }
         }
     }
 

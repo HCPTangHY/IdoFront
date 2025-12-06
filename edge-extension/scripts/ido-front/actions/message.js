@@ -49,6 +49,12 @@
         }
     };
 
+    // 判断某个对话是否有活跃的生成（用于恢复 UI 时去掉幽灵 loading）
+    window.IdoFront.messageActions.hasActiveGeneration = function(convId) {
+        if (!convId) return false;
+        return !!activeGenerationTokens[convId];
+    };
+
     /**
      * 发送消息
      */
@@ -99,7 +105,7 @@
     };
 
     /**
-     * 编辑消息
+     * 编辑消息 - 新卡片设计
      * @param {string} messageId - 要编辑的消息ID
      */
     window.IdoFront.messageActions.edit = function(messageId) {
@@ -109,216 +115,146 @@
         const targetMsg = conv.messages.find(m => m.id === messageId);
         if (!targetMsg) return;
 
-        // 获取消息的 DOM 元素
+        // 获取消息卡片
         const chatStream = document.getElementById('chat-stream');
         if (!chatStream) return;
         
-        const messageWrapper = chatStream.querySelector(`[data-message-id="${messageId}"]`);
-        if (!messageWrapper) return;
+        const messageCard = chatStream.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageCard) return;
 
-        const bubble = messageWrapper.querySelector('.ido-message__bubble');
-        const contentSpan = bubble.querySelector('.message-content');
-        if (!bubble || !contentSpan) return;
+        const container = messageCard.querySelector('.ido-message__container');
+        const contentDiv = container.querySelector('.ido-message__content');
+        const contentSpan = contentDiv?.querySelector('.message-content');
+        if (!container || !contentDiv || !contentSpan) return;
 
-        // 获取气泡的父容器（bubbleContainer）——在编辑态下承担布局外壳
-        const bubbleContainer = bubble.parentElement;
-        if (bubbleContainer) {
-            bubbleContainer.classList.add('message-edit-shell');
-        }
-        // 保存当前 wrapper / container / bubble 的原始内联样式，用于取消编辑时恢复
-        const originalStyles = {
-            wrapper: {
-                justifyContent: messageWrapper.style.justifyContent
-            },
-            container: bubbleContainer ? {
-                flex: bubbleContainer.style.flex,
-                maxWidth: bubbleContainer.style.maxWidth,
-                minWidth: bubbleContainer.style.minWidth,
-                width: bubbleContainer.style.width,
-                alignItems: bubbleContainer.style.alignItems
-            } : null,
-            bubble: {
-                width: bubble.style.width,
-                maxWidth: bubble.style.maxWidth,
-                minWidth: bubble.style.minWidth,
-                alignSelf: bubble.style.alignSelf
-            }
-        };
-
-        // 保存原始内容、附件
+        // 保存原始内容和附件
         const originalContent = targetMsg.content;
         const originalAttachments = targetMsg.metadata?.attachments || [];
         
-        // 当前编辑中的附件列表（克隆原始附件）
+        // 编辑中的附件列表
         let editingAttachments = JSON.parse(JSON.stringify(originalAttachments));
 
-        // 创建编辑界面容器
-        const editContainer = document.createElement('div');
-        editContainer.className = 'message-edit-container-new';
+        // 进入编辑模式
+        messageCard.classList.add('ido-message--editing');
+        
+        // 隐藏原始内容
+        contentSpan.style.display = 'none';
+        
+        // 移除原始附件预览（含大图/灯箱），编辑态由新的附件列表接管
+        const originalAttachmentBlocks = Array.from(container.querySelectorAll('.flex.gap-2.flex-wrap.mb-2'));
+        originalAttachmentBlocks.forEach(block => block.remove());
 
-        // 创建输入框
-        const inputWrapper = document.createElement('div');
-        inputWrapper.className = 'message-edit-input-wrapper';
-
+        // 创建 textarea
         const textarea = document.createElement('textarea');
-        textarea.className = 'message-edit-input';
+        textarea.className = 'ido-message__edit-textarea';
         textarea.value = originalContent;
         textarea.placeholder = '编辑消息...';
-
-        // 根据文本内容估算需要的行数（兼顾换行符和纯长段落），更偏向紧凑展示
-        const baseText = originalContent || '';
-        const newlineLines = (baseText.match(/\n/g) || []).length + 1;
-        // 粗略估算：每行约 60 个字符，避免没有换行符的长段落只占几行高度
-        const lengthLines = Math.ceil(baseText.length / 60) || 1;
-        // 默认最少展开 3 行，最多 20 行，具体像素高度仍由 CSS 的 max-height 兜底
-        const estimatedLines = Math.max(3, Math.min(20, Math.max(newlineLines, lengthLines)));
-        textarea.rows = estimatedLines;
         
-        // 自动调整高度（按内容真实高度展开，具体上限交给 CSS max-height 控制）
+        // 自适应高度
         const adjustHeight = () => {
             textarea.style.height = 'auto';
-            textarea.style.height = textarea.scrollHeight + 'px';
+            textarea.style.height = Math.min(textarea.scrollHeight, 500) + 'px';
         };
         textarea.oninput = adjustHeight;
-        // 初次进入编辑模式时，立刻按已有内容计算高度
-        adjustHeight();
         
-        inputWrapper.appendChild(textarea);
-        editContainer.appendChild(inputWrapper);
+        contentDiv.insertBefore(textarea, contentSpan);
 
-        // 创建附件管理区域（优先放在按钮组上方，视觉上更贴近输入框）
-        if (originalAttachments.length > 0 || targetMsg.role === 'user') {
-            const attachmentArea = document.createElement('div');
-            attachmentArea.className = 'message-edit-attachments';
-            
-            const updateAttachmentPreview = () => {
-                attachmentArea.innerHTML = '';
-                
-                if (editingAttachments.length > 0) {
-                    const attachmentList = document.createElement('div');
-                    attachmentList.className = 'message-edit-attachment-list';
-                    
-                    editingAttachments.forEach((attachment, index) => {
-                        const attachmentItem = createAttachmentPreview(attachment, () => {
-                            // 删除附件
-                            editingAttachments.splice(index, 1);
-                            updateAttachmentPreview();
-                        });
-                        attachmentList.appendChild(attachmentItem);
-                    });
-                    
-                    attachmentArea.appendChild(attachmentList);
-                }
-                
-                // 只有用户消息才显示添加附件按钮
-                if (targetMsg.role === 'user') {
-                    const addBtn = document.createElement('button');
-                    addBtn.className = 'message-edit-add-attachment';
-                    addBtn.innerHTML = '<span class="material-symbols-outlined">add</span><span>添加附件</span>';
-                    addBtn.onclick = () => {
-                        const fileInput = document.createElement('input');
-                        fileInput.type = 'file';
-                        fileInput.multiple = true;
-                        fileInput.accept = 'image/*,application/pdf,.txt,.doc,.docx';
-                        
-                        fileInput.onchange = async (e) => {
-                            const files = Array.from(e.target.files);
-                            for (const file of files) {
-                                if (file.size > 10 * 1024 * 1024) {
-                                    alert(`文件 ${file.name} 超过10MB限制`);
-                                    continue;
-                                }
-                                
-                                const dataUrl = await readFileAsDataURL(file);
-                                editingAttachments.push({
-                                    dataUrl: dataUrl,
-                                    type: file.type,
-                                    name: file.name,
-                                    size: file.size
-                                });
-                            }
-                            updateAttachmentPreview();
-                        };
-                        
-                        fileInput.click();
-                    };
-                    attachmentArea.appendChild(addBtn);
-                }
-            };
-            
-            updateAttachmentPreview();
+        // 附件区域：列表 + 添加按钮 + 隐藏文件输入，样式沿用底部输入区的附件样式
+        const attachmentsWrapper = document.createElement('div');
+        attachmentsWrapper.className = 'message-edit-attachments';
 
-            // 支持在编辑输入框中直接粘贴图片（仅用户消息）
-            if (targetMsg.role === 'user') {
-                textarea.addEventListener('paste', async (e) => {
-                    const items = e.clipboardData?.items;
-                    if (!items) return;
+        const attachmentList = document.createElement('div');
+        attachmentList.className = 'message-edit-attachment-list';
 
-                    const imageFiles = [];
-                    for (let i = 0; i < items.length; i++) {
-                        const item = items[i];
-                        if (item.type && item.type.startsWith('image/')) {
-                            // 阻止默认将图片粘为文本的行为
-                            e.preventDefault();
-                            const file = item.getAsFile();
-                            if (file) {
-                                imageFiles.push(file);
-                            }
-                        }
-                    }
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.multiple = true;
+        fileInput.accept = 'image/*';
+        fileInput.style.display = 'none';
 
-                    if (imageFiles.length === 0) return;
-
-                    for (const file of imageFiles) {
-                        if (file.size > 10 * 1024 * 1024) {
-                            alert(`文件 ${file.name} 超过10MB限制`);
-                            continue;
-                        }
-                        const dataUrl = await readFileAsDataURL(file);
-                        editingAttachments.push({
-                            dataUrl,
-                            type: file.type,
-                            name: file.name,
-                            size: file.size
-                        });
-                    }
-
-                    updateAttachmentPreview();
+        const renderAttachments = () => {
+            attachmentList.innerHTML = '';
+            editingAttachments.forEach((att, index) => {
+                const preview = createAttachmentPreview(att, () => {
+                    editingAttachments.splice(index, 1);
+                    renderAttachments();
                 });
+                attachmentList.appendChild(preview);
+            });
+            // 当没有附件时收起列表，只保留添加按钮的紧凑布局
+            attachmentList.style.display = editingAttachments.length > 0 ? 'flex' : 'none';
+        };
+
+        // 支持粘贴图片到编辑态（与底部输入框体验一致）
+        textarea.addEventListener('paste', async (e) => {
+            const items = e.clipboardData?.items;
+            if (!items || items.length === 0) return;
+
+            const images = [];
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.type && item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) images.push(file);
+                }
             }
 
-            editContainer.appendChild(attachmentArea);
-        }
+            if (images.length === 0) return;
+            e.preventDefault();
 
-        // 创建按钮组
-        const buttonGroup = document.createElement('div');
-        buttonGroup.className = 'message-edit-actions';
+            for (const file of images) {
+                // 10MB 限制，与底部上传一致
+                if (file.size > 10 * 1024 * 1024) {
+                    alert(`文件 ${file.name} 超过10MB限制`);
+                    continue;
+                }
+                try {
+                    const dataUrl = await readFileAsDataURL(file);
+                    editingAttachments.push({
+                        name: file.name,
+                        type: file.type,
+                        size: file.size,
+                        dataUrl
+                    });
+                } catch (err) {
+                    console.warn('粘贴图片读取失败:', err);
+                }
+            }
+            renderAttachments();
+        });
 
-        // 取消按钮
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'message-edit-icon-btn message-edit-icon-btn--cancel';
-        cancelBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
-        cancelBtn.title = '取消编辑';
+        const addButton = document.createElement('button');
+        addButton.className = 'message-edit-add-attachment';
+        addButton.type = 'button';
+        addButton.innerHTML = '<span class="material-symbols-outlined">attach_file</span><span>添加附件</span>';
+        addButton.onclick = () => fileInput.click();
+
+        fileInput.onchange = async (e) => {
+            const files = Array.from(e.target.files || []);
+            for (const file of files) {
+                try {
+                    const dataUrl = await readFileAsDataURL(file);
+                    editingAttachments.push({
+                        name: file.name,
+                        type: file.type,
+                        size: file.size,
+                        dataUrl
+                    });
+                } catch (err) {
+                    console.warn('读取附件失败:', err);
+                }
+            }
+            fileInput.value = '';
+            renderAttachments();
+        };
+
+        attachmentsWrapper.appendChild(attachmentList);
+        attachmentsWrapper.appendChild(addButton);
+        attachmentsWrapper.appendChild(fileInput);
+        contentDiv.insertBefore(attachmentsWrapper, contentSpan);
+        renderAttachments();
         
-        // 发送按钮
-        const sendBtn = document.createElement('button');
-        sendBtn.className = 'message-edit-icon-btn message-edit-icon-btn--send';
-        sendBtn.innerHTML = '<span class="material-symbols-outlined">send</span>';
-        sendBtn.title = '保存并重新发送';
-
-        buttonGroup.appendChild(cancelBtn);
-        buttonGroup.appendChild(sendBtn);
-
-        editContainer.appendChild(buttonGroup);
-
-        // 隐藏原内容，显示编辑界面
-        contentSpan.style.display = 'none';
-        bubble.classList.add('message-editing-new');
-        // 布局交由 CSS (.message-editing-new / .message-edit-shell) 控制，JS 不再强制注入内联宽度样式
-
-        bubble.appendChild(editContainer);
-
-        // 聚焦并再次校正高度（确保插入 DOM 之后 scrollHeight 正确）
+        // 调整初始高度
         setTimeout(() => {
             adjustHeight();
             textarea.focus();
@@ -327,52 +263,32 @@
 
         // 取消编辑
         const cancelEdit = () => {
-            editContainer.remove();
+            textarea.remove();
+            attachmentsWrapper.remove();
+            // 恢复原始附件预览显示
+            originalAttachmentBlocks.forEach(block => block.style.display = '');
             contentSpan.style.display = '';
-            bubble.classList.remove('message-editing-new');
-            
-            // 恢复messageWrapper、bubbleContainer和bubble的原始样式
-            if (originalStyles.wrapper) {
-                messageWrapper.style.justifyContent = originalStyles.wrapper.justifyContent;
-            }
-            
-            if (bubbleContainer && originalStyles.container) {
-                bubbleContainer.style.flex = originalStyles.container.flex;
-                bubbleContainer.style.maxWidth = originalStyles.container.maxWidth;
-                bubbleContainer.style.minWidth = originalStyles.container.minWidth;
-                bubbleContainer.style.width = originalStyles.container.width;
-                bubbleContainer.style.alignItems = originalStyles.container.alignItems;
-            }
-            
-            if (originalStyles.bubble) {
-                bubble.style.width = originalStyles.bubble.width;
-                bubble.style.maxWidth = originalStyles.bubble.maxWidth;
-                bubble.style.minWidth = originalStyles.bubble.minWidth;
-                bubble.style.alignSelf = originalStyles.bubble.alignSelf;
-            }
+            messageCard.classList.remove('ido-message--editing');
         };
 
         // 保存编辑
         const saveEdit = async () => {
             const newContent = textarea.value.trim();
             if (!newContent && editingAttachments.length === 0) {
-                alert('消息内容和附件不能同时为空');
+                alert('消息内容不能为空');
                 return;
             }
 
-            // 更新消息内容和附件
+            // 更新消息内容
             const updateData = { content: newContent };
             if (editingAttachments.length > 0) {
                 updateData.metadata = { attachments: editingAttachments };
             } else if (targetMsg.metadata) {
-                // 如果删除了所有附件，清除metadata中的attachments
                 updateData.metadata = { ...targetMsg.metadata };
                 delete updateData.metadata.attachments;
             }
             
             store.updateMessage(conv.id, messageId, updateData);
-
-            // 删除该消息之后的所有消息
             store.truncateFromMessage(conv.id, messageId);
 
             // 同步UI
@@ -380,11 +296,10 @@
                 window.IdoFront.conversationActions.syncUI();
             }
 
-            // 如果是用户消息，重新发送；如果是AI消息，重新生成
+            // 重新生成
             if (targetMsg.role === 'user') {
                 await window.IdoFront.messageActions.send(newContent, editingAttachments.length > 0 ? editingAttachments : null);
             } else {
-                // AI消息：找到上一条用户消息并重新生成
                 const msgIndex = conv.messages.findIndex(m => m.id === messageId);
                 if (msgIndex > 0) {
                     const prevMsg = conv.messages[msgIndex - 1];
@@ -395,13 +310,51 @@
             }
         };
 
-        sendBtn.onclick = saveEdit;
-        cancelBtn.onclick = cancelEdit;
+        // 修改操作栏按钮行为
+        const actions = messageCard.querySelector('.ido-message__actions');
+        if (actions) {
+            // 保存原始按钮以便恢复
+            const originalActions = actions.innerHTML;
+            
+            // 恢复原始操作栏的函数
+            const restoreOriginalActions = () => {
+                cancelEdit();
+                // 重新渲染原始按钮（通过 syncUI 刷新整个消息会更可靠）
+                if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
+                    window.IdoFront.conversationActions.syncUI();
+                }
+            };
+            
+            // 替换为编辑模式按钮
+            actions.innerHTML = '';
+            
+            // 确认按钮（双对勾）- 绿色
+            const confirmBtn = document.createElement('button');
+            confirmBtn.className = 'material-symbols-outlined text-[14px]';
+            confirmBtn.textContent = 'done_all';
+            confirmBtn.title = '确认并重新生成';
+            confirmBtn.style.color = '#10b981'; // 绿色
+            confirmBtn.onclick = saveEdit;
+            actions.appendChild(confirmBtn);
+            
+            // 取消按钮（X）- 直接显示，更直观
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'material-symbols-outlined text-[14px]';
+            cancelBtn.textContent = 'close';
+            cancelBtn.title = '取消编辑 (Esc)';
+            cancelBtn.style.color = '#6b7280'; // 灰色
+            cancelBtn.onclick = restoreOriginalActions;
+            actions.appendChild(cancelBtn);
+        }
 
-        // 支持快捷键
+        // 快捷键支持
         textarea.onkeydown = (e) => {
             if (e.key === 'Escape') {
+                // 取消编辑并刷新UI
                 cancelEdit();
+                if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
+                    window.IdoFront.conversationActions.syncUI();
+                }
             } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 saveEdit();
@@ -465,44 +418,21 @@
         const targetMsg = conv.messages.find(m => m.id === messageId);
         if (!targetMsg) return;
 
-        // 如果当前对话仍有进行中的请求，先清理其 loading / 流式状态并标记为已结束，
-        // 避免旧请求和新的重试请求同时更新 UI，导致多个助手气泡同时 loading。
+        // 如果当前对话仍有进行中的请求，先清理其 loading / 流式状态并标记为已结束
         if (store.state.isTyping && store.state.typingConversationId === conv.id) {
             store.state.isTyping = false;
             store.state.typingConversationId = null;
             store.state.typingMessageId = null;
-            store.persist();
-
-            if (context) {
-                // 清理消息下方的流式指示器
-                if (context.removeMessageStreamingIndicator) {
-                    try {
-                        context.removeMessageStreamingIndicator(null);
-                    } catch (e) {
-                        console.warn('removeMessageStreamingIndicator error during retry:', e);
-                    }
-                }
-                // 清理任何遗留的独立 loading 气泡
-                try {
-                    const chatStream = document.getElementById('chat-stream');
-                    if (chatStream) {
-                        chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
-                        chatStream.querySelectorAll('.message-streaming-indicator').forEach(el => el.remove());
-                    }
-                } catch (e) {
-                    console.warn('cleanup loading indicators during retry failed:', e);
-                }
-            }
+            // 延迟持久化，避免阻塞主线程
+            Promise.resolve().then(() => store.persist());
         }
 
         let truncateTargetId = null;
 
         // 确定截断点
         if (targetMsg.role === 'user') {
-            // 如果是用户消息，保留该消息，清除后面的所有内容
             truncateTargetId = messageId;
         } else if (targetMsg.role === 'assistant') {
-            // 如果是助手消息，清除该消息及后面的内容，从上一条用户消息处重新生成
             const index = conv.messages.indexOf(targetMsg);
             if (index > 0) {
                 const prevMsg = conv.messages[index - 1];
@@ -513,47 +443,52 @@
         }
 
         if (truncateTargetId) {
-            // 执行截断
+            // 执行截断（内部会调用 persist，但已优化为节流）
             store.truncateConversation(conv.id, truncateTargetId);
             
-            // 同步UI
-            // 局部更新 UI：避免完整重渲染导致卡顿
-            try {
-                const chatStream = document.getElementById('chat-stream');
-                if (chatStream) {
-                    // 移除聊天流中目标消息之后的所有节点（包括独立 loading 气泡）
-                    const targetWrapper = chatStream.querySelector(`[data-message-id="${truncateTargetId}"]`);
-                    if (targetWrapper) {
-                        // 先移除目标气泡内可能存在的流式指示器
-                        const indicators = targetWrapper.querySelectorAll('.message-streaming-indicator');
-                        indicators.forEach(ind => ind.remove());
-                        // 移除目标消息之后的所有兄弟节点
-                        let cursor = targetWrapper.nextElementSibling;
-                        while (cursor) {
-                            const next = cursor.nextElementSibling;
-                            cursor.remove();
-                            cursor = next;
-                        }
-                    } else {
-                        // 如果目标消息在屏幕上不可见（例如刚初始化或切换过视图），降级到清空并稍后增量渲染
-                        chatStream.querySelectorAll('[data-message-id]').forEach(el => el.remove());
-                        chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
+            // 优化：增量 DOM 更新，避免完整重渲染
+            const chatStream = document.getElementById('chat-stream');
+            if (chatStream) {
+                // 移除目标消息之后的所有节点
+                const targetWrapper = chatStream.querySelector(`[data-message-id="${truncateTargetId}"]`);
+                if (targetWrapper) {
+                    // 清理流式指示器
+                    targetWrapper.querySelectorAll('.message-streaming-indicator').forEach(ind => ind.remove());
+                    // 移除后续所有节点
+                    let cursor = targetWrapper.nextElementSibling;
+                    while (cursor) {
+                        const next = cursor.nextElementSibling;
+                        cursor.remove();
+                        cursor = next;
                     }
-                    // 兜底清理任何残留的独立 loading 提示
-                    chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
+                } else {
+                    // 降级：清空后面的内容
+                    const allMessages = chatStream.querySelectorAll('[data-message-id]');
+                    let foundTarget = false;
+                    allMessages.forEach(el => {
+                        if (foundTarget) {
+                            el.remove();
+                        } else if (el.dataset.messageId === truncateTargetId) {
+                            foundTarget = true;
+                            el.querySelectorAll('.message-streaming-indicator').forEach(ind => ind.remove());
+                        }
+                    });
                 }
-            } catch (e) {
-                console.warn('Partial UI cleanup during retry failed:', e);
+                // 清理所有独立的 loading 气泡
+                chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
             }
 
-            // 更新侧边历史列表（不触发全部消息重绘）
+            // 异步更新侧边栏，不阻塞主流程
             if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.renderConversationList) {
-                try {
-                    window.IdoFront.conversationActions.renderConversationList();
-                } catch (e) {
-                    console.warn('renderConversationList error during retry:', e);
-                }
+                requestAnimationFrame(() => {
+                    try {
+                        window.IdoFront.conversationActions.renderConversationList();
+                    } catch (e) {
+                        console.warn('renderConversationList error during retry:', e);
+                    }
+                });
             }
+            
             // 重新生成响应
             await generateResponse(conv, truncateTargetId);
         }
@@ -577,6 +512,11 @@
         store.state.typingConversationId = conv.id;
         store.state.typingMessageId = null;
         store.persist();
+
+        // 设置发送按钮为加载状态（仅在当前对话处于激活状态时）
+        if (context && context.setSendButtonLoading && isActiveConv()) {
+            context.setSendButtonLoading(true);
+        }
 
         // 显示加载指示器（仅在当前对话处于激活状态时渲染到 UI）
         let loadingId = null;
@@ -768,8 +708,14 @@
                     let assistantMessage = null;
                     let fullContent = '';
                     let fullReasoning = null;
+                    // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
+                    let streamEnded = false;
 
             const onUpdate = (data) => {
+                // 如果流式已结束，忽略后续延迟到达的更新
+                if (streamEnded) {
+                    return;
+                }
                 // 如果本对话已经发起了新的请求，忽略旧请求的流式更新，避免多个助手气泡同时 loading 或内容错乱
                 if (!isCurrentGeneration()) {
                     return;
@@ -858,6 +804,45 @@
                 const streamingCallback = streamingEnabled ? onUpdate : null;
                 response = await service.callAI(messagesPayload, channelConfig, streamingCallback);
             } catch (apiError) {
+                // 检查是否是用户取消
+                if (apiError.name === 'AbortError') {
+                    // 用户主动取消，不视为错误
+                    console.log('请求已被用户取消');
+                    
+                    // 清理加载指示器
+                    if (loadingId && context && context.removeLoadingIndicator) {
+                        context.removeLoadingIndicator(loadingId);
+                        loadingId = null;
+                    }
+                    
+                    // 清理流式指示器（如果助手消息已存在）
+                    if (assistantMessage && context && context.removeMessageStreamingIndicator && isActiveConv()) {
+                        context.removeMessageStreamingIndicator(assistantMessage.id);
+                    }
+                    
+                    // 如果还没有助手消息，添加一条提示
+                    if (!assistantMessage) {
+                        addAssistantMessage(conv.id, '✋ 已停止生成');
+                    }
+                    
+                    // 重置全局打字状态
+                    store.state.isTyping = false;
+                    store.state.typingConversationId = null;
+                    store.state.typingMessageId = null;
+                    store.persist();
+                    
+                    // 清除当前生成标记，防止 finally 块重复处理
+                    delete activeGenerationTokens[conv.id];
+                    
+                    // 恢复发送按钮状态
+                    if (context && context.setSendButtonLoading && isActiveConv()) {
+                        context.setSendButtonLoading(false);
+                    }
+                    
+                    // 不继续抛出错误
+                    return;
+                }
+                
                 // API 调用失败，确保清理加载指示器
                 if (loadingId && context && context.removeLoadingIndicator) {
                     context.removeLoadingIndicator(loadingId);
@@ -880,6 +865,9 @@
                 fullContent = content;
                 if (reasoning) fullReasoning = reasoning;
             } else {
+                // 标记流式结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的内容
+                streamEnded = true;
+                
                 // 流式更新完成，解析 Markdown（仅在当前对话处于激活状态时处理当前屏幕）
                 if (context && context.finalizeStreamingMessage && isActiveConv()) {
                     context.finalizeStreamingMessage();
@@ -887,12 +875,14 @@
                 store.persist();
             }
 
+            // 精简响应日志，去除大型 base64 图片数据
+            const sanitizedResponse = sanitizeResponseForLog(response);
             store.addLog({
                  id: utils.createId('log'),
                  direction: 'incoming',
                  label: '200 OK',
                  timestamp: Date.now(),
-                 data: response,
+                 data: sanitizedResponse,
                  relatedMessageId: null
             });
             
@@ -929,6 +919,11 @@
             store.state.typingConversationId = null;
             store.state.typingMessageId = null;
             store.persist();
+            
+            // 恢复发送按钮状态（仅在当前对话处于激活状态时）
+            if (context && context.setSendButtonLoading && isActiveConv()) {
+                context.setSendButtonLoading(false);
+            }
         }
     }
 
@@ -978,6 +973,61 @@
             context.addMessage('ai', payload);
         }
         return msg;
+    }
+
+    /**
+     * 精简响应数据用于日志记录，去除大型 base64 数据
+     * @param {Object} response - 原始响应
+     * @returns {Object} 精简后的响应
+     */
+    function sanitizeResponseForLog(response) {
+        if (!response || typeof response !== 'object') return response;
+        
+        try {
+            // 深拷贝以避免修改原始数据
+            const sanitized = JSON.parse(JSON.stringify(response));
+            
+            // 处理 choices 中的 metadata
+            if (sanitized.choices && Array.isArray(sanitized.choices)) {
+                sanitized.choices.forEach(choice => {
+                    if (choice.message && choice.message.metadata) {
+                        const meta = choice.message.metadata;
+                        
+                        // 处理 Gemini 的 parts（可能包含 inlineData）
+                        if (meta.gemini && Array.isArray(meta.gemini.parts)) {
+                            meta.gemini.parts = meta.gemini.parts.map(part => {
+                                if (part.inlineData && part.inlineData.data) {
+                                    return {
+                                        inlineData: {
+                                            mimeType: part.inlineData.mimeType,
+                                            data: '[BASE64_TRUNCATED]',
+                                            originalLength: part.inlineData.data.length
+                                        }
+                                    };
+                                }
+                                return part;
+                            });
+                        }
+                        
+                        // 处理 attachments 中的 dataUrl
+                        if (Array.isArray(meta.attachments)) {
+                            meta.attachments = meta.attachments.map(att => ({
+                                name: att.name,
+                                type: att.type,
+                                size: att.size,
+                                source: att.source,
+                                dataUrl: att.dataUrl ? '[DATA_URL_TRUNCATED]' : undefined
+                            }));
+                        }
+                    }
+                });
+            }
+            
+            return sanitized;
+        } catch (e) {
+            console.warn('Failed to sanitize response for log:', e);
+            return response;
+        }
     }
 
 })();

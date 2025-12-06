@@ -124,6 +124,11 @@
         const active = store.getActiveConversation();
         if (active) {
             if (context.clearMessages) context.clearMessages();
+            
+            // 使用 DocumentFragment 批量渲染，减少 DOM 重排
+            const fragment = document.createDocumentFragment();
+            const chatStream = document.getElementById('chat-stream');
+            
             active.messages.forEach((msg, idx) => {
                 const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
                 const payload = {
@@ -146,10 +151,21 @@
                     payload.attachments = msg.metadata.attachments;
                 }
                 
-                // 仅最后一条触发滚动，减少滚动抖动
-                const noScroll = idx < active.messages.length - 1;
-                context.addMessage(uiRole, payload, { noScroll });
+                // 批量渲染：所有消息都不触发滚动，使用 fragment 作为目标容器
+                context.addMessage(uiRole, payload, {
+                    noScroll: true,
+                    targetContainer: fragment,
+                    isHistorical: true  // 标记为历史消息，避免启动计时器
+                });
             });
+            
+            // 一次性插入所有消息到 DOM
+            if (chatStream && fragment.childNodes.length > 0) {
+                chatStream.appendChild(fragment);
+                // 滚动到底部
+                chatStream.scrollTop = chatStream.scrollHeight;
+            }
+            
             // 同步时也更新header
             updateHeader(active);
             
@@ -165,6 +181,11 @@
             if (store.state.isTyping && store.state.typingConversationId === active.id && context) {
                 const typingMsgId = store.state.typingMessageId;
 
+                // 兜底校验：若没有活跃生成标记，避免创建幽灵 loading
+                const hasActiveGen = window.IdoFront.messageActions && window.IdoFront.messageActions.hasActiveGeneration
+                    ? window.IdoFront.messageActions.hasActiveGeneration(active.id)
+                    : false;
+
                 // 先清理可能残留的流式指示器（例如上一次渲染留下的）
                 if (typingMsgId && context.removeMessageStreamingIndicator) {
                     try {
@@ -174,13 +195,19 @@
                     }
                 }
 
-                if (typingMsgId && context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
+                if (hasActiveGen && typingMsgId && context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
                     // 已经有助手消息，直接在该消息下方挂载 loading 指示器
                     const loadingId = context.addLoadingIndicator();
                     context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
-                } else if (!typingMsgId && context.addLoadingIndicator) {
+                } else if (hasActiveGen && !typingMsgId && context.addLoadingIndicator) {
                     // 还没有助手消息（请求已发出但首个 chunk 未到达），显示独立的 loading 气泡
                     context.addLoadingIndicator();
+                } else {
+                    // 无活跃生成，清理全局 typing 状态，避免幽灵 loading
+                    store.state.isTyping = false;
+                    store.state.typingConversationId = null;
+                    store.state.typingMessageId = null;
+                    store.persist();
                 }
             }
         } else {

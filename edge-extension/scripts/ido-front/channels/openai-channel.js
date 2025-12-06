@@ -15,9 +15,10 @@
          * @param {Array} messages - Chat history
          * @param {Object} config - Channel configuration (apiKey, baseUrl, model, etc.)
          * @param {Function} onUpdate - Optional callback for streaming updates
+         * @param {AbortSignal} signal - Optional abort signal for cancellation
          * @returns {Promise<Object>} - Response content
          */
-        async call(messages = [], config = {}, onUpdate) {
+        async call(messages = [], config = {}, onUpdate, signal) {
             let baseUrl = config.baseUrl;
             if (!baseUrl || !baseUrl.trim()) {
                 baseUrl = 'https://api.openai.com/v1';
@@ -100,7 +101,8 @@
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(body),
+                    signal: signal // 传递取消信号
                 });
 
                 if (!response.ok) {

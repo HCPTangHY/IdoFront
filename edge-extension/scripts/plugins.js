@@ -18,9 +18,19 @@ document.addEventListener('IdoFrontLoaded', async () => {
     // Override Send Button
     const btnSend = document.getElementById('btn-send');
     const input = document.getElementById('user-input');
+    const service = window.IdoFront.service;
  
     // Remove default framework listener if any (it was set in init, but we can overwrite onclick)
     btnSend.onclick = () => {
+        // 检查是否处于加载状态
+        if (btnSend.classList.contains('btn-send--loading')) {
+            // 正在加载，取消请求
+            if (service && service.abortCurrentRequest) {
+                service.abortCurrentRequest();
+            }
+            return;
+        }
+        
         const val = input.value.trim();
         const fileUpload = window.IdoFront.fileUpload;
         const attachedFiles = fileUpload ? fileUpload.getAttachedFiles() : [];

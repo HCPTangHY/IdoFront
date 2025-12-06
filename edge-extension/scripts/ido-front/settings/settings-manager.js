@@ -21,6 +21,10 @@
     // 保存容器引用，用于局部更新
     let mainContainer = null;
     let sidebarContainer = null;
+    // 设置侧边栏列表容器引用（用于仅切换激活态）
+    let sidebarListEl = null;
+    // 主面板异步更新排队标记，避免同一宏任务内重复重建
+    let pendingMainUpdate = false;
 
     /**
      * 注册设置标签页
@@ -401,6 +405,7 @@
         // 2. Tabs List
         const list = document.createElement('div');
         list.className = "flex-1 overflow-y-auto p-2 space-y-1";
+        sidebarListEl = list;
         
         settingsTabs.forEach(tab => {
             const btn = document.createElement('button');
@@ -408,6 +413,7 @@
             btn.className = `w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                 isActive ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-100'
             }`;
+            btn.dataset.tabId = tab.id;
             if (tab.icon.startsWith('<svg')) {
                  btn.innerHTML = `<div class="text-gray-500 flex items-center justify-center w-[18px] h-[18px]">${tab.icon}</div> <span class="ml-2">${tab.label}</span>`;
             } else {
@@ -441,15 +447,24 @@
             title.textContent = activeTab ? activeTab.label : '设置';
         }
         
-        // 更新内容
-        content.innerHTML = '';
-        renderSettingsContent(content);
+        // 异步重建内容（离屏渲染后一次性替换，减少同步 innerHTML 操作）
+        if (!pendingMainUpdate) {
+            pendingMainUpdate = true;
+            setTimeout(() => {
+                pendingMainUpdate = false;
+                renderSettingsContent(content);
+            }, 0);
+        }
         
-        // 重新渲染侧边栏以更新激活状态（不触发动画）
-        if (sidebarContainer) {
-            // 清空并重新渲染侧边栏
-            sidebarContainer.innerHTML = '';
-            renderSettingsSidebar(sidebarContainer);
+        // 更新侧边栏激活态（不重建侧边栏也不清空）
+        if (sidebarListEl) {
+            const buttons = sidebarListEl.querySelectorAll('button[data-tab-id]');
+            buttons.forEach(btn => {
+                const isActive = btn.dataset.tabId === activeSettingsTab;
+                btn.className = `w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                    isActive ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-100'
+                }`;
+            });
         }
     }
     
@@ -458,17 +473,28 @@
      */
     function renderSettingsContent(content) {
         const activeTab = settingsTabs.find(t => t.id === activeSettingsTab);
+        const temp = document.createElement('div');
         
         if (activeTab && typeof activeTab.render === 'function') {
             try {
-                activeTab.render(content, context, store);
+                // 离屏容器渲染，避免直接在可见 DOM 上多次 innerHTML
+                activeTab.render(temp, context, store);
             } catch (e) {
                 console.error(`Settings tab render error (${activeSettingsTab}):`, e);
-                content.innerHTML = `<div class="text-red-500">渲染错误: ${e.message}</div>`;
+                const err = document.createElement('div');
+                err.className = 'text-red-500';
+                err.textContent = `渲染错误: ${e.message}`;
+                temp.appendChild(err);
             }
         } else {
-            content.innerHTML = `<div class="text-gray-400 text-center mt-10">未找到设置页面</div>`;
+            const empty = document.createElement('div');
+            empty.className = 'text-gray-400 text-center mt-10';
+            empty.textContent = '未找到设置页面';
+            temp.appendChild(empty);
         }
+        
+        // 一次性替换子节点，减少多次写入
+        content.replaceChildren(...Array.from(temp.childNodes));
     }
     
     /**

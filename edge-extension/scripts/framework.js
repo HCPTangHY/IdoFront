@@ -66,6 +66,8 @@ const Framework = (function() {
 
     // Track global window resize listener for cleanup
     let resizeHandlerBound = false;
+    let resizeRafId = 0;
+    let resizeListener = null;
 
     /**
      * 统一的面板内容切换动画函数
@@ -209,9 +211,13 @@ const Framework = (function() {
         }
  
         // 通知模式切换（供主视图插件/外部模块感知）
-        if (events && typeof events.emit === 'function') {
+        if (events) {
             try {
-                events.emit('mode:changed', { mode, previousMode });
+                if (typeof events.emitAsync === 'function') {
+                    events.emitAsync('mode:changed', { mode, previousMode });
+                } else if (typeof events.emit === 'function') {
+                    events.emit('mode:changed', { mode, previousMode });
+                }
             } catch (e) {
                 console.warn('Framework mode:changed handler error:', e);
             }
@@ -336,13 +342,23 @@ const Framework = (function() {
 
     function bindResponsiveListener() {
         if (resizeHandlerBound) return;
-        window.addEventListener('resize', checkResponsive);
+        resizeListener = function() {
+            if (resizeRafId) return;
+            resizeRafId = requestAnimationFrame(() => {
+                resizeRafId = 0;
+                checkResponsive();
+            });
+        };
+        window.addEventListener('resize', resizeListener);
         resizeHandlerBound = true;
     }
 
     function unbindResponsiveListener() {
         if (!resizeHandlerBound) return;
-        window.removeEventListener('resize', checkResponsive);
+        if (resizeListener) {
+            window.removeEventListener('resize', resizeListener);
+            resizeListener = null;
+        }
         resizeHandlerBound = false;
     }
 
@@ -519,6 +535,19 @@ const Framework = (function() {
                 this.listeners[event].forEach(cb => cb(data));
             }
         },
+        emitAsync(event, data) {
+            if (!this.listeners[event]) return;
+            const handlers = this.listeners[event].slice();
+            for (const cb of handlers) {
+                Promise.resolve().then(() => {
+                    try {
+                        cb(data);
+                    } catch (e) {
+                        console.warn('Framework async handler error:', e);
+                    }
+                });
+            }
+        },
         off(event, callback) {
             if (!this.listeners[event]) return;
             this.listeners[event] = this.listeners[event].filter(cb => cb !== callback);
@@ -551,7 +580,8 @@ const Framework = (function() {
         INPUT_TOP: 'slot-input-top',
         INPUT_ACTIONS_LEFT: 'slot-input-actions-left',
         INPUT_ACTIONS_RIGHT: 'slot-input-actions-right',
-        MESSAGE_FOOTER: 'message-footer'
+        MESSAGE_FOOTER: 'message-footer',
+        MESSAGE_MORE_ACTIONS: 'message-more-actions'  // 更多操作下拉菜单插槽
     };
     
     const registry = {};
@@ -863,7 +893,11 @@ const Framework = (function() {
                 }
                 
                 // 触发事件让各模块保存自己的状态
-                events.emit('save-state-for-new-tab', params);
+                if (events && typeof events.emitAsync === 'function') {
+                    events.emitAsync('save-state-for-new-tab', params);
+                } else if (events && typeof events.emit === 'function') {
+                    events.emit('save-state-for-new-tab', params);
+                }
                 
                 const queryString = params.toString();
                 if (queryString) {
@@ -942,6 +976,114 @@ const Framework = (function() {
         return btn;
     }
     
+    // --- 2.6 LIGHTBOX FUNCTIONALITY ---
+    
+    /**
+     * 打开图片 Lightbox
+     * @param {Array} images - 图片数组
+     * @param {number} currentIndex - 当前图片索引
+     */
+    function openLightbox(images, currentIndex) {
+        if (!images || images.length === 0) return;
+        
+        let currentIdx = currentIndex;
+        
+        // 创建 lightbox 容器
+        const lightbox = document.createElement('div');
+        lightbox.className = 'ido-lightbox';
+        lightbox.id = 'ido-lightbox';
+        
+        const content = document.createElement('div');
+        content.className = 'ido-lightbox__content';
+        
+        // 图片元素
+        const img = document.createElement('img');
+        img.className = 'ido-lightbox__image';
+        img.src = images[currentIdx].dataUrl;
+        img.alt = images[currentIdx].name || 'Image';
+        
+        // 关闭按钮
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'ido-lightbox__close';
+        closeBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        closeBtn.onclick = closeLightbox;
+        
+        content.appendChild(img);
+        content.appendChild(closeBtn);
+        
+        // 多图时添加导航按钮和计数器
+        if (images.length > 1) {
+            const prevBtn = document.createElement('button');
+            prevBtn.className = 'ido-lightbox__nav ido-lightbox__nav--prev';
+            prevBtn.innerHTML = '<span class="material-symbols-outlined">chevron_left</span>';
+            prevBtn.onclick = () => navigateLightbox(-1);
+            
+            const nextBtn = document.createElement('button');
+            nextBtn.className = 'ido-lightbox__nav ido-lightbox__nav--next';
+            nextBtn.innerHTML = '<span class="material-symbols-outlined">chevron_right</span>';
+            nextBtn.onclick = () => navigateLightbox(1);
+            
+            const counter = document.createElement('div');
+            counter.className = 'ido-lightbox__counter';
+            counter.id = 'lightbox-counter';
+            counter.textContent = `${currentIdx + 1} / ${images.length}`;
+            
+            content.appendChild(prevBtn);
+            content.appendChild(nextBtn);
+            content.appendChild(counter);
+        }
+        
+        lightbox.appendChild(content);
+        document.body.appendChild(lightbox);
+        
+        // 触发显示动画
+        requestAnimationFrame(() => {
+            lightbox.classList.add('ido-lightbox--visible');
+        });
+        
+        // 键盘导航
+        function handleKeydown(e) {
+            if (e.key === 'Escape') {
+                closeLightbox();
+            } else if (e.key === 'ArrowLeft' && images.length > 1) {
+                navigateLightbox(-1);
+            } else if (e.key === 'ArrowRight' && images.length > 1) {
+                navigateLightbox(1);
+            }
+        }
+        
+        document.addEventListener('keydown', handleKeydown);
+        
+        // 点击背景关闭
+        lightbox.onclick = (e) => {
+            if (e.target === lightbox) {
+                closeLightbox();
+            }
+        };
+        
+        // 导航函数
+        function navigateLightbox(direction) {
+            currentIdx = (currentIdx + direction + images.length) % images.length;
+            img.src = images[currentIdx].dataUrl;
+            img.alt = images[currentIdx].name || 'Image';
+            
+            const counter = document.getElementById('lightbox-counter');
+            if (counter) {
+                counter.textContent = `${currentIdx + 1} / ${images.length}`;
+            }
+        }
+        
+        // 关闭函数
+        function closeLightbox() {
+            document.removeEventListener('keydown', handleKeydown);
+            lightbox.classList.remove('ido-lightbox--visible');
+            
+            setTimeout(() => {
+                lightbox.remove();
+            }, 300);
+        }
+    }
+    
     // --- 3. MESSAGING ---
 
     function addMessage(role, textOrObj, options) {
@@ -951,60 +1093,39 @@ const Framework = (function() {
         let reasoning = null;
         let id = Date.now();
         let attachments = null;
+        let reasoningDuration = null;
         
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
             reasoning = textOrObj.reasoning || null;
             attachments = textOrObj.attachments || null;
+            reasoningDuration = textOrObj.reasoningDuration || null;
             if (textOrObj.id) id = textOrObj.id;
         }
+        
+        // 支持目标容器（用于批量渲染时传入 DocumentFragment）
+        const targetContainer = options.targetContainer || ui.chatStream;
         
         const msg = { role, text, reasoning, id, attachments };
         state.messages.push(msg);
 
-        const wrapper = document.createElement('div');
-        wrapper.className = `ido-message ido-message--${role} group`;
-        wrapper.dataset.messageId = id;
+        // 新卡片设计：统一的消息卡片容器
+        const card = document.createElement('div');
+        card.className = 'ido-message';
+        card.dataset.messageId = id;
+        card.dataset.role = role;
         
-        const avatar = document.createElement('div');
-        avatar.className = 'ido-message__avatar';
-        avatar.textContent = role === 'user' ? 'U' : 'AI';
-
-        // 使用语义化容器类，替代内联 flex 样式
-        const bubbleContainer = document.createElement('div');
-        bubbleContainer.className = 'ido-message__container';
-
-        // 使用语义化气泡类 + 紧凑宽度修饰符，替代内联 alignSelf / maxWidth
-        const bubble = document.createElement('div');
-        bubble.className = 'ido-message__bubble ido-message__bubble--compact';
-
-        // Add attachments preview (for messages with image attachments)
-        if (attachments && attachments.length > 0) {
-            const attachmentsContainer = document.createElement('div');
-            attachmentsContainer.className = 'flex gap-2 flex-wrap mb-2';
-            
-            attachments.forEach(attachment => {
-                if (attachment.type && attachment.type.startsWith('image/')) {
-                    const imgWrapper = document.createElement('div');
-                    // 使用语义类控制最大宽度，避免在 JS 中写死像素值
-                    imgWrapper.className = 'rounded-lg overflow-hidden border border-gray-200 ido-message__attachment-wrapper';
-                    
-                    const img = document.createElement('img');
-                    img.src = attachment.dataUrl;
-                    img.className = 'w-full h-auto';
-                    img.alt = attachment.name || 'Attached image';
-                    
-                    imgWrapper.appendChild(img);
-                    attachmentsContainer.appendChild(imgWrapper);
-                }
-            });
-            
-            if (attachmentsContainer.children.length > 0) {
-                bubble.appendChild(attachmentsContainer);
-            }
-        }
-
-        // Add reasoning block if exists (only for AI messages usually)
+        // 角色标签
+        const roleLabel = document.createElement('div');
+        roleLabel.className = 'ido-message__role';
+        roleLabel.textContent = role === 'user' ? 'User' : 'AI';
+        card.appendChild(roleLabel);
+        
+        // 内容容器
+        const container = document.createElement('div');
+        container.className = 'ido-message__container';
+        
+        // 思维链区块
         if (reasoning) {
             const reasoningBlock = document.createElement('div');
             reasoningBlock.className = 'reasoning-block';
@@ -1012,26 +1133,20 @@ const Framework = (function() {
             const toggle = document.createElement('div');
             toggle.className = 'reasoning-toggle';
             
-            // 检查是否有存储的思维链时间（来自 metadata）
             let reasoningDuration = null;
             if (typeof textOrObj === 'object' && textOrObj !== null && textOrObj.reasoningDuration !== undefined) {
                 reasoningDuration = textOrObj.reasoningDuration;
             }
             
-            // 判断是否是历史消息（同时有 reasoning 和 text）
-            const isHistoricalMessage = text && text.trim().length > 0;
+            const isHistoricalMessage = (text && text.trim().length > 0) || options.isHistorical;
             
             if (reasoningDuration !== null && reasoningDuration !== undefined) {
-                // 有存储时间：显示存储的时间
-                toggle.innerHTML = `<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">${reasoningDuration.toFixed(1)}s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>`;
+                toggle.innerHTML = `<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">${typeof reasoningDuration === 'number' ? reasoningDuration.toFixed(1) : reasoningDuration}s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>`;
             } else if (isHistoricalMessage) {
-                // 历史消息但没有存储时间：不显示时间，不启动计时器
                 toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
             } else {
-                // 流式消息：显示计时器并启动
                 toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
                 
-                // 启动计时器
                 const timerSpan = toggle.querySelector('.reasoning-timer');
                 const startTime = Date.now();
                 const timerId = setInterval(() => {
@@ -1039,7 +1154,6 @@ const Framework = (function() {
                     if (timerSpan) timerSpan.textContent = elapsed.toFixed(1) + 's';
                 }, 100);
                 
-                // 存储计时器信息
                 reasoningBlock.dataset.timerId = timerId;
                 reasoningBlock.dataset.startTime = startTime;
             }
@@ -1058,41 +1172,86 @@ const Framework = (function() {
             const content = document.createElement('div');
             content.className = 'reasoning-content markdown-body';
             content.textContent = reasoning || '';
-            // 标记为需要渲染，但不立即加入队列（由 finalizeStreamingMessage 统一处理）
             content.dataset.needsMarkdown = 'true';
             
             reasoningBlock.appendChild(toggle);
             reasoningBlock.appendChild(content);
-            bubble.appendChild(reasoningBlock);
+            container.appendChild(reasoningBlock);
         }
-
-        // Add main content
+        
+        // 主要内容
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'ido-message__content';
+        
         const contentSpan = document.createElement('div');
         contentSpan.className = 'message-content markdown-body';
         contentSpan.textContent = text || '';
-        // 仅对助理消息标记需要渲染（实际渲染由 finalizeStreamingMessage 或历史消息加载时处理）
         if (role !== 'user') {
             contentSpan.dataset.needsMarkdown = 'true';
         }
-        bubble.appendChild(contentSpan);
+        contentDiv.appendChild(contentSpan);
+        container.appendChild(contentDiv);
         
-        bubbleContainer.appendChild(bubble);
-
-        // Plugins
-        const footerPlugins = getDynamicPlugins(SLOTS.MESSAGE_FOOTER, msg);
-        if (footerPlugins.length > 0) {
-            const footer = document.createElement('div');
-            footer.className = 'ido-message__footer';
-            footerPlugins.forEach(p => {
-                if (p) footer.appendChild(p);
-            });
-            bubbleContainer.appendChild(footer);
+        // 附件预览（放在内容之后）
+        if (attachments && attachments.length > 0) {
+            const imageAttachments = attachments.filter(a => a && a.type && a.type.startsWith('image/'));
+            
+            if (imageAttachments.length > 0) {
+                const attachmentsContainer = document.createElement('div');
+                // 根据图片数量选择布局类
+                if (imageAttachments.length === 1) {
+                    attachmentsContainer.className = 'ido-message__attachments ido-message__attachments--single';
+                } else {
+                    attachmentsContainer.className = 'ido-message__attachments ido-message__attachments--grid';
+                }
+                
+                imageAttachments.forEach((attachment, index) => {
+                    const imgWrapper = document.createElement('div');
+                    imgWrapper.className = 'ido-message__attachment-wrapper';
+                    imgWrapper.dataset.imageIndex = index;
+                    imgWrapper.dataset.imageTotal = imageAttachments.length;
+                    
+                    const img = document.createElement('img');
+                    img.src = attachment.dataUrl;
+                    img.alt = attachment.name || 'Attached image';
+                    img.loading = 'lazy';
+                    
+                    // 放大覆盖层
+                    const overlay = document.createElement('div');
+                    overlay.className = 'ido-message__attachment-overlay';
+                    overlay.innerHTML = '<span class="material-symbols-outlined">zoom_in</span>';
+                    
+                    imgWrapper.appendChild(img);
+                    imgWrapper.appendChild(overlay);
+                    
+                    // 点击打开 lightbox
+                    imgWrapper.onclick = () => {
+                        openLightbox(imageAttachments, index);
+                    };
+                    
+                    attachmentsContainer.appendChild(imgWrapper);
+                });
+                
+                container.appendChild(attachmentsContainer);
+            }
         }
-
-        wrapper.appendChild(avatar);
-        wrapper.appendChild(bubbleContainer);
-        ui.chatStream.appendChild(wrapper);
-        if (!options.noScroll) {
+        
+        card.appendChild(container);
+        
+        // 操作栏（通过插件系统注入）
+        const actionPlugins = getDynamicPlugins(SLOTS.MESSAGE_FOOTER, msg);
+        if (actionPlugins.length > 0) {
+            const actions = document.createElement('div');
+            actions.className = 'ido-message__actions';
+            actionPlugins.forEach(p => {
+                if (p) actions.appendChild(p);
+            });
+            card.appendChild(actions);
+        }
+        
+        targetContainer.appendChild(card);
+        // 仅在直接添加到 chatStream 时处理滚动
+        if (targetContainer === ui.chatStream && !options.noScroll) {
             ui.chatStream.scrollTop = ui.chatStream.scrollHeight;
         }
         
@@ -1106,20 +1265,17 @@ const Framework = (function() {
     function addLoadingIndicator() {
         const loadingId = `loading_${Date.now()}`;
         
-        const wrapper = document.createElement('div');
-        wrapper.className = 'ido-message ido-message--ai';
-        wrapper.dataset.loadingId = loadingId;
+        const card = document.createElement('div');
+        card.className = 'ido-message';
+        card.dataset.loadingId = loadingId;
         
-        const avatar = document.createElement('div');
-        avatar.className = 'ido-message__avatar';
-        avatar.textContent = 'AI';
+        const roleLabel = document.createElement('div');
+        roleLabel.className = 'ido-message__role';
+        roleLabel.textContent = 'AI';
+        card.appendChild(roleLabel);
         
-        // 使用专用容器类，控制 loading 气泡宽度和对齐
-        const bubbleContainer = document.createElement('div');
-        bubbleContainer.className = 'ido-message__container ido-message__container--loading';
-        
-        const bubble = document.createElement('div');
-        bubble.className = 'ido-message__bubble';
+        const container = document.createElement('div');
+        container.className = 'ido-message__container ido-message__container--loading';
         
         const loadingDots = document.createElement('div');
         loadingDots.className = 'ido-loading-dots';
@@ -1129,12 +1285,10 @@ const Framework = (function() {
             <span class="ido-loading-dots__dot"></span>
         `;
         
-        bubble.appendChild(loadingDots);
-        bubbleContainer.appendChild(bubble);
-        wrapper.appendChild(avatar);
-        wrapper.appendChild(bubbleContainer);
+        container.appendChild(loadingDots);
+        card.appendChild(container);
         
-        ui.chatStream.appendChild(wrapper);
+        ui.chatStream.appendChild(card);
         ui.chatStream.scrollTop = ui.chatStream.scrollHeight;
         
         return loadingId;
@@ -1158,6 +1312,14 @@ const Framework = (function() {
         return ui.chatStream.querySelector(`[data-message-id="${messageId}"]`);
     }
  
+    // 获取当前列表中的最后一条消息卡片（忽略 loading 气泡）
+    function getLastMessageCard() {
+        if (!ui.chatStream) return null;
+        const cards = ui.chatStream.querySelectorAll('[data-message-id]');
+        if (!cards || cards.length === 0) return null;
+        return cards[cards.length - 1];
+    }
+ 
     /**
      * 将加载指示器附着到指定消息下方，形成"下一行"效果
      * @returns {boolean} 是否成功附着
@@ -1171,15 +1333,16 @@ const Framework = (function() {
         const loadingDots = loadingElement.querySelector('.ido-loading-dots');
         if (!loadingDots) return false;
  
-        const bubble = targetWrapper.querySelector('.ido-message__bubble');
-        if (!bubble) return false;
+        // 兼容新版消息结构：使用容器而非不存在的 .ido-message__bubble
+        const container = targetWrapper.querySelector('.ido-message__container') || targetWrapper;
+        if (!container) return false;
  
         // 包裹指示器，便于统一样式与后续删除
         const indicatorWrapper = document.createElement('div');
         indicatorWrapper.className = 'message-streaming-indicator';
         indicatorWrapper.appendChild(loadingDots);
  
-        bubble.appendChild(indicatorWrapper);
+        container.appendChild(indicatorWrapper);
         loadingElement.remove();
         return true;
     }
@@ -1350,59 +1513,25 @@ const Framework = (function() {
         const lastMsg = state.messages[state.messages.length - 1];
         
         // Update UI
-        const lastWrapper = ui.chatStream.lastElementChild;
-        if (!lastWrapper) return;
+        const lastCard = getLastMessageCard();
+        if (!lastCard) return;
         
-        const bubble = lastWrapper.querySelector('.ido-message__bubble');
-        if (!bubble) return;
+        const container = lastCard.querySelector('.ido-message__container');
+        if (!container) return;
         
-        // 如果当前消息包含图片附件且气泡尚未渲染附件，则在气泡顶部以 DOM 方式补渲染，
-        // 用于处理「流式响应后期才返回图片」的场景（例如 Gemini inlineData）。
-        const currentAttachments = lastMsg.attachments;
-        if (currentAttachments && currentAttachments.length > 0) {
-            const existingWrapper = bubble.querySelector('.ido-message__attachment-wrapper');
-            if (!existingWrapper) {
-                const attachmentsContainer = document.createElement('div');
-                attachmentsContainer.className = 'flex gap-2 flex-wrap mb-2';
-                
-                currentAttachments.forEach(attachment => {
-                    if (!attachment || !attachment.type || !attachment.type.startsWith('image/')) return;
-                    
-                    const imgWrapper = document.createElement('div');
-                    imgWrapper.className = 'rounded-lg overflow-hidden border border-gray-200 ido-message__attachment-wrapper';
-                    
-                    const img = document.createElement('img');
-                    img.src = attachment.dataUrl;
-                    img.className = 'w-full h-auto';
-                    img.alt = attachment.name || 'Attached image';
-                    
-                    imgWrapper.appendChild(img);
-                    attachmentsContainer.appendChild(imgWrapper);
-                });
-                
-                if (attachmentsContainer.children.length > 0) {
-                    // 将附件区域插入到正文/思维链之前，保持与 addMessage 相同的视觉顺序
-                    bubble.insertBefore(attachmentsContainer, bubble.firstChild);
-                }
-            }
-        }
+        // 处理思维链
+        let reasoningBlock = container.querySelector('.reasoning-block');
+        let contentSpan = container.querySelector('.message-content');
         
-        // Check for existing reasoning block
-        let reasoningBlock = bubble.querySelector('.reasoning-block');
-        let contentSpan = bubble.querySelector('.message-content');
-        
-        // Initialize structure if needed (migrating from plain text)
         if (!contentSpan) {
-            const currentText = bubble.textContent;
-            bubble.innerHTML = '';
-            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'ido-message__content';
             contentSpan = document.createElement('div');
             contentSpan.className = 'message-content markdown-body';
-            contentSpan.textContent = currentText;
-            bubble.appendChild(contentSpan);
+            contentDiv.appendChild(contentSpan);
+            container.appendChild(contentDiv);
         }
         
-        // Update or create reasoning block
         if (reasoning) {
             if (!reasoningBlock) {
                 reasoningBlock = document.createElement('div');
@@ -1412,7 +1541,6 @@ const Framework = (function() {
                 toggle.className = 'reasoning-toggle';
                 toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
                 
-                // 启动计时器
                 const timerSpan = toggle.querySelector('.reasoning-timer');
                 const startTime = Date.now();
                 const timerId = setInterval(() => {
@@ -1420,7 +1548,6 @@ const Framework = (function() {
                     timerSpan.textContent = elapsed.toFixed(1) + 's';
                 }, 100);
                 
-                // 将计时器ID存储到元素上，以便后续停止
                 reasoningBlock.dataset.timerId = timerId;
                 reasoningBlock.dataset.startTime = startTime;
                 
@@ -1441,25 +1568,22 @@ const Framework = (function() {
                 reasoningBlock.appendChild(toggle);
                 reasoningBlock.appendChild(content);
                 
-                // Insert before content
-                bubble.insertBefore(reasoningBlock, contentSpan);
+                const contentDiv = contentSpan.parentElement;
+                container.insertBefore(reasoningBlock, contentDiv);
             }
             
-            // 流式更新期间实时渲染 Markdown（测试性能）
             const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
             if (reasoningContentDiv) {
                 reasoningContentDiv.textContent = reasoning;
-                // 实时加入渲染队列
                 enqueueMarkdownRender(reasoningContentDiv, reasoning);
             }
         }
         
-        // 当正文内容开始出现时，停止思维链计时器
+        // 停止思维链计时器
         if (text && reasoningBlock && reasoningBlock.dataset.timerId) {
             const timerId = parseInt(reasoningBlock.dataset.timerId);
             clearInterval(timerId);
             
-            // 计算最终时间
             const toggle = reasoningBlock.querySelector('.reasoning-toggle');
             const timerSpan = toggle?.querySelector('.reasoning-timer');
             let finalDuration = 0;
@@ -1469,38 +1593,90 @@ const Framework = (function() {
                 timerSpan.textContent = finalDuration.toFixed(1) + 's';
             }
             
-            // 触发事件，通知思维链已完成，传递时间信息
             if (finalDuration > 0) {
-                events.emit('reasoning:completed', {
-                    messageId: lastMsg.id,
-                    duration: finalDuration
-                });
+                if (events && typeof events.emitAsync === 'function') {
+                    events.emitAsync('reasoning:completed', {
+                        messageId: lastMsg.id,
+                        duration: finalDuration
+                    });
+                } else if (events && typeof events.emit === 'function') {
+                    events.emit('reasoning:completed', {
+                        messageId: lastMsg.id,
+                        duration: finalDuration
+                    });
+                }
             }
             
-            // 清除计时器ID标记
             delete reasoningBlock.dataset.timerId;
             
-            // 思维链完成后，最后一次渲染
             const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
             if (reasoningContentDiv && lastMsg.reasoning) {
                 enqueueMarkdownRender(reasoningContentDiv, lastMsg.reasoning);
             }
         }
         
-        // 流式更新期间避免频繁 Markdown 解析，待 finalize 再统一解析
+        // 更新正文内容
         if (contentSpan && lastMsg.role !== 'user' && text) {
             if (streaming) {
                 contentSpan.textContent = text;
                 contentSpan.dataset.needsMarkdown = 'true';
             } else {
-                // 非流式（一次性响应）再执行同步 Markdown 渲染
                 renderMarkdownSync(contentSpan, text);
             }
         } else if (contentSpan) {
             contentSpan.textContent = text;
         }
         
-        // 优化滚动：只在接近底部时才滚动
+        // 处理附件（放在内容之后）
+        const currentAttachments = lastMsg.attachments;
+        if (currentAttachments && currentAttachments.length > 0) {
+            const existingWrapper = container.querySelector('.ido-message__attachment-wrapper');
+            if (!existingWrapper) {
+                const imageAttachments = currentAttachments.filter(a => a && a.type && a.type.startsWith('image/'));
+                
+                if (imageAttachments.length > 0) {
+                    const attachmentsContainer = document.createElement('div');
+                    // 根据图片数量选择布局类
+                    if (imageAttachments.length === 1) {
+                        attachmentsContainer.className = 'ido-message__attachments ido-message__attachments--single';
+                    } else {
+                        attachmentsContainer.className = 'ido-message__attachments ido-message__attachments--grid';
+                    }
+                    
+                    imageAttachments.forEach((attachment, index) => {
+                        const imgWrapper = document.createElement('div');
+                        imgWrapper.className = 'ido-message__attachment-wrapper';
+                        imgWrapper.dataset.imageIndex = index;
+                        imgWrapper.dataset.imageTotal = imageAttachments.length;
+                        
+                        const img = document.createElement('img');
+                        img.src = attachment.dataUrl;
+                        img.alt = attachment.name || 'Attached image';
+                        img.loading = 'lazy';
+                        
+                        // 放大覆盖层
+                        const overlay = document.createElement('div');
+                        overlay.className = 'ido-message__attachment-overlay';
+                        overlay.innerHTML = '<span class="material-symbols-outlined">zoom_in</span>';
+                        
+                        imgWrapper.appendChild(img);
+                        imgWrapper.appendChild(overlay);
+                        
+                        // 点击打开 lightbox
+                        imgWrapper.onclick = () => {
+                            openLightbox(imageAttachments, index);
+                        };
+                        
+                        attachmentsContainer.appendChild(imgWrapper);
+                    });
+                    
+                    // 附件添加到容器末尾（在内容之后）
+                    container.appendChild(attachmentsContainer);
+                }
+            }
+        }
+        
+        // 优化滚动
         const stream = ui.chatStream;
         const isNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 100;
         if (isNearBottom) {
@@ -1512,20 +1688,27 @@ const Framework = (function() {
      * 完成流式消息更新，解析 Markdown
      */
     function finalizeStreamingMessage() {
+        // 强制刷新任何待处理的 RAF 更新，确保 DOM 内容是最新的
+        // 这也会触发 performUIUpdate 中的思维链计时器停止逻辑
+        if (pendingUpdate) {
+            performUIUpdate(pendingUpdate);
+            rafUpdatePending = false;
+            pendingUpdate = null;
+        }
+        
         if (state.messages.length === 0) return;
         
-        const lastWrapper = ui.chatStream.lastElementChild;
-        if (!lastWrapper) return;
+        const lastCard = getLastMessageCard();
+        if (!lastCard) return;
         
-        const bubble = lastWrapper.querySelector('.ido-message__bubble');
-        if (!bubble) return;
+        const container = lastCard.querySelector('.ido-message__container');
+        if (!container) return;
         
         const lastMsg = state.messages[state.messages.length - 1];
         const lastMsgId = lastMsg?.id;
         
-        // Fallback：如果流式结束时仍有思维链计时器在运行（例如仅有思维链或图片输出，正文为空），
-        // 在此处强制停止计时并上报 duration，避免计时器无限运行。
-        const reasoningBlock = bubble.querySelector('.reasoning-block');
+        // 停止思维链计时器
+        const reasoningBlock = container.querySelector('.reasoning-block');
         if (reasoningBlock && reasoningBlock.dataset.timerId) {
             const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
             if (!Number.isNaN(timerId)) {
@@ -1550,35 +1733,46 @@ const Framework = (function() {
             delete reasoningBlock.dataset.startTime;
             
             if (finalDuration > 0 && lastMsgId) {
-                events.emit('reasoning:completed', {
-                    messageId: lastMsgId,
-                    duration: finalDuration
-                });
+                if (events && typeof events.emitAsync === 'function') {
+                    events.emitAsync('reasoning:completed', {
+                        messageId: lastMsgId,
+                        duration: finalDuration
+                    });
+                } else if (events && typeof events.emit === 'function') {
+                    events.emit('reasoning:completed', {
+                        messageId: lastMsgId,
+                        duration: finalDuration
+                    });
+                }
             }
         }
         
-        // 解析思维链的 Markdown
-        const reasoningContent = bubble.querySelector('.reasoning-content[data-needs-markdown="true"]');
-        if (reasoningContent && lastMsg?.reasoning) {
-            enqueueMarkdownRender(reasoningContent, lastMsg.reasoning);
-            delete reasoningContent.dataset.needsMarkdown;
+        // 解析思维链的 Markdown（从 DOM 获取文本，避免因 setTimeout 延迟导致 state 未更新）
+        const reasoningContent = container.querySelector('.reasoning-content[data-needs-markdown="true"]');
+        if (reasoningContent) {
+            const reasoningText = reasoningContent.textContent || '';
+            if (reasoningText) {
+                renderMarkdownSync(reasoningContent, reasoningText);
+            }
+            reasoningContent.removeAttribute('data-needs-markdown');
         }
  
-        // 解析正文的 Markdown
-        const contentSpan = bubble.querySelector('.message-content[data-needs-markdown="true"]');
-        if (contentSpan && lastMsg?.text) {
-            enqueueMarkdownRender(contentSpan, lastMsg.text);
-            delete contentSpan.dataset.needsMarkdown;
+        // 解析正文的 Markdown（从 DOM 获取文本，避免因 setTimeout 延迟导致 state 未更新）
+        const contentSpan = container.querySelector('.message-content[data-needs-markdown="true"]');
+        if (contentSpan) {
+            const contentText = contentSpan.textContent || '';
+            if (contentText) {
+                renderMarkdownSync(contentSpan, contentText);
+            }
+            contentSpan.removeAttribute('data-needs-markdown');
         }
         
-        // 确保加载指示器被彻底移除
+        // 移除加载指示器
         if (lastMsgId) {
             removeMessageStreamingIndicator(lastMsgId);
         }
-        // 兜底移除当前气泡内残留的指示器
-        const strayIndicators = bubble.querySelectorAll('.message-streaming-indicator');
+        const strayIndicators = container.querySelectorAll('.message-streaming-indicator');
         strayIndicators.forEach(indicator => indicator.remove());
-        // 兜底移除聊天流中可能残留的独立加载提示
         const floatingIndicators = ui.chatStream.querySelectorAll('[data-loading-id]');
         floatingIndicators.forEach(indicator => indicator.remove());
     }
@@ -1624,12 +1818,31 @@ const Framework = (function() {
 
         // Send button - 实际发送逻辑由 IdoFront 插件处理
         // 这里只保留基本的 UI 交互
-        document.getElementById('btn-send').onclick = () => {
-            // 发送逻辑由外部插件处理
-            events.emit('send-message', {
-                text: ui.userInput.value.trim()
-            });
-        };
+        const btnSend = document.getElementById('btn-send');
+        if (btnSend) {
+            btnSend.onclick = () => {
+                // 检查是否正在加载（通过按钮状态判断）
+                if (btnSend.classList.contains('btn-send--loading')) {
+                    // 正在加载时，点击取消请求
+                    if (events && typeof events.emitAsync === 'function') {
+                        events.emitAsync('cancel-request');
+                    } else if (events && typeof events.emit === 'function') {
+                        events.emit('cancel-request');
+                    }
+                } else {
+                    // 正常发送
+                    if (events && typeof events.emitAsync === 'function') {
+                        events.emitAsync('send-message', {
+                            text: ui.userInput.value.trim()
+                        });
+                    } else if (events && typeof events.emit === 'function') {
+                        events.emit('send-message', {
+                            text: ui.userInput.value.trim()
+                        });
+                    }
+                }
+            };
+        }
         
         // Auto-resize text
         ui.userInput.addEventListener('input', function() {
@@ -1648,12 +1861,43 @@ const Framework = (function() {
         const mode = params.get('mode');
         if (mode) {
             // 触发事件让各模块恢复自己的状态
-            events.emit('restore-state-from-url', params);
+            if (events && typeof events.emitAsync === 'function') {
+                events.emitAsync('restore-state-from-url', params);
+            } else if (events && typeof events.emit === 'function') {
+                events.emit('restore-state-from-url', params);
+            }
         }
     }
 
     function destroy() {
         unbindResponsiveListener();
+    }
+    
+    /**
+     * 设置发送按钮状态
+     * @param {boolean} isLoading - 是否处于加载状态
+     */
+    function setSendButtonLoading(isLoading) {
+        const btnSend = document.getElementById('btn-send');
+        if (!btnSend) return;
+        
+        if (isLoading) {
+            btnSend.classList.add('btn-send--loading');
+            btnSend.title = '点击停止生成';
+            // 替换图标为停止图标
+            const icon = btnSend.querySelector('.material-symbols-outlined');
+            if (icon) {
+                icon.textContent = 'stop_circle';
+            }
+        } else {
+            btnSend.classList.remove('btn-send--loading');
+            btnSend.title = '发送';
+            // 恢复为发送图标
+            const icon = btnSend.querySelector('.material-symbols-outlined');
+            if (icon) {
+                icon.textContent = 'arrow_upward';
+            }
+        }
     }
     
     // Public API object shared with plugins
@@ -1685,6 +1929,7 @@ const Framework = (function() {
         removeLoadingIndicator,
         attachLoadingIndicatorToMessage,
         removeMessageStreamingIndicator,
+        setSendButtonLoading,
         // RenderMessageEdit will be injected by messageActions
         renderMessageEdit: null,
         getCurrentMode: () => currentMode,
@@ -1716,6 +1961,7 @@ const Framework = (function() {
         removeLoadingIndicator,
         attachLoadingIndicatorToMessage,
         removeMessageStreamingIndicator,
+        setSendButtonLoading,
         // Allow messageActions to inject this
         set renderMessageEdit(fn) {
             publicApi.renderMessageEdit = fn;

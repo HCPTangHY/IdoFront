@@ -315,7 +315,7 @@
     }
 
     /**
-     * 显示日志详情
+     * 显示日志详情（优化版：使用分批渲染避免卡顿）
      */
     function showLogDetail(log) {
         const content = document.getElementById('network-log-detail-content');
@@ -323,55 +323,100 @@
 
         content.innerHTML = '';
 
-        // 请求信息
-        const requestSection = createDetailSection('请求信息', [
-            { label: 'URL', value: log.request.url, mono: true },
-            { label: '方法', value: log.request.method },
-            { label: '时间', value: new Date(log.timestamp).toLocaleString('zh-CN') }
-        ]);
-        content.appendChild(requestSection);
+        // 收集所有需要渲染的区块
+        const sections = [];
 
-        // 请求头
+        // 1. 请求信息（轻量级，立即渲染）
+        sections.push({
+            priority: 'immediate',
+            element: createDetailSection('请求信息', [
+                { label: 'URL', value: log.request.url, mono: true },
+                { label: '方法', value: log.request.method },
+                { label: '时间', value: new Date(log.timestamp).toLocaleString('zh-CN') }
+            ])
+        });
+
+        // 2. 请求头（延迟渲染）
         if (log.request.headers && Object.keys(log.request.headers).length > 0) {
-            const headersSection = createJsonSection('请求头', log.request.headers);
-            content.appendChild(headersSection);
+            sections.push({
+                priority: 'deferred',
+                element: () => createJsonSection('请求头', log.request.headers)
+            });
         }
 
-        // 请求体
+        // 3. 请求体（延迟渲染）
         if (log.request.body) {
-            const bodySection = createJsonSection('请求体', log.request.body);
-            content.appendChild(bodySection);
+            sections.push({
+                priority: 'deferred',
+                element: () => createJsonSection('请求体', log.request.body)
+            });
         }
 
-        // 响应信息
+        // 4. 响应信息（立即渲染）
         if (log.response) {
-            const responseInfo = createDetailSection('响应信息', [
-                { label: '状态码', value: `${log.response.status} ${log.response.statusText}` },
-                { label: '耗时', value: log.duration ? `${log.duration}ms` : '-' },
-                { label: '类型', value: log.response.isStream ? '流式响应' : '普通响应' }
-            ]);
-            content.appendChild(responseInfo);
+            sections.push({
+                priority: 'immediate',
+                element: createDetailSection('响应信息', [
+                    { label: '状态码', value: `${log.response.status} ${log.response.statusText}` },
+                    { label: '耗时', value: log.duration ? `${log.duration}ms` : '-' },
+                    { label: '类型', value: log.response.isStream ? '流式响应' : '普通响应' }
+                ])
+            });
 
-            // 响应头
+            // 5. 响应头（延迟渲染）
             if (log.response.headers && Object.keys(log.response.headers).length > 0) {
-                const respHeadersSection = createJsonSection('响应头', log.response.headers);
-                content.appendChild(respHeadersSection);
+                sections.push({
+                    priority: 'deferred',
+                    element: () => createJsonSection('响应头', log.response.headers)
+                });
             }
 
-            // 响应体
+            // 6. 响应体（延迟渲染）
             if (log.response.isStream && log.response.streamChunks) {
-                const streamSection = createStreamSection(log.response.streamChunks);
-                content.appendChild(streamSection);
+                sections.push({
+                    priority: 'deferred',
+                    element: () => createStreamSection(log.response.streamChunks)
+                });
             } else if (log.response.body) {
-                const respBodySection = createJsonSection('响应体', log.response.body);
-                content.appendChild(respBodySection);
+                sections.push({
+                    priority: 'deferred',
+                    element: () => createJsonSection('响应体', log.response.body)
+                });
             }
         }
 
-        // 错误信息
+        // 7. 错误信息（立即渲染）
         if (log.error) {
-            const errorSection = createErrorSection(log.error);
-            content.appendChild(errorSection);
+            sections.push({
+                priority: 'immediate',
+                element: createErrorSection(log.error)
+            });
+        }
+
+        // 立即渲染高优先级内容
+        sections
+            .filter(s => s.priority === 'immediate')
+            .forEach(s => content.appendChild(s.element));
+
+        // 使用 requestIdleCallback 延迟渲染其他内容
+        let deferredSections = sections.filter(s => s.priority === 'deferred');
+        
+        function renderNextSection() {
+            if (deferredSections.length === 0) return;
+            
+            const section = deferredSections.shift();
+            const element = typeof section.element === 'function' ? section.element() : section.element;
+            content.appendChild(element);
+            
+            // 继续渲染下一个
+            if (deferredSections.length > 0) {
+                requestIdleCallback(renderNextSection, { timeout: 50 });
+            }
+        }
+        
+        // 启动延迟渲染
+        if (deferredSections.length > 0) {
+            requestIdleCallback(renderNextSection, { timeout: 50 });
         }
     }
 
@@ -405,19 +450,54 @@
     }
 
     /**
-     * 创建JSON区块
+     * 创建JSON区块（优化版：延迟渲染大型内容）
      */
     function createJsonSection(title, data) {
         const section = document.createElement('div');
         section.className = 'mb-4';
 
         const header = document.createElement('div');
-        header.className = 'text-xs font-semibold text-gray-700 mb-2 pb-1 border-b border-gray-200';
-        header.textContent = title;
+        header.className = 'text-xs font-semibold text-gray-700 mb-2 pb-1 border-b border-gray-200 flex items-center justify-between';
+        
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = title;
+        header.appendChild(titleSpan);
 
         const pre = document.createElement('pre');
-        pre.className = 'text-[10px] bg-gray-900 text-gray-100 p-3 rounded overflow-x-auto font-mono';
-        pre.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        pre.className = 'text-[10px] bg-gray-900 text-gray-100 p-3 rounded overflow-x-auto font-mono max-h-96 overflow-y-auto';
+        
+        // 将数据转换为字符串
+        const jsonStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        const dataSize = jsonStr.length;
+        
+        // 如果数据较大（>10KB），显示大小提示并使用懒加载
+        if (dataSize > 10000) {
+            const sizeInfo = document.createElement('span');
+            sizeInfo.className = 'text-[10px] text-gray-500 font-normal';
+            sizeInfo.textContent = `(${(dataSize / 1024).toFixed(1)} KB)`;
+            header.appendChild(sizeInfo);
+            
+            // 创建加载按钮
+            const loadBtn = document.createElement('button');
+            loadBtn.className = 'text-[10px] text-blue-600 hover:text-blue-700 underline';
+            loadBtn.textContent = '点击加载';
+            loadBtn.onclick = () => {
+                loadBtn.textContent = '加载中...';
+                loadBtn.disabled = true;
+                // 使用 requestIdleCallback 延迟渲染，避免阻塞 UI
+                requestIdleCallback(() => {
+                    pre.textContent = jsonStr;
+                    loadBtn.remove();
+                }, { timeout: 100 });
+            };
+            header.appendChild(loadBtn);
+            
+            pre.textContent = '数据较大，点击上方"点击加载"按钮查看完整内容';
+            pre.className += ' text-gray-400 italic';
+        } else {
+            // 数据较小，直接渲染
+            pre.textContent = jsonStr;
+        }
 
         section.appendChild(header);
         section.appendChild(pre);
@@ -425,7 +505,7 @@
     }
 
     /**
-     * 创建流式响应区块
+     * 创建流式响应区块（优化版：延迟渲染大型内容）
      */
     function createStreamSection(chunks) {
         const section = document.createElement('div');
@@ -433,17 +513,43 @@
 
         const header = document.createElement('div');
         header.className = 'text-xs font-semibold text-gray-700 mb-2 pb-1 border-b border-gray-200 flex items-center justify-between';
-        header.innerHTML = `
-            <span>流式响应体 (${chunks.length} 个数据块)</span>
-            <span class="text-[10px] text-gray-500 font-normal">完整内容</span>
-        `;
+        
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = `流式响应体 (${chunks.length} 个数据块)`;
+        header.appendChild(titleSpan);
 
         // 合并所有数据块
         const fullContent = chunks.map(chunk => chunk.data).join('');
+        const contentSize = fullContent.length;
 
         const pre = document.createElement('pre');
         pre.className = 'text-[10px] bg-gray-900 text-gray-100 p-3 rounded overflow-x-auto font-mono max-h-96 overflow-y-auto';
-        pre.textContent = fullContent;
+        
+        // 如果内容较大（>10KB），使用懒加载
+        if (contentSize > 10000) {
+            const sizeInfo = document.createElement('span');
+            sizeInfo.className = 'text-[10px] text-gray-500 font-normal';
+            sizeInfo.textContent = `(${(contentSize / 1024).toFixed(1)} KB)`;
+            header.appendChild(sizeInfo);
+            
+            const loadBtn = document.createElement('button');
+            loadBtn.className = 'text-[10px] text-blue-600 hover:text-blue-700 underline';
+            loadBtn.textContent = '点击加载';
+            loadBtn.onclick = () => {
+                loadBtn.textContent = '加载中...';
+                loadBtn.disabled = true;
+                requestIdleCallback(() => {
+                    pre.textContent = fullContent;
+                    loadBtn.remove();
+                }, { timeout: 100 });
+            };
+            header.appendChild(loadBtn);
+            
+            pre.textContent = '数据较大，点击上方"点击加载"按钮查看完整内容';
+            pre.className += ' text-gray-400 italic';
+        } else {
+            pre.textContent = fullContent;
+        }
 
         section.appendChild(header);
         section.appendChild(pre);

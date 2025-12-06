@@ -133,6 +133,67 @@
     };
 
     /**
+     * 截断超长字符串的配置
+     */
+    const TRUNCATE_CONFIG = {
+        // 字符串超过此长度将被截断
+        maxLength: 1000,
+        // 截断后保留的前缀长度
+        keepPrefix: 200,
+        // 截断后保留的后缀长度
+        keepSuffix: 200
+    };
+
+    /**
+     * 截断单个超长字符串
+     * @param {string} str - 原始字符串
+     * @returns {string} 截断后的字符串
+     */
+    function truncateLongString(str) {
+        if (typeof str !== 'string' || str.length <= TRUNCATE_CONFIG.maxLength) {
+            return str;
+        }
+        
+        const { keepPrefix, keepSuffix } = TRUNCATE_CONFIG;
+        const truncatedLength = str.length - keepPrefix - keepSuffix;
+        
+        return `${str.substring(0, keepPrefix)}...[已截断 ${truncatedLength} 字符]...${str.substring(str.length - keepSuffix)}`;
+    }
+
+    /**
+     * 递归遍历对象，截断所有超长字符串
+     * 这样可以保持 JSON 结构完整，同时避免超长数据（如 base64 图片）导致性能问题
+     *
+     * @param {any} obj - 要处理的对象
+     * @returns {any} 处理后的对象（深拷贝）
+     */
+    function truncateLongStrings(obj) {
+        // 处理字符串：超长则截断
+        if (typeof obj === 'string') {
+            return truncateLongString(obj);
+        }
+        
+        // 处理数组：递归处理每个元素
+        if (Array.isArray(obj)) {
+            return obj.map(item => truncateLongStrings(item));
+        }
+        
+        // 处理对象：递归处理每个属性
+        if (obj && typeof obj === 'object') {
+            const result = {};
+            for (const key in obj) {
+                if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                    result[key] = truncateLongStrings(obj[key]);
+                }
+            }
+            return result;
+        }
+        
+        // 其他类型（number, boolean, null, undefined 等）直接返回
+        return obj;
+    }
+
+    /**
      * 创建日志条目
      */
     function createLogEntry(url, method, config) {
@@ -151,15 +212,19 @@
             }
         }
         
-        // 提取请求体
+        // 提取请求体并截断超长字符串
         let body = null;
         let rawBody = '';
         if (config?.body) {
-            rawBody = config.body;
+            // rawBody 也需要截断，避免存储过大数据
+            rawBody = truncateLongString(config.body);
             try {
-                body = JSON.parse(config.body);
+                const parsedBody = JSON.parse(config.body);
+                // 递归截断对象中的所有超长字符串
+                body = truncateLongStrings(parsedBody);
             } catch (e) {
-                body = config.body;
+                // 如果不是 JSON，直接使用截断后的字符串
+                body = rawBody;
             }
         }
         
@@ -219,13 +284,18 @@
                 responseHeaders[key] = value;
             });
 
-            // 读取响应体
-            const rawBody = await response.text();
+            // 读取响应体并截断超长字符串
+            const originalRawBody = await response.text();
+            // rawBody 也需要截断
+            const rawBody = truncateLongString(originalRawBody);
             let body = rawBody;
             try {
-                body = JSON.parse(rawBody);
+                const parsedBody = JSON.parse(originalRawBody);
+                // 递归截断对象中的所有超长字符串
+                body = truncateLongStrings(parsedBody);
             } catch (e) {
-                // 保持原始文本
+                // 如果不是 JSON，直接使用截断后的字符串
+                body = rawBody;
             }
 
             logEntry.response = {
@@ -313,13 +383,15 @@
                     break;
                 }
                 
-                // 记录数据块
+                // 记录数据块（截断超长字符串）
                 const chunk = decoder.decode(value, { stream: true });
+                const truncatedChunk = truncateLongString(chunk);
                 logEntry.response.streamChunks.push({
                     timestamp: Date.now(),
-                    data: chunk
+                    data: truncatedChunk,
+                    truncated: truncatedChunk !== chunk
                 });
-                logEntry.response.rawBody += chunk;
+                logEntry.response.rawBody += truncatedChunk;
                 
 
                 if (store.events) {
