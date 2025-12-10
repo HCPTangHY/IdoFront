@@ -1574,8 +1574,8 @@ const Framework = (function() {
             
             const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
             if (reasoningContentDiv) {
-                reasoningContentDiv.textContent = reasoning;
-                enqueueMarkdownRender(reasoningContentDiv, reasoning);
+                // 同步渲染思维链Markdown，避免闪烁
+                renderMarkdownSync(reasoningContentDiv, reasoning);
             }
         }
         
@@ -1617,12 +1617,7 @@ const Framework = (function() {
         
         // 更新正文内容
         if (contentSpan && lastMsg.role !== 'user' && text) {
-            if (streaming) {
-                contentSpan.textContent = text;
-                contentSpan.dataset.needsMarkdown = 'true';
-            } else {
-                renderMarkdownSync(contentSpan, text);
-            }
+            renderMarkdownSync(contentSpan, text);
         } else if (contentSpan) {
             contentSpan.textContent = text;
         }

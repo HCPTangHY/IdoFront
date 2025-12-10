@@ -72,6 +72,20 @@
         
         syncUI();
         updateHeader(target);
+        
+        // 修复：切换对话后，更新发送按钮状态
+        // 检查新对话是否有活跃的生成请求
+        const hasActiveGeneration = messageActions && messageActions.hasActiveGeneration
+            ? messageActions.hasActiveGeneration(id)
+            : false;
+        
+        const isGenerating = store.state.isTyping &&
+                            store.state.typingConversationId === id &&
+                            hasActiveGeneration;
+        
+        if (context && context.setSendButtonLoading) {
+            context.setSendButtonLoading(isGenerating);
+        }
 
         if (context && context.events) {
             context.events.emit('chat:conversation-selected', { conversationId: id });
@@ -199,21 +213,42 @@
                     // 已经有助手消息，直接在该消息下方挂载 loading 指示器
                     const loadingId = context.addLoadingIndicator();
                     context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
+                    // 同步发送按钮状态
+                    if (context.setSendButtonLoading) {
+                        context.setSendButtonLoading(true);
+                    }
                 } else if (hasActiveGen && !typingMsgId && context.addLoadingIndicator) {
                     // 还没有助手消息（请求已发出但首个 chunk 未到达），显示独立的 loading 气泡
                     context.addLoadingIndicator();
+                    // 同步发送按钮状态
+                    if (context.setSendButtonLoading) {
+                        context.setSendButtonLoading(true);
+                    }
                 } else {
                     // 无活跃生成，清理全局 typing 状态，避免幽灵 loading
                     store.state.isTyping = false;
                     store.state.typingConversationId = null;
                     store.state.typingMessageId = null;
                     store.persist();
+                    // 同步发送按钮状态
+                    if (context.setSendButtonLoading) {
+                        context.setSendButtonLoading(false);
+                    }
+                }
+            } else {
+                // 当前对话没有进行中的生成，确保按钮状态正确
+                if (context.setSendButtonLoading) {
+                    context.setSendButtonLoading(false);
                 }
             }
         } else {
             if (context.clearMessages) context.clearMessages();
             // 清空header
             updateHeader(null);
+            // 没有活跃对话时，确保按钮状态正确
+            if (context.setSendButtonLoading) {
+                context.setSendButtonLoading(false);
+            }
         }
         
         // 更新对话列表（仅显示当前面具的对话）
