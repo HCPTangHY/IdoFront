@@ -22,7 +22,7 @@
         service = window.IdoFront.service;
         utils = window.IdoFront.utils;
         
-        // 监听思维链完成事件，存储时间到 metadata
+        // 监听思维链完成事件，存储时间到消息顶层
         if (context && context.events) {
             context.events.on('reasoning:completed', (data) => {
                 const { messageId, duration } = data;
@@ -31,11 +31,8 @@
                 
                 const message = conv.messages.find(m => m.id === messageId);
                 if (message && message.reasoning) {
-                    // 初始化或更新 metadata
-                    if (!message.metadata) {
-                        message.metadata = {};
-                    }
-                    message.metadata.reasoningDuration = duration;
+                    // 直接存储到消息顶层
+                    message.reasoningDuration = duration;
                     
                     // 持久化
                     store.persist();
@@ -83,11 +80,9 @@
             plugin: null
         };
 
-        // 如果有附件，保存到 metadata
+        // 如果有附件，保存到消息顶层
         if (attachments && attachments.length > 0) {
-            userMessage.metadata = {
-                attachments: attachments
-            };
+            userMessage.attachments = attachments;
         }
 
         store.addMessageToConversation(conv.id, userMessage);
@@ -129,7 +124,7 @@
 
         // 保存原始内容和附件
         const originalContent = targetMsg.content;
-        const originalAttachments = targetMsg.metadata?.attachments || [];
+        const originalAttachments = targetMsg.attachments || [];
         
         // 编辑中的附件列表
         let editingAttachments = JSON.parse(JSON.stringify(originalAttachments));
@@ -282,10 +277,9 @@
             // 更新消息内容
             const updateData = { content: newContent };
             if (editingAttachments.length > 0) {
-                updateData.metadata = { attachments: editingAttachments };
-            } else if (targetMsg.metadata) {
-                updateData.metadata = { ...targetMsg.metadata };
-                delete updateData.metadata.attachments;
+                updateData.attachments = editingAttachments;
+            } else {
+                updateData.attachments = null;
             }
             
             store.updateMessage(conv.id, messageId, updateData);
@@ -603,9 +597,18 @@
                 content: m.content
             };
             
-            // 如果消息有附件元数据，添加到消息中
+            // 传递附件和metadata给渠道适配器
+            if (m.attachments && m.attachments.length > 0) {
+                if (!msg.metadata) msg.metadata = {};
+                msg.metadata.attachments = m.attachments;
+            }
+            
+            // 传递渠道特有的 metadata（如 Gemini 的 thoughtSignature）
             if (m.metadata) {
-                msg.metadata = m.metadata;
+                msg.metadata = {
+                    ...(msg.metadata || {}),
+                    ...m.metadata
+                };
             }
             
             messagesPayload.push(msg);
@@ -624,20 +627,14 @@
                 // 精简实际对话消息：仅对触发本次生成的用户消息保留附件的元信息（去除 dataUrl）
                 conv.messages.forEach(m => {
                     const out = { role: m.role, content: m.content };
-                    if (m.metadata) {
-                        const meta = { ...m.metadata };
-                        if (Array.isArray(meta.attachments)) {
-                            if (m.id === relatedUserMessageId) {
-                                meta.attachments = meta.attachments.map(att => ({
-                                    name: att.name,
-                                    type: att.type,
-                                    size: att.size
-                                }));
-                            } else {
-                                delete meta.attachments;
-                            }
+                    if (m.attachments && Array.isArray(m.attachments)) {
+                        if (m.id === relatedUserMessageId) {
+                            out.attachments = m.attachments.map(att => ({
+                                name: att.name,
+                                type: att.type,
+                                size: att.size
+                            }));
                         }
-                        out.metadata = meta;
                     }
                     sanitizedMessages.push(out);
                 });
@@ -660,6 +657,14 @@
                 });
         
                 // 3. Call Service with persona parameters + 会话级别覆写（流式 / 思考预算）
+                
+                // 在外层作用域定义变量，确保在 catch 和 finally 块中可访问
+                let assistantMessage = null;
+                let fullContent = '';
+                let fullReasoning = null;
+                // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
+                let streamEnded = false;
+                
                 try {
                     // 判断当前模型是否为启用思考预算的模型（暂仅识别名称中包含 gpt-5）
                     const isReasoningModel = typeof selectedModel === 'string'
@@ -703,13 +708,6 @@
                         }
                         channelConfig.paramsOverride.reasoning_effort = effort;
                     }
-                    
-                    // 在外层作用域定义变量，确保在 catch 和 finally 块中可访问
-                    let assistantMessage = null;
-                    let fullContent = '';
-                    let fullReasoning = null;
-                    // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
-                    let streamEnded = false;
 
             const onUpdate = (data) => {
                 // 如果流式已结束，忽略后续延迟到达的更新
@@ -736,9 +734,13 @@
                 fullContent = currentContent;
                 fullReasoning = currentReasoning;
                 
-                // 从当前元数据中提取附件（例如 Gemini inlineData 转换的图片）
+                // 从流式更新数据中提取附件（渠道适配器会直接返回在顶层或 metadata 中）
                 let currentAttachments = null;
-                if (currentMetadata && Array.isArray(currentMetadata.attachments)) {
+                if (data.attachments && Array.isArray(data.attachments)) {
+                    // 渠道适配器直接在顶层返回 attachments
+                    currentAttachments = data.attachments;
+                } else if (currentMetadata && Array.isArray(currentMetadata.attachments)) {
+                    // 兼容：某些渠道可能在 metadata 中返回
                     currentAttachments = currentMetadata.attachments;
                 }
                 
@@ -756,6 +758,7 @@
                     assistantMessage = addAssistantMessage(conv.id, {
                         content: fullContent,
                         reasoning: fullReasoning,
+                        attachments: currentAttachments,
                         metadata: currentMetadata
                     });
 
@@ -786,9 +789,13 @@
                         updatePayload.streaming = true;
                         context.updateLastMessage(updatePayload);
                     }
+                    // 更新助手消息的内容
                     assistantMessage.content = fullContent;
                     if (fullReasoning) {
                         assistantMessage.reasoning = fullReasoning;
+                    }
+                    if (currentAttachments && currentAttachments.length > 0) {
+                        assistantMessage.attachments = currentAttachments;
                     }
                     if (currentMetadata) {
                         assistantMessage.metadata = currentMetadata;
@@ -857,9 +864,11 @@
                 const reasoning = choice?.message?.reasoning_content || null;
                 const metadata = choice?.message?.metadata || null;
                 
+                const attachments = choice?.message?.attachments || null;
                 addAssistantMessage(conv.id, {
                     content,
                     reasoning,
+                    attachments,
                     metadata
                 });
                 fullContent = content;
@@ -938,12 +947,8 @@
             content = contentOrObj.content || '';
             reasoning = contentOrObj.reasoning || null;
             metadata = contentOrObj.metadata || null;
-        }
-        
-        // 从 metadata 中提取附件（用于 Gemini 等渠道返回的图片），
-        // 让 UI 层以 DOM <img> 方式渲染，而不是依赖 Markdown 图片语法。
-        if (metadata && Array.isArray(metadata.attachments)) {
-            attachments = metadata.attachments;
+            // 直接从顶层提取 attachments
+            attachments = contentOrObj.attachments || null;
         }
         
         const msg = {
@@ -958,6 +963,10 @@
         if (reasoning) {
             msg.reasoning = reasoning;
         }
+        if (attachments && attachments.length > 0) {
+            msg.attachments = attachments;
+        }
+        // 持久化 metadata（框架层不关心具体内容，直接存储）
         if (metadata) {
             msg.metadata = metadata;
         }

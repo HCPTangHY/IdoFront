@@ -237,16 +237,25 @@
                     this._persistTimer = setTimeout(() => {
                         this._persistTimer = null;
                         this._lastPersistAt = Date.now();
-                        const snap = this._pendingSnapshot;
-                        this._pendingSnapshot = null;
-                        doSave(snap);
+                        // 关键修复：保存当前快照的引用，然后只有当 _pendingSnapshot 仍然是这个引用时才清空
+                        const snapToSave = this._pendingSnapshot;
+                        if (this._pendingSnapshot === snapToSave) {
+                            this._pendingSnapshot = null;
+                        }
+                        // 防御性检查：确保不会保存 null
+                        if (snapToSave) {
+                            doSave(snapToSave);
+                        }
                     }, THROTTLE_MS);
                 }
             } else {
                 this._lastPersistAt = now;
-                const snap = this._pendingSnapshot;
+                const snapToSave = this._pendingSnapshot;
                 this._pendingSnapshot = null;
-                doSave(snap);
+                // 防御性检查：确保不会保存 null
+                if (snapToSave) {
+                    doSave(snapToSave);
+                }
             }
     
             // 通知所有订阅者：状态已更新（单一数据源）

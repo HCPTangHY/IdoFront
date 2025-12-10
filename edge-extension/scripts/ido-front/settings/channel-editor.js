@@ -14,8 +14,11 @@
      * @param {Object|null} channel - 要编辑的渠道对象，null 表示新增
      * @param {Object} context - Framework 实例
      * @param {Object} store - Store 实例
+     * @param {Object} options - 可选配置
+     * @param {Function} options.onSave - 保存后的回调函数
+     * @param {boolean} options.keepPanelOpen - 保存后是否保持面板打开
      */
-    window.IdoFront.channelEditor.open = function(channel, context, store) {
+    window.IdoFront.channelEditor.open = function(channel, context, store, options = {}) {
         if (!context || !context.setCustomPanel) return;
 
         context.setCustomPanel('right', (container) => {
@@ -755,13 +758,22 @@
                 
                 store.saveChannels(updatedChannels);
                 
-                // 关闭编辑面板
-                context.setCustomPanel('right', null);
-                context.togglePanel('right', false);
-                
                 // 触发渠道列表刷新事件
                 if (store.events) {
                     store.events.emit('channels:updated');
+                }
+                
+                // 根据配置决定保存后的行为
+                if (options.onSave && typeof options.onSave === 'function') {
+                    // 如果提供了自定义回调，执行回调
+                    options.onSave();
+                } else if (options.keepPanelOpen) {
+                    // 如果需要保持面板打开，清空自定义面板内容让框架恢复默认面板
+                    context.setCustomPanel('right', null);
+                } else {
+                    // 默认行为：关闭面板
+                    context.setCustomPanel('right', null);
+                    context.togglePanel('right', false);
                 }
             };
 

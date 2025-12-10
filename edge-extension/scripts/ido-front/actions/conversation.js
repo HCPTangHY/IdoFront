@@ -141,14 +141,14 @@
                     payload.reasoning = msg.reasoning;
                     
                     // 添加存储的思维链时间（如果存在）
-                    if (msg.metadata && msg.metadata.reasoningDuration !== undefined) {
-                        payload.reasoningDuration = msg.metadata.reasoningDuration;
+                    if (msg.reasoningDuration !== undefined) {
+                        payload.reasoningDuration = msg.reasoningDuration;
                     }
                 }
                 
                 // 添加附件信息（如果存在）
-                if (msg.metadata && msg.metadata.attachments) {
-                    payload.attachments = msg.metadata.attachments;
+                if (msg.attachments) {
+                    payload.attachments = msg.attachments;
                 }
                 
                 // 批量渲染：所有消息都不触发滚动，使用 fragment 作为目标容器

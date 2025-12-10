@@ -18,6 +18,20 @@
         store.events.on('updated', () => {
             updateButtonState();
         });
+        
+        // 监听渠道更新事件，自动刷新模型选择面板
+        store.events.on('channels:updated', () => {
+            // 如果模型选择面板当前是打开的，则刷新它
+            const rightPanel = context.panels?.right;
+            if (rightPanel && rightPanel.visible) {
+                // 检查当前显示的是否是模型选择面板
+                const panelContainer = document.querySelector('[data-panel="right"] .ido-panel__content');
+                if (panelContainer) {
+                    // 重新渲染模型选择面板
+                    openModelPanel();
+                }
+            }
+        });
     };
 
     window.IdoFront.modelSelector.render = function(container) {
@@ -155,6 +169,15 @@
         channelHeader.style.paddingBottom = 'var(--ido-spacing-sm)';
         channelHeader.style.borderBottom = '1px solid var(--ido-color-border)';
         channelHeader.style.marginBottom = 'var(--ido-spacing-sm)';
+        channelHeader.style.display = 'flex';
+        channelHeader.style.alignItems = 'center';
+        channelHeader.style.justifyContent = 'space-between';
+        
+        // 左侧：渠道名称和类型
+        const leftGroup = document.createElement('div');
+        leftGroup.style.display = 'flex';
+        leftGroup.style.alignItems = 'center';
+        leftGroup.style.gap = 'var(--ido-spacing-sm)';
         
         const channelName = document.createElement('span');
         channelName.style.fontWeight = '500';
@@ -165,8 +188,30 @@
         channelBadge.className = 'ido-badge ido-badge--primary';
         channelBadge.textContent = channel.type;
         
-        channelHeader.appendChild(channelName);
-        channelHeader.appendChild(channelBadge);
+        leftGroup.appendChild(channelName);
+        leftGroup.appendChild(channelBadge);
+        
+        // 右侧：编辑按钮
+        const editBtn = document.createElement('button');
+        editBtn.className = 'ido-icon-btn';
+        editBtn.title = '编辑渠道';
+        editBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">edit</span>';
+        editBtn.onclick = (e) => {
+            e.stopPropagation();
+            // 打开渠道编辑器，保存后返回到模型选择面板
+            const channelEditor = window.IdoFront.channelEditor;
+            if (channelEditor && channelEditor.open) {
+                channelEditor.open(channel, context, store, {
+                    onSave: () => {
+                        // 保存后重新打开模型选择面板
+                        openModelPanel();
+                    }
+                });
+            }
+        };
+        
+        channelHeader.appendChild(leftGroup);
+        channelHeader.appendChild(editBtn);
         block.appendChild(channelHeader);
         
         // Models List

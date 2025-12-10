@@ -9,14 +9,15 @@
     const registry = window.IdoFront.channelRegistry;
     const CHANNEL_ID = 'gemini';
 
-     // Helper: Convert Gemini parts to displayable content, reasoning and binary attachments
+     // Helper: Convert Gemini parts to displayable content, reasoning, attachments and thoughtSignature
     function partsToContent(parts) {
-        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null };
+        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null, thoughtSignature: null };
         
         let content = '';
         let reasoning = '';
         const attachments = [];
         let imageIndex = 1;
+        let thoughtSignature = null;
         
         for (const part of parts) {
             if (part.text) {
@@ -52,12 +53,17 @@
                     });
                 }
             }
+            // 提取 thoughtSignature（per-part 级别，但对于简单文本对话通常只有一个）
+            if (part.thoughtSignature) {
+                thoughtSignature = part.thoughtSignature;
+            }
         }
         
         return {
             content,
             reasoning: reasoning || null,
-            attachments: attachments.length > 0 ? attachments : null
+            attachments: attachments.length > 0 ? attachments : null,
+            thoughtSignature: thoughtSignature
         };
     }
 
@@ -104,53 +110,75 @@
 
         for (const msg of messages) {
             if (msg.role === 'system') {
-                // System instruction - check metadata first, fallback to content
-                const geminiData = msg.metadata?.gemini;
+                // System instruction - always use text content
                 systemInstruction = {
-                    parts: geminiData?.parts || [{ text: msg.content || '' }]
+                    parts: [{ text: msg.content || '' }]
                 };
             } else {
                 const role = msg.role === 'assistant' ? 'model' : 'user';
-                const geminiData = msg.metadata?.gemini;
                 
                 let parts = [];
                 
-                // 如果有 gemini 元数据，直接使用
-                if (geminiData?.parts) {
-                    parts = geminiData.parts;
-                } else {
-                    // 否则构建 parts
-                    // 1. 添加文本内容
-                    if (msg.content) {
-                        parts.push({ text: msg.content });
-                    }
-                    
-                    // 2. 添加附件（仅用户消息）
-                    if (role === 'user' && msg.metadata?.attachments) {
-                        for (const attachment of msg.metadata.attachments) {
-                            if (attachment.type && attachment.type.startsWith('image/')) {
-                                // 提取 base64 数据
-                                const base64Data = attachment.dataUrl.split(',')[1];
-                                parts.push({
-                                    inlineData: {
-                                        mimeType: attachment.type,
-                                        data: base64Data
-                                    }
-                                });
+                // 从 metadata 中读取 thoughtSignature（仅对 assistant/model 消息）
+                const thoughtSig = (role === 'model' && msg.metadata?.gemini?.thoughtSignature)
+                    ? msg.metadata.gemini.thoughtSignature
+                    : null;
+                
+                // 构建 parts：从消息顶层字段读取
+                
+                // 1. 添加附件（用户消息或助手消息，从消息顶层的 attachments 读取）
+                if (msg.attachments && Array.isArray(msg.attachments)) {
+                    for (const attachment of msg.attachments) {
+                        if (attachment.type && attachment.type.startsWith('image/')) {
+                            // 提取 base64 数据
+                            const base64Data = attachment.dataUrl.split(',')[1];
+                            const part = {
+                                inlineData: {
+                                    mimeType: attachment.type,
+                                    data: base64Data
+                                }
+                            };
+                            // thought_signature 与 inlineData 平级
+                            if (thoughtSig) {
+                                part.thought_signature = thoughtSig;
                             }
+                            parts.push(part);
                         }
                     }
+                } else if (msg.metadata?.attachments && Array.isArray(msg.metadata.attachments)) {
+                    // 兼容旧数据：从 metadata.attachments 读取
+                    for (const attachment of msg.metadata.attachments) {
+                        if (attachment.type && attachment.type.startsWith('image/')) {
+                            const base64Data = attachment.dataUrl.split(',')[1];
+                            const part = {
+                                inlineData: {
+                                    mimeType: attachment.type,
+                                    data: base64Data
+                                }
+                            };
+                            // thought_signature 与 inlineData 平级
+                            if (thoughtSig) {
+                                part.thought_signature = thoughtSig;
+                            }
+                            parts.push(part);
+                        }
+                    }
+                }
+                
+                // 2. 添加文本内容（可能为空，Gemini 允许纯图片消息）
+                if (msg.content) {
+                    const part = { text: msg.content };
+                    // thought_signature 与 text 平级
+                    if (thoughtSig) {
+                        part.thought_signature = thoughtSig;
+                    }
+                    parts.push(part);
                 }
                 
                 const geminiMsg = {
                     role: role,
                     parts: parts
                 };
-                
-                // Include thoughtSignature if present (for assistant messages)
-                if (geminiData?.thoughtSignature && role === 'model') {
-                    geminiMsg.thoughtSignature = geminiData.thoughtSignature;
-                }
                 
                 contents.push(geminiMsg);
             }
@@ -299,23 +327,18 @@
                                             accumulatedParts = accumulatedParts.concat(newParts);
                                             lastThoughtSignature = thoughtSignature;
                                             
-                                            const { content, reasoning, attachments } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
                                             
                                             const updateData = {
                                                 content: content,
                                                 reasoning: reasoning,
+                                                attachments: attachments,
                                                 metadata: {
                                                     gemini: {
-                                                        parts: accumulatedParts,
-                                                        thoughtSignature: thoughtSignature
+                                                        thoughtSignature: extractedSignature || thoughtSignature
                                                     }
                                                 }
                                             };
-                                            
-                                            // 将图片作为附件挂到 metadata.attachments 上，交给上层以 DOM 方式渲染
-                                            if (attachments && attachments.length > 0) {
-                                                updateData.metadata.attachments = attachments;
-                                            }
                                             
                                             // 传递 finishReason 给上层，用于判断流式是否结束
                                             if (lastFinishReason) {
@@ -325,21 +348,18 @@
                                             onUpdate(updateData);
                                         } else if (lastFinishReason) {
                                             // 收到 finishReason 但没有新内容，仍需通知上层流式已结束
-                                            const { content, reasoning, attachments } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
                                             const updateData = {
                                                 content: content,
                                                 reasoning: reasoning,
                                                 finishReason: lastFinishReason,
+                                                attachments: attachments,
                                                 metadata: {
                                                     gemini: {
-                                                        parts: accumulatedParts,
-                                                        thoughtSignature: lastThoughtSignature
+                                                        thoughtSignature: extractedSignature || lastThoughtSignature
                                                     }
                                                 }
                                             };
-                                            if (attachments && attachments.length > 0) {
-                                                updateData.metadata.attachments = attachments;
-                                            }
                                             onUpdate(updateData);
                                         }
                                     } catch (e) {
@@ -353,7 +373,7 @@
                         throw streamError;
                     }
 
-                    let { content, reasoning, attachments } = partsToContent(accumulatedParts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
                     
                     // 处理非正常结束的情况，添加警告提示
                     const finishWarning = getFinishReasonWarning(lastFinishReason);
@@ -367,21 +387,16 @@
                                 role: 'assistant',
                                 content: content,
                                 reasoning_content: reasoning,
+                                attachments: attachments,
                                 metadata: {
                                     gemini: {
-                                        parts: accumulatedParts,
-                                        thoughtSignature: lastThoughtSignature,
-                                        finishReason: lastFinishReason
+                                        thoughtSignature: extractedSignature || lastThoughtSignature
                                     }
                                 }
                             },
                             finish_reason: lastFinishReason
                         }]
                     };
-                    
-                    if (attachments && attachments.length > 0) {
-                        result.choices[0].message.metadata.attachments = attachments;
-                    }
                     
                     return result;
 
@@ -392,25 +407,12 @@
                     const parts = candidate?.content?.parts || [];
                     const thoughtSignature = candidate?.thoughtSignature;
                     const finishReason = candidate?.finishReason;
-                    let { content, reasoning, attachments } = partsToContent(parts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(parts);
                     
                     // 处理非正常结束的情况，添加警告提示
                     const finishWarning = getFinishReasonWarning(finishReason);
                     if (finishWarning) {
                         content = content ? `${content}\n\n${finishWarning}` : finishWarning;
-                    }
-                    
-                    const metadata = {
-                        gemini: {
-                            parts: parts,
-                            thoughtSignature: thoughtSignature,
-                            finishReason: finishReason
-                        }
-                    };
-                    
-                    // 将图片作为附件挂到 metadata.attachments 上，交给上层以 DOM 方式渲染
-                    if (attachments && attachments.length > 0) {
-                        metadata.attachments = attachments;
                     }
                     
                     // Mimic OpenAI response structure for compatibility
@@ -420,7 +422,12 @@
                                 role: 'assistant',
                                 content: content,
                                 reasoning_content: reasoning,
-                                metadata: metadata
+                                attachments: attachments,
+                                metadata: {
+                                    gemini: {
+                                        thoughtSignature: extractedSignature || thoughtSignature
+                                    }
+                                }
                             },
                             finish_reason: finishReason
                         }]
