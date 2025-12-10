@@ -5,6 +5,7 @@ on:
     branches:
       - main  # 可根据你的主分支名称修改为 master 或其他
       - dev   # 如果需要也可以部署 dev 分支
+  workflow_dispatch:  # 支持手动触发
 
 jobs:
   build-and-deploy:
