@@ -1,0 +1,41 @@
+name: 部署到 Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main  # 可根据你的主分支名称修改为 master 或其他
+      - dev   # 如果需要也可以部署 dev 分支
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      deployments: write
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'  # 可根据需要调整版本
+          cache: 'npm'
+      
+      - name: 安装依赖
+        run: npm ci
+      
+      - name: 构建项目
+        run: npm run build:web
+      
+      - name: 部署到 Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: idofront  # 你的 Cloudflare Pages 项目名称
+          directory: web-dist  # 构建输出目录
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref_name }}
