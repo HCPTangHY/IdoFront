@@ -10,13 +10,29 @@
   "scripts": {
     "build:web": "node build-web.js",
     "build:extension": "node pack.js",
+    "build:app": "node build-app.js",
+    "cap:init": "npx cap init IdoFront com.idofront.app --web-dir web-dist",
+    "cap:add:android": "npx cap add android",
+    "cap:sync": "npx cap sync",
+    "cap:open:android": "npx cap open android",
+    "android:build": "npm run build:web && npx cap sync android",
+    "android:build:apk": "npm run android:build && cd android && ./gradlew assembleDebug",
+    "android:build:release": "npm run android:build && cd android && ./gradlew assembleRelease",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
     "esbuild": "^0.27.0",
     "terser": "^5.44.1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/keyboard": "^6.0.0",
+    "@capacitor/splash-screen": "^6.0.0",
+    "@capacitor/status-bar": "^6.0.0"
   }
 }

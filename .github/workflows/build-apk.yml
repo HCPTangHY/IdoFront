@@ -1,0 +1,154 @@
+name: 构建 Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送 v 开头的 tag 时触发
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: 设置 Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+      
+      - name: 安装依赖
+        run: npm install
+      
+      - name: 构建 Web 版本
+        run: npm run build:web
+      
+      - name: 初始化 Capacitor Android
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+      
+      - name: 同步资源
+        run: npx cap sync android
+      
+      - name: 设置 Gradle 权限
+        run: chmod +x android/gradlew
+      
+      - name: 构建 Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+      
+      - name: 获取版本号
+        id: version
+        run: |
+          VERSION=$(node -p "require('./edge-extension/manifest.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 版本号: v$VERSION"
+      
+      - name: 重命名 APK
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          cp "android/app/build/outputs/apk/debug/app-debug.apk" "dist/IdoFront-v${VERSION}-debug.apk"
+          echo "📱 APK 文件: dist/IdoFront-v${VERSION}-debug.apk"
+          ls -lh dist/
+      
+      - name: 上传 APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IdoFront-APK
+          path: dist/*.apk
+          retention-days: 30
+      
+      # 如果是 tag 推送，创建 GitHub Release
+      - name: 创建 GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          name: IdoFront ${{ github.ref_name }}
+          body: |
+            ## IdoFront ${{ github.ref_name }}
+            
+            ### 📱 下载
+            - **Android APK** (Debug 版本): 下载下方的 APK 文件
+            - **浏览器扩展**: 下载 Extension zip 包
+            
+            ### ⚠️ 安装说明
+            **Android APK:**
+            1. 下载 APK 文件
+            2. 在 Android 设备上打开进行安装
+            3. 如果提示"未知来源"，请在设置中允许安装
+            
+            **浏览器扩展:**
+            1. 下载 Extension zip 包并解压
+            2. 打开浏览器扩展管理页面
+            3. 开启"开发者模式"
+            4. 点击"加载已解压的扩展"选择解压目录
+          files: |
+            dist/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 构建浏览器扩展包
+  build-extension:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: 获取版本号
+        id: version
+        run: |
+          VERSION=$(node -p "require('./edge-extension/manifest.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: 打包浏览器扩展
+        run: |
+          mkdir -p dist
+          cd edge-extension
+          zip -r ../dist/IdoFront-${{ github.ref_name }}-extension.zip .
+      
+      - name: 上传扩展 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IdoFront-Extension
+          path: dist/*-extension.zip
+          retention-days: 30
+      
+      - name: 添加扩展到 Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*-extension.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
