@@ -53,7 +53,7 @@ jobs:
               productName: 'IdoFront',
               files: ['electron/**/*', 'web-dist/**/*'],
               win: {
-                target: [{ target: 'nsis', arch: ['x64'] }],
+                target: 'nsis',
                 icon: 'web-dist/icons/icon-128.png'
               },
               nsis: {
@@ -61,17 +61,15 @@ jobs:
                 allowToChangeInstallationDirectory: true,
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true
-              },
-              mac: null,
-              linux: null
+              }
             };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
-          # 删除 electron 子目录的 package.json（如果存在）
-          rm -f electron/package.json
+          # 显示配置内容用于调试
+          cat package.json | grep -A 30 '"build"'
       
       - name: 构建 Windows 应用
-        run: npx electron-builder --win -o dist-electron
+        run: npx electron-builder --win --x64 -c.mac=null -c.linux=null -o dist-electron
       
       - name: 重命名输出文件
         shell: bash
