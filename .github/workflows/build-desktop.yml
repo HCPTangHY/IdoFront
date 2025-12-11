@@ -1,0 +1,136 @@
+name: 构建桌面应用
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送 v 开头的 tag 时触发
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  build-desktop:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            extension: exe
+          - os: macos-latest
+            platform: mac
+            extension: dmg
+          - os: ubuntu-latest
+            platform: linux
+            extension: AppImage
+    
+    runs-on: ${{ matrix.os }}
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: 安装依赖
+        run: npm install
+      
+      - name: 安装 Electron 打包工具
+        run: npm install --save-dev electron electron-builder
+      
+      - name: 构建 Web 版本
+        run: npm run build:web
+      
+      - name: 获取版本号
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./edge-extension/manifest.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 版本号: v$VERSION"
+      
+      - name: 创建 Electron Builder 配置
+        shell: bash
+        run: |
+          cat > electron-builder.json << 'EOF'
+          {
+            "appId": "com.idofront.app",
+            "productName": "IdoFront",
+            "directories": {
+              "output": "dist-electron"
+            },
+            "files": [
+              "electron/**/*",
+              "web-dist/**/*"
+            ],
+            "win": {
+              "target": ["nsis"],
+              "icon": "web-dist/icons/icon-128.png"
+            },
+            "nsis": {
+              "oneClick": false,
+              "allowToChangeInstallationDirectory": true,
+              "createDesktopShortcut": true,
+              "createStartMenuShortcut": true
+            },
+            "mac": {
+              "target": ["dmg"],
+              "icon": "web-dist/icons/icon-128.png",
+              "category": "public.app-category.productivity"
+            },
+            "linux": {
+              "target": ["AppImage"],
+              "icon": "web-dist/icons",
+              "category": "Utility"
+            }
+          }
+          EOF
+      
+      - name: 构建 Windows 应用
+        if: matrix.platform == 'win'
+        run: npx electron-builder --win --config electron-builder.json
+      
+      - name: 构建 macOS 应用
+        if: matrix.platform == 'mac'
+        run: npx electron-builder --mac --config electron-builder.json
+      
+      - name: 构建 Linux 应用
+        if: matrix.platform == 'linux'
+        run: npx electron-builder --linux --config electron-builder.json
+      
+      - name: 重命名输出文件
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          
+          if [ "${{ matrix.platform }}" == "win" ]; then
+            find dist-electron -name "*.exe" -exec cp {} "dist/IdoFront-v${VERSION}-win.exe" \;
+          elif [ "${{ matrix.platform }}" == "mac" ]; then
+            find dist-electron -name "*.dmg" -exec cp {} "dist/IdoFront-v${VERSION}-mac.dmg" \;
+          elif [ "${{ matrix.platform }}" == "linux" ]; then
+            find dist-electron -name "*.AppImage" -exec cp {} "dist/IdoFront-v${VERSION}-linux.AppImage" \;
+          fi
+          
+          ls -lh dist/
+      
+      - name: 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IdoFront-${{ matrix.platform }}
+          path: dist/*
+          retention-days: 30
+      
+      # 如果是 tag 推送，添加到 Release
+      - name: 添加到 Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,9 @@
+{
+  "name": "idofront",
+  "version": "1.0.0",
+  "description": "IdoFront - 大模型聊天前端",
+  "main": "main.js",
+  "author": "IdoFront Team",
+  "license": "ISC",
+  "homepage": "https://github.com/nicezhenxia/IdoFront"
+}
