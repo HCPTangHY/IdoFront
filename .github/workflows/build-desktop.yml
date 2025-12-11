@@ -39,13 +39,35 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "📦 版本号: v$VERSION"
       
-      - name: 创建 Electron Builder 配置
+      - name: 配置 Electron Builder
         shell: bash
         run: |
-          echo '{"appId":"com.idofront.app","productName":"IdoFront","files":["electron/**/*","web-dist/**/*"],"extraMetadata":{"main":"electron/main.js"},"win":{"target":["nsis"],"icon":"web-dist/icons/icon-128.png"},"nsis":{"oneClick":false,"allowToChangeInstallationDirectory":true,"createDesktopShortcut":true,"createStartMenuShortcut":true}}' > electron-builder.json
+          # 移除 package.json 中的 directories 字段（electron-builder 会误读）
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            delete pkg.directories;
+            pkg.main = 'electron/main.js';
+            pkg.build = {
+              appId: 'com.idofront.app',
+              productName: 'IdoFront',
+              files: ['electron/**/*', 'web-dist/**/*'],
+              win: {
+                target: ['nsis'],
+                icon: 'web-dist/icons/icon-128.png'
+              },
+              nsis: {
+                oneClick: false,
+                allowToChangeInstallationDirectory: true,
+                createDesktopShortcut: true,
+                createStartMenuShortcut: true
+              }
+            };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
       
       - name: 构建 Windows 应用
-        run: npx electron-builder --win --config electron-builder.json -o dist-electron
+        run: npx electron-builder --win -o dist-electron
       
       - name: 重命名输出文件
         shell: bash
