@@ -49,12 +49,12 @@ jobs:
           path: dist/*-extension.zip
           retention-days: 30
       
-      # 如果是 tag 推送，添加到 Release
+      # 当 commit message 以 v 开头时添加到 Release
       - name: 添加扩展到 Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.event.head_commit.message, 'v')
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: v${{ steps.version.outputs.version }}
           files: |
             dist/*-extension.zip
         env:
@@ -144,12 +144,12 @@ jobs:
           path: dist/*.exe
           retention-days: 30
       
-      # 如果是 tag 推送，添加到 Release
+      # 当 commit message 以 v 开头时添加到 Release
       - name: 添加到 Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.event.head_commit.message, 'v')
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: v${{ steps.version.outputs.version }}
           files: dist/*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

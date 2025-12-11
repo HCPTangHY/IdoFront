@@ -111,18 +111,20 @@ jobs:
           path: dist/*.apk
           retention-days: 30
       
-      # 如果是 tag 推送，创建 GitHub Release
+      # 当 commit message 以 v 开头时创建 Release
       - name: 创建 GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.event.head_commit.message, 'v')
         uses: softprops/action-gh-release@v1
         with:
-          name: IdoFront ${{ github.ref_name }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: IdoFront v${{ steps.version.outputs.version }}
           body: |
-            ## IdoFront ${{ github.ref_name }}
+            ## IdoFront v${{ steps.version.outputs.version }}
             
             ### 📱 下载
             - **Android APK** (Debug 版本): 下载下方的 APK 文件
             - **浏览器扩展**: 下载 Extension zip 包
+            - **Windows 桌面版**: 下载 exe 安装程序
             
             ### ⚠️ 安装说明
             **Android APK:**
