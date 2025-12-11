@@ -55,49 +55,19 @@ jobs:
       - name: 创建 Electron Builder 配置
         shell: bash
         run: |
-          cat > electron-builder.json << 'EOF'
-          {
-            "appId": "com.idofront.app",
-            "productName": "IdoFront",
-            "output": "dist-electron",
-            "files": [
-              "electron/**/*",
-              "web-dist/**/*"
-            ],
-            "win": {
-              "target": ["nsis"],
-              "icon": "web-dist/icons/icon-128.png"
-            },
-            "nsis": {
-              "oneClick": false,
-              "allowToChangeInstallationDirectory": true,
-              "createDesktopShortcut": true,
-              "createStartMenuShortcut": true
-            },
-            "mac": {
-              "target": ["dmg"],
-              "icon": "web-dist/icons/icon-128.png",
-              "category": "public.app-category.productivity"
-            },
-            "linux": {
-              "target": ["AppImage"],
-              "icon": "web-dist/icons",
-              "category": "Utility"
-            }
-          }
-          EOF
+          echo '{"appId":"com.idofront.app","productName":"IdoFront","files":["electron/**/*","web-dist/**/*"],"extraMetadata":{"main":"electron/main.js"},"win":{"target":["nsis"],"icon":"web-dist/icons/icon-128.png"},"nsis":{"oneClick":false,"allowToChangeInstallationDirectory":true,"createDesktopShortcut":true,"createStartMenuShortcut":true},"mac":{"target":["dmg"],"icon":"web-dist/icons/icon-128.png","category":"public.app-category.productivity"},"linux":{"target":["AppImage"],"icon":"web-dist/icons","category":"Utility"}}' > electron-builder.json
       
       - name: 构建 Windows 应用
         if: matrix.platform == 'win'
-        run: npx electron-builder --win --config electron-builder.json
+        run: npx electron-builder --win --config electron-builder.json -o dist-electron
       
       - name: 构建 macOS 应用
         if: matrix.platform == 'mac'
-        run: npx electron-builder --mac --config electron-builder.json
+        run: npx electron-builder --mac --config electron-builder.json -o dist-electron
       
       - name: 构建 Linux 应用
         if: matrix.platform == 'linux'
-        run: npx electron-builder --linux --config electron-builder.json
+        run: npx electron-builder --linux --config electron-builder.json -o dist-electron
       
       - name: 重命名输出文件
         shell: bash
