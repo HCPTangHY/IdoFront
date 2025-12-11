@@ -42,7 +42,7 @@ jobs:
       - name: 配置 Electron Builder
         shell: bash
         run: |
-          # 移除 package.json 中的 directories 字段（electron-builder 会误读）
+          # 移除 package.json 中的 directories 字段并配置 electron-builder
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -53,7 +53,7 @@ jobs:
               productName: 'IdoFront',
               files: ['electron/**/*', 'web-dist/**/*'],
               win: {
-                target: ['nsis'],
+                target: [{ target: 'nsis', arch: ['x64'] }],
                 icon: 'web-dist/icons/icon-128.png'
               },
               nsis: {
@@ -61,10 +61,14 @@ jobs:
                 allowToChangeInstallationDirectory: true,
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true
-              }
+              },
+              mac: null,
+              linux: null
             };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
+          # 删除 electron 子目录的 package.json（如果存在）
+          rm -f electron/package.json
       
       - name: 构建 Windows 应用
         run: npx electron-builder --win -o dist-electron
