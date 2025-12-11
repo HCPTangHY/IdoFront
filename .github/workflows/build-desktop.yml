@@ -59,9 +59,7 @@ jobs:
           {
             "appId": "com.idofront.app",
             "productName": "IdoFront",
-            "directories": {
-              "output": "dist-electron"
-            },
+            "output": "dist-electron",
             "files": [
               "electron/**/*",
               "web-dist/**/*"
