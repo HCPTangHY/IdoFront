@@ -60,7 +60,7 @@ jobs:
             - web-dist/**/*
           win:
             target: nsis
-            icon: web-dist/icons/icon-128.png
+            icon: web-dist/icons/icon-256.png
           nsis:
             oneClick: false
             allowToChangeInstallationDirectory: true
