@@ -320,7 +320,6 @@
      * 注意：主插件在输入框上方的工具栏插槽 (INPUT_TOP) 注册按钮
      * 这里注册：
      *  - 流式开关：作用于当前对话，覆盖面具的 stream 设置
-     *  - 思考预算选择：仅在模型名包含 "gpt-5" 时显示，映射为 reasoning_effort 参数
      */
     function registerHeaderActions() {
         if (!context || !store) return;
@@ -328,10 +327,7 @@
         // 内部状态：缓存当前控件引用，便于在 store 事件中更新 UI
         const headerState = {
             container: null,
-            streamBtn: null,
-            divider: null,
-            reasoningGroup: null,
-            reasoningButtons: {}
+            streamBtn: null
         };
 
         /**
@@ -375,55 +371,6 @@
                     }
                 }
             }
-
-            // ---- 思考预算：仅在 gpt-5* 模型时显示 ----
-            const reasoningGroup = headerState.reasoningGroup;
-            if (!reasoningGroup) return;
-
-            if (!conv || !conv.selectedModel) {
-                reasoningGroup.style.display = 'none';
-                if (headerState.divider) {
-                    headerState.divider.style.display = 'none';
-                }
-                return;
-            }
-
-            const modelName = String(conv.selectedModel).toLowerCase();
-            const isReasoningModel = modelName.includes('gpt-5');
-
-            if (!isReasoningModel) {
-                reasoningGroup.style.display = 'none';
-                if (headerState.divider) {
-                    headerState.divider.style.display = 'none';
-                }
-                return;
-            }
-
-            reasoningGroup.style.display = 'flex';
-            if (headerState.divider) {
-                headerState.divider.style.display = 'block';
-            }
-
-            // 当前会话的思考预算，默认 medium
-            let effort = conv.reasoningEffort || 'medium';
-            if (typeof effort === 'string') {
-                effort = effort.toLowerCase();
-            }
-            if (effort !== 'low' && effort !== 'medium' && effort !== 'high') {
-                effort = 'medium';
-            }
-
-            ['low', 'medium', 'high'].forEach((key) => {
-                const btn = headerState.reasoningButtons[key];
-                if (!btn) return;
-                btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
-                btn.classList.remove('bg-gray-50', 'text-gray-500', 'border-gray-200');
-                if (key === effort) {
-                    btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
-                } else {
-                    btn.classList.add('bg-gray-50', 'text-gray-500', 'border-gray-200');
-                }
-            });
         };
 
         // 监听全局状态变化，同步更新按钮显示（对话切换、模型变更等）
@@ -488,65 +435,9 @@
             
             container.appendChild(streamToggleWrapper);
 
-            // 垂直分隔线
-            const divider = document.createElement('div');
-            divider.className = 'h-5 w-px bg-gray-200';
-            container.appendChild(divider);
-
-            // ---- 思考预算选择控件 ----
-            const reasoningGroup = document.createElement('div');
-            reasoningGroup.className = 'flex items-center gap-1 text-[11px] text-gray-500';
-
-            const label = document.createElement('span');
-            label.className = 'text-[10px] text-gray-400';
-            label.textContent = '思考';
-
-            const createEffortBtn = (key, text, title) => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
-                btn.textContent = text;
-                btn.title = title;
-                btn.onclick = () => {
-                    if (!store || !store.getActiveConversation) return;
-                    const conv = store.getActiveConversation();
-                    if (!conv) return;
-
-                    if (typeof store.setConversationReasoningEffort === 'function') {
-                        store.setConversationReasoningEffort(conv.id, key);
-                    } else {
-                        conv.reasoningEffort = key;
-                        if (typeof store.persist === 'function') {
-                            store.persist();
-                        }
-                    }
-
-                    updateHeaderControls();
-                };
-                return btn;
-            };
-
-            const lowBtn = createEffortBtn('low', 'L', '思考预算：低 (low)');
-            const mediumBtn = createEffortBtn('medium', 'M', '思考预算：中 (medium)');
-            const highBtn = createEffortBtn('high', 'H', '思考预算：高 (high)');
-
-            reasoningGroup.appendChild(label);
-            reasoningGroup.appendChild(lowBtn);
-            reasoningGroup.appendChild(mediumBtn);
-            reasoningGroup.appendChild(highBtn);
-
-            container.appendChild(reasoningGroup);
-
             // 缓存引用并进行一次初始同步
             headerState.container = container;
             headerState.streamBtn = streamToggle;
-            headerState.divider = divider;
-            headerState.reasoningGroup = reasoningGroup;
-            headerState.reasoningButtons = {
-                low: lowBtn,
-                medium: mediumBtn,
-                high: highBtn
-            };
 
             updateHeaderControls();
 

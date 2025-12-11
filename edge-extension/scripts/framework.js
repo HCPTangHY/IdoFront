@@ -1576,6 +1576,7 @@ const Framework = (function() {
             if (reasoningContentDiv) {
                 // 同步渲染思维链Markdown，避免闪烁
                 renderMarkdownSync(reasoningContentDiv, reasoning);
+                reasoningContentDiv.removeAttribute('data-needs-markdown');
             }
         }
         
@@ -1618,6 +1619,7 @@ const Framework = (function() {
         // 更新正文内容
         if (contentSpan && lastMsg.role !== 'user' && text) {
             renderMarkdownSync(contentSpan, text);
+            contentSpan.removeAttribute('data-needs-markdown');
         } else if (contentSpan) {
             contentSpan.textContent = text;
         }

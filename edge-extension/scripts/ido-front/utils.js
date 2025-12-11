@@ -30,6 +30,27 @@
                 }
             }
             return conversation.title || 'New Chat';
+        },
+
+        /**
+         * 深度合并对象，source 的值覆盖 target（嵌套对象递归合并）
+         * @param {Object} target - 目标对象
+         * @param {Object} source - 源对象
+         * @returns {Object} 合并后的对象
+         */
+        deepMerge(target, source) {
+            if (!source || typeof source !== 'object') return target;
+            for (const key of Object.keys(source)) {
+                const sourceVal = source[key];
+                const targetVal = target[key];
+                if (sourceVal && typeof sourceVal === 'object' && !Array.isArray(sourceVal) &&
+                    targetVal && typeof targetVal === 'object' && !Array.isArray(targetVal)) {
+                    window.IdoFront.utils.deepMerge(targetVal, sourceVal);
+                } else {
+                    target[key] = sourceVal;
+                }
+            }
+            return target;
         }
         
     };

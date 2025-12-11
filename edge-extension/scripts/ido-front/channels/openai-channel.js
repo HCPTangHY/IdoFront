@@ -5,9 +5,126 @@
 (function() {
     window.IdoFront = window.IdoFront || {};
     window.IdoFront.channels = window.IdoFront.channels || {};
+    window.IdoFront.openaiChannel = window.IdoFront.openaiChannel || {};
 
     const registry = window.IdoFront.channelRegistry;
     const CHANNEL_ID = 'openai';
+    
+    // ========== OpenAI Reasoning Effort Configuration ==========
+    
+    // 存储键
+    const REASONING_RULES_STORAGE_KEY = 'ido.openai.reasoningRules';
+    
+    // 默认思考规则配置（正则表达式字符串）
+    const DEFAULT_REASONING_RULES = {
+        // 使用 reasoning_effort 的模型匹配规则
+        modelPattern: 'gpt-5|o1|o3'
+    };
+    
+    // 全局规则缓存
+    let cachedGlobalRules = null;
+    
+    // reasoning_effort 选项
+    const EFFORT_OPTIONS = [
+        { value: 'low', label: 'L', description: '思考预算：低 (low)' },
+        { value: 'medium', label: 'M', description: '思考预算：中 (medium)' },
+        { value: 'high', label: 'H', description: '思考预算：高 (high)' }
+    ];
+    
+    /**
+     * 从 Framework.storage 加载全局规则
+     * @returns {Object} 全局规则
+     */
+    function loadGlobalReasoningRules() {
+        if (cachedGlobalRules) return cachedGlobalRules;
+        
+        try {
+            if (typeof Framework !== 'undefined' && Framework.storage) {
+                const saved = Framework.storage.getItem(REASONING_RULES_STORAGE_KEY);
+                if (saved && typeof saved === 'object') {
+                    cachedGlobalRules = {
+                        modelPattern: saved.modelPattern || DEFAULT_REASONING_RULES.modelPattern
+                    };
+                    return cachedGlobalRules;
+                }
+            }
+        } catch (e) {
+            console.warn('[OpenAIChannel] Failed to load global reasoning rules:', e);
+        }
+        
+        return { ...DEFAULT_REASONING_RULES };
+    }
+    
+    /**
+     * 保存全局规则到 Framework.storage
+     * @param {Object} rules - 规则
+     */
+    function saveGlobalReasoningRules(rules) {
+        try {
+            if (typeof Framework !== 'undefined' && Framework.storage) {
+                Framework.storage.setItem(REASONING_RULES_STORAGE_KEY, rules);
+                cachedGlobalRules = { ...rules };
+            }
+        } catch (e) {
+            console.warn('[OpenAIChannel] Failed to save global reasoning rules:', e);
+        }
+    }
+    
+    /**
+     * 判断模型是否支持 reasoning_effort
+     * @param {string} modelName - 模型名称
+     * @returns {boolean}
+     */
+    function supportsReasoningEffort(modelName) {
+        if (!modelName) return false;
+        const rules = loadGlobalReasoningRules();
+        if (!rules.modelPattern) return false;
+        try {
+            const regex = new RegExp(rules.modelPattern, 'i');
+            return regex.test(modelName);
+        } catch (e) {
+            console.warn('[OpenAIChannel] Invalid reasoning model pattern:', rules.modelPattern, e);
+            return false;
+        }
+    }
+    
+    /**
+     * 获取会话的 reasoning effort
+     * @param {Object} conv - 会话对象
+     * @returns {string} 思考等级 (low/medium/high)
+     */
+    function getReasoningEffort(conv) {
+        if (!conv) return 'medium';
+        let effort = conv.reasoningEffort || 'medium';
+        if (typeof effort === 'string') {
+            effort = effort.toLowerCase();
+        }
+        if (effort !== 'low' && effort !== 'medium' && effort !== 'high') {
+            effort = 'medium';
+        }
+        return effort;
+    }
+    
+    /**
+     * 设置会话的 reasoning effort
+     * @param {Object} store - Store 实例
+     * @param {string} convId - 会话 ID
+     * @param {string} effort - 思考等级
+     */
+    function setReasoningEffort(store, convId, effort) {
+        if (!store || !convId) return;
+        
+        if (typeof store.setConversationReasoningEffort === 'function') {
+            store.setConversationReasoningEffort(convId, effort);
+        } else {
+            const conv = store.state.conversations.find(c => c.id === convId);
+            if (!conv) return;
+            conv.reasoningEffort = effort;
+            if (typeof store.persist === 'function') {
+                store.persist();
+            }
+        }
+    }
 
     const adapter = {
         /**
@@ -91,10 +208,19 @@
                 messages: formattedMessages,
                 stream: !!onUpdate
             };
+            
+            // 添加 reasoning_effort 参数
+            // message.js 会将 conv.reasoningEffort 放入 config.paramsOverride.reasoning_effort
+            if (supportsReasoningEffort(model)) {
+                const effort = config.paramsOverride?.reasoning_effort || 'medium';
+                // 同时传递两种格式以兼容不同 API 实现
+                body.reasoning_effort = effort;              // 平级格式
+                body.reasoning = { effort: effort };         // 嵌套格式
+            }
 
-            // 应用参数覆写
+            // 应用参数覆写 - 使用深度合并，避免覆盖嵌套对象
             if (config.paramsOverride && typeof config.paramsOverride === 'object') {
-                Object.assign(body, config.paramsOverride);
+                window.IdoFront.utils.deepMerge(body, config.paramsOverride);
             }
 
             try {
@@ -310,4 +436,298 @@
         // Fallback for older versions or if registry is not available
         window.IdoFront.channels[CHANNEL_ID] = adapter;
     }
+    
+    // ========== OpenAI Reasoning Effort UI Components ==========
+    
+    /**
+     * 获取 Store 实例
+     */
+    function getStore() {
+        return window.IdoFront && window.IdoFront.store ? window.IdoFront.store : null;
+    }
+    
+    /**
+     * 获取当前渠道配置
+     */
+    function getChannelConfig(store, conv) {
+        if (!store || !conv || !conv.selectedChannelId) return null;
+        return store.state.channels.find(c => c.id === conv.selectedChannelId) || null;
+    }
+    
+    /**
+     * 注册 OpenAI 思考预算 UI 插件
+     */
+    function registerReasoningEffortPlugin() {
+        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPlugin) {
+            console.warn('[OpenAIChannel] Framework API not available for UI registration');
+            return;
+        }
+        
+        const { registerPlugin, SLOTS, events } = Framework;
+        
+        if (!SLOTS || !SLOTS.INPUT_TOP) {
+            console.warn('[OpenAIChannel] INPUT_TOP slot not available');
+            return;
+        }
+        
+        const WRAPPER_ID = 'openai-reasoning-effort-wrapper';
+        
+        let storeEventRegistered = false;
+        
+        // 缓存按钮引用
+        const effortState = {
+            buttons: {}
+        };
+        
+        /**
+         * 更新思考控件的显示状态
+         */
+        function updateReasoningControls() {
+            const wrapper = document.getElementById(WRAPPER_ID);
+            if (!wrapper) return;
+            
+            const store = getStore();
+            if (!store || !store.getActiveConversation) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            const conv = store.getActiveConversation();
+            if (!conv) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            const model = conv.selectedModel;
+            if (!model) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            // 获取渠道配置，检查是否为 OpenAI 渠道
+            const channelConfig = getChannelConfig(store, conv);
+            if (!channelConfig || channelConfig.type !== 'openai') {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            // 检查模型是否支持 reasoning_effort
+            if (!supportsReasoningEffort(model)) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            wrapper.style.display = 'flex';
+            
+            // 更新按钮状态
+            const currentEffort = getReasoningEffort(conv);
+            ['low', 'medium', 'high'].forEach(key => {
+                const btn = effortState.buttons[key];
+                if (!btn) return;
+                btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
+                btn.classList.remove('bg-gray-50', 'text-gray-500', 'border-gray-200');
+                if (key === currentEffort) {
+                    btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
+                } else {
+                    btn.classList.add('bg-gray-50', 'text-gray-500', 'border-gray-200');
+                }
+            });
+        }
+        
+        /**
+         * 确保 store 事件监听器已注册
+         */
+        function ensureStoreEventRegistered() {
+            if (storeEventRegistered) return;
+            
+            const store = getStore();
+            if (store && store.events && typeof store.events.on === 'function') {
+                store.events.on('updated', updateReasoningControls);
+                storeEventRegistered = true;
+                setTimeout(() => updateReasoningControls(), 0);
+            } else {
+                if (!ensureStoreEventRegistered.retryCount) {
+                    ensureStoreEventRegistered.retryCount = 0;
+                }
+                ensureStoreEventRegistered.retryCount++;
+                if (ensureStoreEventRegistered.retryCount < 50) {
+                    setTimeout(ensureStoreEventRegistered, 100);
+                }
+            }
+        }
+        
+        function ensureFrameworkEventRegistered() {
+            if (typeof Framework !== 'undefined' && Framework.events) {
+                Framework.events.on('mode:changed', (data) => {
+                    if (data && data.mode === 'chat') {
+                        setTimeout(() => updateReasoningControls(), 50);
+                    }
+                });
+            }
+        }
+        
+        // 注册插件
+        registerPlugin(SLOTS.INPUT_TOP, 'openai-reasoning-effort', {
+            meta: {
+                id: 'openai-reasoning-effort',
+                name: 'OpenAI 思考预算',
+                description: '为支持 reasoning_effort 的模型提供思考预算配置',
+                version: '1.0.0',
+                icon: 'psychology',
+                author: 'IdoFront',
+                source: 'builtin'
+            },
+            init: function() {
+                ensureStoreEventRegistered();
+                ensureFrameworkEventRegistered();
+            },
+            renderer: function() {
+                ensureStoreEventRegistered();
+                
+                const wrapper = document.createElement('div');
+                wrapper.id = WRAPPER_ID;
+                wrapper.className = 'flex items-center gap-2';
+                wrapper.style.display = 'none';
+                
+                // 分隔线
+                const divider = document.createElement('div');
+                divider.className = 'h-5 w-px bg-gray-200';
+                wrapper.appendChild(divider);
+                
+                // 控件组
+                const controlGroup = document.createElement('div');
+                controlGroup.className = 'flex items-center gap-1';
+                
+                const label = document.createElement('span');
+                label.className = 'text-[10px] text-gray-400';
+                label.textContent = '思考';
+                controlGroup.appendChild(label);
+                
+                // L/M/H 三按钮组
+                const createEffortBtn = (key, text, title) => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
+                    btn.textContent = text;
+                    btn.title = title;
+                    btn.onclick = () => {
+                        const store = getStore();
+                        if (!store || !store.getActiveConversation) return;
+                        const conv = store.getActiveConversation();
+                        if (!conv) return;
+                        
+                        setReasoningEffort(store, conv.id, key);
+                        updateReasoningControls();
+                    };
+                    return btn;
+                };
+                
+                const lowBtn = createEffortBtn('low', 'L', '思考预算：低 (low)');
+                const mediumBtn = createEffortBtn('medium', 'M', '思考预算：中 (medium)');
+                const highBtn = createEffortBtn('high', 'H', '思考预算：高 (high)');
+                
+                controlGroup.appendChild(lowBtn);
+                controlGroup.appendChild(mediumBtn);
+                controlGroup.appendChild(highBtn);
+                
+                effortState.buttons = {
+                    low: lowBtn,
+                    medium: mediumBtn,
+                    high: highBtn
+                };
+                
+                wrapper.appendChild(controlGroup);
+                
+                setTimeout(() => updateReasoningControls(), 0);
+                setTimeout(() => updateReasoningControls(), 100);
+                setTimeout(() => updateReasoningControls(), 300);
+                
+                return wrapper;
+            }
+        });
+    }
+    
+    // 注册 UI 插件
+    registerReasoningEffortPlugin();
+    
+    // ========== 通用设置分区注册 ==========
+    
+    function registerOpenAIReasoningSettingsSection() {
+        if (!window.IdoFront || !window.IdoFront.settingsManager ||
+            typeof window.IdoFront.settingsManager.registerGeneralSection !== 'function') {
+            return;
+        }
+        
+        try {
+            const sm = window.IdoFront.settingsManager;
+            sm.registerGeneralSection({
+                id: 'openai-reasoning',
+                title: 'OpenAI 思考功能',
+                description: '配置 OpenAI 模型的 reasoning_effort 匹配规则（正则表达式）',
+                icon: 'psychology',
+                order: 19,
+                render: function(container) {
+                    container.innerHTML = '';
+                    
+                    const rules = loadGlobalReasoningRules();
+                    
+                    const formGroup = document.createElement('div');
+                    formGroup.className = 'ido-form-group';
+                    
+                    const labelEl = document.createElement('div');
+                    labelEl.className = 'ido-form-label';
+                    labelEl.textContent = '模型匹配规则 (reasoning_effort)';
+                    formGroup.appendChild(labelEl);
+                    
+                    const hintEl = document.createElement('div');
+                    hintEl.className = 'text-[10px] text-gray-500 mb-1';
+                    hintEl.textContent = '匹配的模型将显示 L/M/H 思考预算按钮';
+                    formGroup.appendChild(hintEl);
+                    
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.className = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors font-mono';
+                    input.value = rules.modelPattern;
+                    input.placeholder = 'gpt-5|o1|o3';
+                    
+                    input.onchange = () => {
+                        const currentRules = loadGlobalReasoningRules();
+                        currentRules.modelPattern = input.value || DEFAULT_REASONING_RULES.modelPattern;
+                        saveGlobalReasoningRules(currentRules);
+                    };
+                    
+                    formGroup.appendChild(input);
+                    container.appendChild(formGroup);
+                    
+                    const helpText = document.createElement('div');
+                    helpText.className = 'text-[10px] text-gray-400 mt-3';
+                    helpText.innerHTML = '提示：使用正则表达式匹配模型名称。例如 <code class="bg-gray-100 px-1 rounded">gpt-5|o1|o3</code> 匹配 GPT-5、o1、o3 系列模型。';
+                    container.appendChild(helpText);
+                }
+            });
+        } catch (e) {
+            console.warn('[OpenAIChannel] registerOpenAIReasoningSettingsSection error:', e);
+        }
+    }
+    
+    registerOpenAIReasoningSettingsSection();
+    
+    if (typeof document !== 'undefined') {
+        try {
+            document.addEventListener('IdoFrontSettingsReady', function() {
+                registerOpenAIReasoningSettingsSection();
+            });
+        } catch (e) {
+            console.warn('[OpenAIChannel] attach IdoFrontSettingsReady listener error:', e);
+        }
+    }
+    
+    // 暴露工具函数
+    window.IdoFront.openaiChannel.supportsReasoningEffort = supportsReasoningEffort;
+    window.IdoFront.openaiChannel.getReasoningEffort = getReasoningEffort;
+    window.IdoFront.openaiChannel.setReasoningEffort = setReasoningEffort;
+    window.IdoFront.openaiChannel.loadGlobalReasoningRules = loadGlobalReasoningRules;
+    window.IdoFront.openaiChannel.saveGlobalReasoningRules = saveGlobalReasoningRules;
+    window.IdoFront.openaiChannel.EFFORT_OPTIONS = EFFORT_OPTIONS;
+    window.IdoFront.openaiChannel.DEFAULT_REASONING_RULES = DEFAULT_REASONING_RULES;
 })();
