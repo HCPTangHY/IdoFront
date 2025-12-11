@@ -96,7 +96,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          cp "android/app/build/outputs/apk/debug/app.apk" "dist/IdoFront-v${VERSION}.apk"
+          cp "android/app/build/outputs/apk/debug/app-debug.apk" "dist/IdoFront-v${VERSION}.apk"
           echo "📱 APK 文件: dist/IdoFront-v${VERSION}.apk"
           ls -lh dist/
       
