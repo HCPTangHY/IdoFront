@@ -31,6 +31,79 @@
         { value: 'high', label: 'H', description: '思考预算：高 (high)' }
     ];
     
+    // ========== Gemini 模型适配（通过 OpenAI 兼容接口调用 Gemini）==========
+    
+    /**
+     * 获取 Gemini 渠道的思考规则
+     * @returns {Object|null} Gemini 思考规则，若 Gemini 渠道未加载则返回 null
+     */
+    function getGeminiThinkingRules() {
+        if (window.IdoFront && window.IdoFront.geminiChannel &&
+            typeof window.IdoFront.geminiChannel.loadGlobalThinkingRules === 'function') {
+            return window.IdoFront.geminiChannel.loadGlobalThinkingRules();
+        }
+        return null;
+    }
+    
+    /**
+     * 检查模型是否匹配 Gemini Budget 模式
+     * @param {string} modelName - 模型名称
+     * @returns {boolean}
+     */
+    function isGeminiBudgetModel(modelName) {
+        if (!modelName) return false;
+        const rules = getGeminiThinkingRules();
+        if (!rules || !rules.budgetModelPattern) return false;
+        try {
+            const regex = new RegExp(rules.budgetModelPattern, 'i');
+            return regex.test(modelName);
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    /**
+     * 检查模型是否匹配 Gemini Level 模式
+     * @param {string} modelName - 模型名称
+     * @returns {boolean}
+     */
+    function isGeminiLevelModel(modelName) {
+        if (!modelName) return false;
+        const rules = getGeminiThinkingRules();
+        if (!rules || !rules.levelModelPattern) return false;
+        try {
+            const regex = new RegExp(rules.levelModelPattern, 'i');
+            return regex.test(modelName);
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    /**
+     * 检查模型是否是 Gemini 思考模型
+     * @param {string} modelName - 模型名称
+     * @returns {boolean}
+     */
+    function isGeminiThinkingModel(modelName) {
+        return isGeminiBudgetModel(modelName) || isGeminiLevelModel(modelName);
+    }
+    
+    /**
+     * 获取当前会话的 Gemini 思考配置
+     * @returns {Object} 思考配置 { budget, level }
+     */
+    function getGeminiThinkingConfig() {
+        if (window.IdoFront && window.IdoFront.geminiChannel &&
+            typeof window.IdoFront.geminiChannel.getThinkingConfig === 'function') {
+            const store = window.IdoFront && window.IdoFront.store;
+            if (store && typeof store.getActiveConversation === 'function') {
+                const conv = store.getActiveConversation();
+                return window.IdoFront.geminiChannel.getThinkingConfig(conv);
+            }
+        }
+        return { budget: -1, level: 'none' };
+    }
+    
     /**
      * 从 Framework.storage 加载全局规则
      * @returns {Object} 全局规则
@@ -216,6 +289,43 @@
                 // 同时传递两种格式以兼容不同 API 实现
                 body.reasoning_effort = effort;              // 平级格式
                 body.reasoning = { effort: effort };         // 嵌套格式
+            }
+            
+            // ========== Gemini 模型思考配置适配 ==========
+            // 通过 OpenAI 兼容接口调用 Gemini 时，使用 extra_body.google.thinking_config 传递原生参数
+            // 这比简单的 reasoning_effort 映射更灵活，保持与 Gemini 渠道相同的精细控制能力
+            if (isGeminiThinkingModel(model)) {
+                const thinkingCfg = getGeminiThinkingConfig();
+                const thinkingConfig = {};
+                
+                if (isGeminiBudgetModel(model)) {
+                    // Budget 模式 (Gemini 2.5 系列)：使用 thinking_budget 数值
+                    const budget = thinkingCfg.budget;
+                    if (budget !== -1) {
+                        // -1 表示动态思考，不设置 thinking_budget 让 Gemini 自动决定
+                        thinkingConfig.thinking_budget = budget;
+                    }
+                    // 启用思考摘要
+                    thinkingConfig.include_thoughts = true;
+                } else if (isGeminiLevelModel(model)) {
+                    // Level 模式 (Gemini 3 系列)：使用 thinking_level
+                    const level = thinkingCfg.level;
+                    if (level !== 'none') {
+                        thinkingConfig.thinking_level = level;
+                        // 启用思考摘要（仅当非 none 时）
+                        thinkingConfig.include_thoughts = true;
+                    }
+                }
+                
+                // 如果有配置，添加到 extra_body.google
+                if (Object.keys(thinkingConfig).length > 0) {
+                    if (!body.extra_body) {
+                        body.extra_body = {};
+                    }
+                    body.extra_body.google = {
+                        thinking_config: thinkingConfig
+                    };
+                }
             }
 
             // 应用参数覆写 - 使用深度合并，避免覆盖嵌套对象
@@ -649,6 +759,497 @@
     
     // 注册 UI 插件
     registerReasoningEffortPlugin();
+    
+    // ========== OpenAI 渠道下 Gemini 模型思考配置 UI ==========
+    // 通过 OpenAI 兼容接口调用 Gemini 时，显示独立的思考配置控件
+    // 数据存储复用 Gemini 渠道的 conv.metadata.gemini，但 UI 独立渲染
+    
+    function registerGeminiThinkingPlugin() {
+        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPlugin) {
+            return;
+        }
+        
+        const { registerPlugin, SLOTS, showBottomSheet, hideBottomSheet } = Framework;
+        
+        if (!SLOTS || !SLOTS.INPUT_TOP) {
+            return;
+        }
+        
+        const WRAPPER_ID = 'openai-gemini-thinking-wrapper';
+        
+        let storeEventRegistered = false;
+        
+        // Level 模式按钮状态
+        const levelState = {
+            buttons: {}
+        };
+        
+        /**
+         * 获取 Gemini 渠道的预设和选项
+         */
+        function getGeminiBudgetPresets() {
+            if (window.IdoFront && window.IdoFront.geminiChannel && window.IdoFront.geminiChannel.BUDGET_PRESETS) {
+                return window.IdoFront.geminiChannel.BUDGET_PRESETS;
+            }
+            // 默认值（与 Gemini 渠道一致）
+            return [
+                { value: -1, label: '自动', description: '动态思考，模型自行决定' },
+                { value: 0, label: '关闭', description: '关闭思考功能' },
+                { value: 1024, label: '低', description: '1024 tokens' },
+                { value: 8192, label: '中', description: '8192 tokens' },
+                { value: 24576, label: '高', description: '24576 tokens' },
+                { value: 32768, label: '最高', description: '32768 tokens' }
+            ];
+        }
+        
+        /**
+         * 设置思考预算（调用 Gemini 渠道暴露的函数）
+         */
+        function setThinkingBudget(store, convId, budget) {
+            if (window.IdoFront && window.IdoFront.geminiChannel &&
+                typeof window.IdoFront.geminiChannel.setThinkingBudget === 'function') {
+                window.IdoFront.geminiChannel.setThinkingBudget(store, convId, budget);
+            }
+        }
+        
+        /**
+         * 设置思考等级（调用 Gemini 渠道暴露的函数）
+         */
+        function setThinkingLevel(store, convId, level) {
+            if (window.IdoFront && window.IdoFront.geminiChannel &&
+                typeof window.IdoFront.geminiChannel.setThinkingLevel === 'function') {
+                window.IdoFront.geminiChannel.setThinkingLevel(store, convId, level);
+            }
+        }
+        
+        /**
+         * 显示数值预算底部弹窗
+         */
+        function showBudgetBottomSheet(conv) {
+            const store = getStore();
+            if (!store) return;
+            
+            const BUDGET_PRESETS = getGeminiBudgetPresets();
+            
+            showBottomSheet((sheetContainer) => {
+                // Header
+                const header = document.createElement('div');
+                header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+                
+                const title = document.createElement('h3');
+                title.className = 'text-lg font-semibold text-gray-800';
+                title.textContent = 'Gemini 思考预算';
+                
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
+                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
+                closeBtn.onclick = () => hideBottomSheet();
+                
+                header.appendChild(title);
+                header.appendChild(closeBtn);
+                
+                // Body
+                const body = document.createElement('div');
+                body.className = 'flex-1 overflow-y-auto px-6 py-4';
+                
+                const thinkingCfg = getGeminiThinkingConfig();
+                let currentBudget = thinkingCfg.budget;
+                
+                // 说明文字
+                const description = document.createElement('div');
+                description.className = 'text-sm text-gray-600 mb-4';
+                description.textContent = '通过 OpenAI 兼容接口调用 Gemini 时的思考预算配置。';
+                body.appendChild(description);
+
+                // 预设按钮组
+                const presetsWrapper = document.createElement('div');
+                presetsWrapper.className = 'grid grid-cols-3 gap-3 mb-6';
+
+                const presetButtons = [];
+                BUDGET_PRESETS.forEach(preset => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'px-3 py-2.5 text-sm rounded-lg border transition-all transform hover:-translate-y-0.5 duration-200';
+                    
+                    const labelDiv = document.createElement('div');
+                    labelDiv.className = 'font-medium';
+                    labelDiv.textContent = preset.label;
+                    
+                    const descDiv = document.createElement('div');
+                    descDiv.className = 'text-[10px] mt-0.5 opacity-70';
+                    descDiv.textContent = preset.description;
+                    
+                    btn.appendChild(labelDiv);
+                    btn.appendChild(descDiv);
+                    
+                    const updateBtnStyle = () => {
+                        presetButtons.forEach(b => {
+                            b.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                            b.classList.add('bg-white', 'text-gray-700', 'border-gray-200', 'hover:border-blue-400', 'hover:shadow-sm');
+                        });
+                        if (currentBudget === preset.value) {
+                            btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200', 'hover:border-blue-400', 'hover:shadow-sm');
+                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                        }
+                    };
+                    
+                    btn.onclick = () => {
+                        currentBudget = preset.value;
+                        setThinkingBudget(store, conv.id, currentBudget);
+                        updateBtnStyle();
+                        updateSlider();
+                        updateCustomInput();
+                        updateGeminiThinkingControls();
+                    };
+                    
+                    presetButtons.push(btn);
+                    presetsWrapper.appendChild(btn);
+                });
+                body.appendChild(presetsWrapper);
+
+                // 滑槽调节区域
+                const sliderSection = document.createElement('div');
+                sliderSection.className = 'mb-6';
+                
+                const sliderTitle = document.createElement('div');
+                sliderTitle.className = 'text-sm font-medium text-gray-700 mb-2';
+                sliderTitle.textContent = '自定义数值';
+                sliderSection.appendChild(sliderTitle);
+
+                const sliderWrapper = document.createElement('div');
+                sliderWrapper.className = 'space-y-2';
+
+                const sliderLabel = document.createElement('div');
+                sliderLabel.className = 'flex justify-between text-xs text-gray-500';
+                sliderLabel.innerHTML = '<span>128</span><span>32768</span>';
+                sliderWrapper.appendChild(sliderLabel);
+
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '128';
+                slider.max = '32768';
+                slider.step = '128';
+                slider.className = 'w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600';
+                
+                const updateSlider = () => {
+                    if (currentBudget <= 0) {
+                        slider.value = '128';
+                        slider.disabled = true;
+                        slider.classList.add('opacity-50');
+                    } else {
+                        slider.value = String(Math.max(128, Math.min(32768, currentBudget)));
+                        slider.disabled = false;
+                        slider.classList.remove('opacity-50');
+                    }
+                };
+
+                slider.oninput = () => {
+                    currentBudget = parseInt(slider.value, 10);
+                    updateCustomInput();
+                    presetButtons.forEach((btn, idx) => {
+                        const preset = BUDGET_PRESETS[idx];
+                        btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                        btn.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
+                        if (currentBudget === preset.value) {
+                            btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
+                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                        }
+                    });
+                };
+                
+                slider.onchange = () => {
+                    currentBudget = parseInt(slider.value, 10);
+                    setThinkingBudget(store, conv.id, currentBudget);
+                    updateGeminiThinkingControls();
+                };
+
+                sliderWrapper.appendChild(slider);
+                sliderSection.appendChild(sliderWrapper);
+                body.appendChild(sliderSection);
+
+                // 自定义输入
+                const customSection = document.createElement('div');
+                customSection.className = 'flex items-center gap-3';
+
+                const customLabel = document.createElement('span');
+                customLabel.className = 'text-sm text-gray-600';
+                customLabel.textContent = '精确值:';
+
+                const customInput = document.createElement('input');
+                customInput.type = 'number';
+                customInput.min = '-1';
+                customInput.max = '32768';
+                customInput.className = 'flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500';
+                customInput.placeholder = '-1 表示自动';
+                
+                const updateCustomInput = () => {
+                    customInput.value = currentBudget === -1 ? '' : String(currentBudget);
+                };
+
+                customInput.onchange = () => {
+                    const val = parseInt(customInput.value, 10);
+                    if (isNaN(val) || customInput.value === '') {
+                        currentBudget = -1;
+                    } else {
+                        currentBudget = Math.max(-1, Math.min(32768, val));
+                    }
+                    setThinkingBudget(store, conv.id, currentBudget);
+                    updateSlider();
+                    presetButtons.forEach((btn, idx) => {
+                        const preset = BUDGET_PRESETS[idx];
+                        btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                        btn.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
+                        if (currentBudget === preset.value) {
+                            btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
+                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                        }
+                    });
+                    updateGeminiThinkingControls();
+                };
+
+                customSection.appendChild(customLabel);
+                customSection.appendChild(customInput);
+                body.appendChild(customSection);
+
+                // 初始化状态
+                updateSlider();
+                updateCustomInput();
+                presetButtons.forEach((btn, idx) => {
+                    const preset = BUDGET_PRESETS[idx];
+                    if (currentBudget === preset.value) {
+                        btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
+                        btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                    }
+                });
+                
+                sheetContainer.appendChild(header);
+                sheetContainer.appendChild(body);
+            });
+        }
+        
+        /**
+         * 更新 Gemini 思考控件显示状态
+         */
+        function updateGeminiThinkingControls() {
+            const wrapper = document.getElementById(WRAPPER_ID);
+            if (!wrapper) return;
+            
+            const store = getStore();
+            if (!store || !store.getActiveConversation) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            const conv = store.getActiveConversation();
+            if (!conv) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            const model = conv.selectedModel;
+            if (!model) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            // 检查是否为 OpenAI 渠道
+            const channelConfig = getChannelConfig(store, conv);
+            if (!channelConfig || channelConfig.type !== 'openai') {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            // 检查模型是否是 Gemini 思考模型
+            if (!isGeminiThinkingModel(model)) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            // 显示控件
+            wrapper.style.display = 'flex';
+            
+            const thinkingCfg = getGeminiThinkingConfig();
+            const BUDGET_PRESETS = getGeminiBudgetPresets();
+            
+            // 获取容器内的元素
+            const budgetBtnEl = wrapper.querySelector('[data-openai-gemini-budget-btn]');
+            const levelGroupEl = wrapper.querySelector('[data-openai-gemini-level-group]');
+            
+            if (isGeminiBudgetModel(model)) {
+                // Budget 模式
+                if (budgetBtnEl) {
+                    budgetBtnEl.style.display = 'inline-flex';
+                    const budget = thinkingCfg.budget;
+                    const preset = BUDGET_PRESETS.find(p => p.value === budget);
+                    budgetBtnEl.textContent = preset ? preset.label : `${budget}`;
+                }
+                if (levelGroupEl) {
+                    levelGroupEl.style.display = 'none';
+                }
+            } else if (isGeminiLevelModel(model)) {
+                // Level 模式
+                if (budgetBtnEl) {
+                    budgetBtnEl.style.display = 'none';
+                }
+                if (levelGroupEl) {
+                    levelGroupEl.style.display = 'flex';
+                    
+                    const currentLevel = thinkingCfg.level;
+                    ['none', 'low', 'high'].forEach(key => {
+                        const btn = levelState.buttons[key];
+                        if (!btn) return;
+                        btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
+                        btn.classList.remove('bg-gray-50', 'text-gray-500', 'border-gray-200');
+                        if (key === currentLevel) {
+                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
+                        } else {
+                            btn.classList.add('bg-gray-50', 'text-gray-500', 'border-gray-200');
+                        }
+                    });
+                }
+            }
+        }
+        
+        function ensureStoreEventRegistered() {
+            if (storeEventRegistered) return;
+            
+            const store = getStore();
+            if (store && store.events && typeof store.events.on === 'function') {
+                store.events.on('updated', updateGeminiThinkingControls);
+                storeEventRegistered = true;
+                setTimeout(() => updateGeminiThinkingControls(), 0);
+            } else {
+                if (!ensureStoreEventRegistered.retryCount) {
+                    ensureStoreEventRegistered.retryCount = 0;
+                }
+                ensureStoreEventRegistered.retryCount++;
+                if (ensureStoreEventRegistered.retryCount < 50) {
+                    setTimeout(ensureStoreEventRegistered, 100);
+                }
+            }
+        }
+        
+        function ensureFrameworkEventRegistered() {
+            if (typeof Framework !== 'undefined' && Framework.events) {
+                Framework.events.on('mode:changed', (data) => {
+                    if (data && data.mode === 'chat') {
+                        setTimeout(() => updateGeminiThinkingControls(), 50);
+                    }
+                });
+            }
+        }
+        
+        // 注册插件
+        registerPlugin(SLOTS.INPUT_TOP, 'openai-gemini-thinking', {
+            meta: {
+                id: 'openai-gemini-thinking',
+                name: 'OpenAI 渠道 Gemini 思考',
+                description: '通过 OpenAI 兼容接口调用 Gemini 时的思考预算配置',
+                version: '1.0.0',
+                icon: 'psychology',
+                author: 'IdoFront',
+                source: 'builtin'
+            },
+            init: function() {
+                ensureStoreEventRegistered();
+                ensureFrameworkEventRegistered();
+            },
+            renderer: function() {
+                ensureStoreEventRegistered();
+                
+                const wrapper = document.createElement('div');
+                wrapper.id = WRAPPER_ID;
+                wrapper.className = 'flex items-center gap-2';
+                wrapper.style.display = 'none';
+                
+                // 分隔线
+                const divider = document.createElement('div');
+                divider.className = 'h-5 w-px bg-gray-200';
+                wrapper.appendChild(divider);
+                
+                // 控件组
+                const controlGroup = document.createElement('div');
+                controlGroup.className = 'flex items-center gap-1';
+                
+                const label = document.createElement('span');
+                label.className = 'text-[10px] text-gray-400';
+                label.textContent = '思考';
+                controlGroup.appendChild(label);
+                
+                // Budget 模式按钮
+                const budgetBtn = document.createElement('button');
+                budgetBtn.type = 'button';
+                budgetBtn.className = 'px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors';
+                budgetBtn.setAttribute('data-openai-gemini-budget-btn', 'true');
+                budgetBtn.textContent = '自动';
+                budgetBtn.style.display = 'none';
+                
+                budgetBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    
+                    const store = getStore();
+                    if (!store || !store.getActiveConversation) return;
+                    
+                    const conv = store.getActiveConversation();
+                    if (!conv) return;
+                    
+                    showBudgetBottomSheet(conv);
+                };
+                
+                controlGroup.appendChild(budgetBtn);
+                
+                // Level 模式三按钮组
+                const levelGroup = document.createElement('div');
+                levelGroup.className = 'flex items-center gap-0.5';
+                levelGroup.setAttribute('data-openai-gemini-level-group', 'true');
+                levelGroup.style.display = 'none';
+                
+                const createLevelBtn = (key, text, title) => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
+                    btn.textContent = text;
+                    btn.title = title;
+                    btn.onclick = () => {
+                        const store = getStore();
+                        if (!store || !store.getActiveConversation) return;
+                        const conv = store.getActiveConversation();
+                        if (!conv) return;
+                        
+                        setThinkingLevel(store, conv.id, key);
+                        updateGeminiThinkingControls();
+                    };
+                    return btn;
+                };
+                
+                const noneBtn = createLevelBtn('none', 'N', '思考等级：无 (None)');
+                const lowBtn = createLevelBtn('low', 'L', '思考等级：低 (Low)');
+                const highBtn = createLevelBtn('high', 'H', '思考等级：高 (High)');
+                
+                levelGroup.appendChild(noneBtn);
+                levelGroup.appendChild(lowBtn);
+                levelGroup.appendChild(highBtn);
+                
+                levelState.buttons = {
+                    none: noneBtn,
+                    low: lowBtn,
+                    high: highBtn
+                };
+                
+                controlGroup.appendChild(levelGroup);
+                wrapper.appendChild(controlGroup);
+                
+                setTimeout(() => updateGeminiThinkingControls(), 0);
+                setTimeout(() => updateGeminiThinkingControls(), 100);
+                setTimeout(() => updateGeminiThinkingControls(), 300);
+                
+                return wrapper;
+            }
+        });
+    }
+    
+    // 注册 Gemini 思考 UI 插件
+    registerGeminiThinkingPlugin();
     
     // ========== 通用设置分区注册 ==========
     
