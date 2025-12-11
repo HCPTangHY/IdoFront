@@ -69,7 +69,7 @@ jobs:
           EOFYML
       
       - name: 构建 Windows 应用
-        run: npx electron-builder --win --x64 --config electron-builder.yml
+        run: npx electron-builder --win --x64 --config electron-builder.yml --publish never
       
       - name: 重命名输出文件
         shell: bash
