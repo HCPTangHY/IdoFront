@@ -43,6 +43,37 @@ jobs:
             npx cap add android
           fi
       
+      - name: 生成 Android 图标
+        run: |
+          # 安装 ImageMagick
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          
+          # 源图标
+          SRC_ICON="edge-extension/icons/icon-256.png"
+          
+          # 生成各尺寸图标
+          convert "$SRC_ICON" -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert "$SRC_ICON" -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert "$SRC_ICON" -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert "$SRC_ICON" -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert "$SRC_ICON" -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          
+          # 圆形图标（如果需要）
+          convert "$SRC_ICON" -resize 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          convert "$SRC_ICON" -resize 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          convert "$SRC_ICON" -resize 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          convert "$SRC_ICON" -resize 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          convert "$SRC_ICON" -resize 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          
+          # 前景图标（自适应图标）
+          convert "$SRC_ICON" -resize 108x108 android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png
+          convert "$SRC_ICON" -resize 162x162 android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png
+          convert "$SRC_ICON" -resize 216x216 android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png
+          convert "$SRC_ICON" -resize 324x324 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
+          convert "$SRC_ICON" -resize 432x432 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+          
+          echo "✅ Android 图标生成完成"
+      
       - name: 同步资源
         run: npx cap sync android
       
@@ -65,8 +96,8 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          cp "android/app/build/outputs/apk/debug/app-debug.apk" "dist/IdoFront-v${VERSION}-debug.apk"
-          echo "📱 APK 文件: dist/IdoFront-v${VERSION}-debug.apk"
+          cp "android/app/build/outputs/apk/debug/app.apk" "dist/IdoFront-v${VERSION}.apk"
+          echo "📱 APK 文件: dist/IdoFront-v${VERSION}.apk"
           ls -lh dist/
       
       - name: 上传 APK Artifact
