@@ -7,6 +7,8 @@ const path = require('path');
 let mainWindow;
 
 function createWindow() {
+  const isMac = process.platform === 'darwin';
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -19,7 +21,8 @@ function createWindow() {
     },
     icon: path.join(__dirname, '../web-dist/icons/icon-128.png'),
     title: 'IdoFront',
-    show: false // 等待加载完成后显示
+    show: false, // 等待加载完成后显示
+    autoHideMenuBar: !isMac // Windows/Linux 自动隐藏菜单栏，按 Alt 可显示
   });
 
   // 加载 web-dist/index.html
