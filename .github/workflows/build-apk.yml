@@ -84,10 +84,19 @@ jobs:
       - name: 设置 Gradle 权限
         run: chmod +x android/gradlew
       
-      - name: 构建 Debug APK
+      - name: 解码 Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+          echo "✅ Keystore 已解码"
+      
+      - name: 构建 Release APK
         run: |
           cd android
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
       
       - name: 获取版本号
         id: version
@@ -100,7 +109,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          cp "android/app/build/outputs/apk/debug/app-debug.apk" "dist/IdoFront-v${VERSION}.apk"
+          cp "android/app/build/outputs/apk/release/app-release.apk" "dist/IdoFront-v${VERSION}.apk"
           echo "📱 APK 文件: dist/IdoFront-v${VERSION}.apk"
           ls -lh dist/
       
