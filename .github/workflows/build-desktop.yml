@@ -75,8 +75,9 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          mkdir -p dist
-          find dist-electron -name "*.exe" -exec cp {} "dist/IdoFront-v${VERSION}-win.exe" \;
+          ls -lh dist/
+          # 找到生成的 exe 文件并重命名
+          find dist -maxdepth 1 -name "*.exe" -exec mv {} "dist/IdoFront-v${VERSION}-win.exe" \;
           ls -lh dist/
       
       - name: 上传 Artifact
