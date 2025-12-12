@@ -1143,8 +1143,13 @@ const Framework = (function() {
             rightGroup.appendChild(rightContainer);
         }
         
-        // 全屏打开按钮（统一添加到所有 header）
-        if (showOpenInNew) {
+        // 全屏打开按钮（仅在浏览器扩展环境中显示）
+        // 检测是否在浏览器扩展环境：chrome.runtime.id 只在扩展中存在
+        const isExtensionEnv = typeof chrome !== 'undefined' &&
+                               chrome.runtime &&
+                               typeof chrome.runtime.id === 'string';
+        
+        if (showOpenInNew && isExtensionEnv) {
             const openInNewBtn = document.createElement('button');
             openInNewBtn.className = 'ido-icon-btn';
             openInNewBtn.title = '全屏打开';
