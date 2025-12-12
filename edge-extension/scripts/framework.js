@@ -356,11 +356,11 @@ const Framework = (function() {
     
     // 手势配置
     const SWIPE_CONFIG = {
-        EDGE_THRESHOLD: 30,      // 边缘触发区域宽度（像素）
         MIN_SWIPE_DISTANCE: 50,  // 最小滑动距离
         MAX_SWIPE_TIME: 300,     // 最大滑动时间（毫秒）
         VELOCITY_THRESHOLD: 0.3, // 速度阈值（像素/毫秒）
-        DRAG_THRESHOLD: 10       // 开始拖动的最小距离
+        DRAG_THRESHOLD: 15,      // 开始拖动的最小距离
+        DIRECTION_LOCK_RATIO: 1.5 // 方向锁定比例（水平/垂直）
     };
     
     /**
@@ -398,33 +398,31 @@ const Framework = (function() {
         swipeState.isSwiping = false;
         swipeState.isDragging = false;
         swipeState.swipeTarget = null;
-        
-        const screenWidth = window.innerWidth;
-        
-        // 检测是否在边缘区域开始触摸
-        if (!state.leftOpen && !state.rightOpen) {
-            // 两个面板都关闭时，检测边缘触摸
-            if (touch.clientX < SWIPE_CONFIG.EDGE_THRESHOLD) {
-                // 左边缘 - 准备打开左侧面板
-                swipeState.swipeTarget = 'open-left';
-            } else if (touch.clientX > screenWidth - SWIPE_CONFIG.EDGE_THRESHOLD) {
-                // 右边缘 - 准备打开右侧面板
-                swipeState.swipeTarget = 'open-right';
-            }
-        } else if (state.leftOpen) {
-            // 左面板打开时，准备关闭
-            swipeState.swipeTarget = 'close-left';
+        swipeState.directionLocked = false; // 方向是否已锁定
+    }
+    
+    /**
+     * 根据滑动方向确定目标操作
+     */
+    function determineSwipeTarget(deltaX) {
+        if (state.leftOpen) {
+            // 左面板打开时，向左滑动关闭
+            if (deltaX < 0) return 'close-left';
         } else if (state.rightOpen) {
-            // 右面板打开时，准备关闭
-            swipeState.swipeTarget = 'close-right';
+            // 右面板打开时，向右滑动关闭
+            if (deltaX > 0) return 'close-right';
+        } else {
+            // 两个面板都关闭时
+            if (deltaX > 0) return 'open-left';  // 向右滑动打开左面板
+            if (deltaX < 0) return 'open-right'; // 向左滑动打开右面板
         }
+        return null;
     }
     
     /**
      * 处理触摸移动事件
      */
     function handleTouchMove(e) {
-        if (!swipeState.swipeTarget) return;
         if (window.innerWidth >= 768) return;
         
         const touch = e.touches[0];
@@ -433,32 +431,50 @@ const Framework = (function() {
         
         const deltaX = swipeState.currentX - swipeState.startX;
         const deltaY = swipeState.currentY - swipeState.startY;
+        const absDeltaX = Math.abs(deltaX);
+        const absDeltaY = Math.abs(deltaY);
         
-        // 如果垂直滑动距离大于水平滑动距离，取消手势（用户可能在滚动）
-        if (!swipeState.isDragging && Math.abs(deltaY) > Math.abs(deltaX) * 1.5) {
-            swipeState.swipeTarget = null;
+        // 方向锁定：一旦确定是垂直滚动，就不再处理水平滑动
+        if (swipeState.directionLocked) {
+            if (!swipeState.swipeTarget) return; // 已锁定为垂直滚动
+        } else if (absDeltaX > SWIPE_CONFIG.DRAG_THRESHOLD || absDeltaY > SWIPE_CONFIG.DRAG_THRESHOLD) {
+            // 首次达到阈值时锁定方向
+            swipeState.directionLocked = true;
+            
+            // 如果垂直滑动距离大于水平滑动距离，锁定为垂直滚动
+            if (absDeltaY > absDeltaX * SWIPE_CONFIG.DIRECTION_LOCK_RATIO) {
+                swipeState.swipeTarget = null; // 不处理，让页面正常滚动
+                return;
+            }
+            
+            // 锁定为水平滑动，确定目标操作
+            swipeState.swipeTarget = determineSwipeTarget(deltaX);
+            if (!swipeState.swipeTarget) return;
+        } else {
+            // 还未达到阈值，继续等待
             return;
         }
         
+        // 确保有有效的滑动目标
+        if (!swipeState.swipeTarget) return;
+        
         // 开始拖动
-        if (Math.abs(deltaX) > SWIPE_CONFIG.DRAG_THRESHOLD) {
-            swipeState.isSwiping = true;
-            
-            // 首次进入拖动状态时，禁用面板过渡动画
-            if (!swipeState.isDragging) {
-                swipeState.isDragging = true;
-                ui.leftPanel.classList.remove('transition-width');
-                ui.rightPanel.classList.remove('transition-width');
-                ui.leftPanel.classList.add('ido-panel--dragging');
-                ui.rightPanel.classList.add('ido-panel--dragging');
-            }
-            
-            // 阻止默认行为（防止页面滚动）
-            e.preventDefault();
-            
-            // 根据目标类型更新面板位置
-            updatePanelDragPosition(deltaX);
+        swipeState.isSwiping = true;
+        
+        // 首次进入拖动状态时，禁用面板过渡动画
+        if (!swipeState.isDragging) {
+            swipeState.isDragging = true;
+            ui.leftPanel.classList.remove('transition-width');
+            ui.rightPanel.classList.remove('transition-width');
+            ui.leftPanel.classList.add('ido-panel--dragging');
+            ui.rightPanel.classList.add('ido-panel--dragging');
         }
+        
+        // 阻止默认行为（防止页面滚动）
+        e.preventDefault();
+        
+        // 根据目标类型更新面板位置
+        updatePanelDragPosition(deltaX);
     }
     
     /**
@@ -605,6 +621,7 @@ const Framework = (function() {
         swipeState.isDragging = false;
         swipeState.swipeTarget = null;
         swipeState.startTime = 0;
+        swipeState.directionLocked = false;
     }
 
     function bindResponsiveListener() {
