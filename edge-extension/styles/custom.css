@@ -121,6 +121,17 @@ body.is-resizing {
     }
     /* Hide resizers on mobile */
     .resizer { display: none; }
+    
+    /* 拖动状态：禁用过渡动画实现跟手效果 */
+    #left-panel.ido-panel--dragging,
+    #right-panel.ido-panel--dragging {
+        transition: none !important;
+    }
+    
+    /* 拖动时的遮罩层也禁用过渡 */
+    #backdrop.ido-backdrop--dragging {
+        transition: none !important;
+    }
 }
 
 /* Bottom Sheet (Drawer) Transitions */
@@ -1011,7 +1022,7 @@ body.is-resizing {
     border: none;
     outline: none;
     resize: none;
-    overflow: hidden;
+    overflow-y: auto; /* 允许垂直滚动，修复长消息编辑无法滚动的问题 */
     field-sizing: content; /* 现代浏览器自适应高度 */
     max-height: 500px;
 }

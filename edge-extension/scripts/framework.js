@@ -340,6 +340,273 @@ const Framework = (function() {
         bindResponsiveListener();
     }
 
+    // --- 1.1 MOBILE SWIPE GESTURE ---
+    
+    // 移动端触摸手势状态
+    const swipeState = {
+        startX: 0,
+        startY: 0,
+        currentX: 0,
+        currentY: 0,
+        isSwiping: false,
+        isDragging: false, // 是否正在拖动（跟手）
+        swipeTarget: null, // 'open-left' | 'open-right' | 'close-left' | 'close-right' | null
+        startTime: 0
+    };
+    
+    // 手势配置
+    const SWIPE_CONFIG = {
+        EDGE_THRESHOLD: 30,      // 边缘触发区域宽度（像素）
+        MIN_SWIPE_DISTANCE: 50,  // 最小滑动距离
+        MAX_SWIPE_TIME: 300,     // 最大滑动时间（毫秒）
+        VELOCITY_THRESHOLD: 0.3, // 速度阈值（像素/毫秒）
+        DRAG_THRESHOLD: 10       // 开始拖动的最小距离
+    };
+    
+    /**
+     * 获取面板最大宽度（用于拖动计算）
+     */
+    function getPanelMaxWidth() {
+        // 移动端面板宽度为 85vw
+        return window.innerWidth * 0.85;
+    }
+    
+    /**
+     * 初始化移动端滑动手势
+     */
+    function initMobileSwipe() {
+        // 监听整个文档，以便能够在面板上也捕获手势
+        document.addEventListener('touchstart', handleTouchStart, { passive: true });
+        document.addEventListener('touchmove', handleTouchMove, { passive: false }); // 需要 preventDefault
+        document.addEventListener('touchend', handleTouchEnd, { passive: true });
+        document.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    }
+    
+    /**
+     * 处理触摸开始事件
+     */
+    function handleTouchStart(e) {
+        // 仅在移动端生效
+        if (window.innerWidth >= 768) return;
+        
+        const touch = e.touches[0];
+        swipeState.startX = touch.clientX;
+        swipeState.startY = touch.clientY;
+        swipeState.currentX = touch.clientX;
+        swipeState.currentY = touch.clientY;
+        swipeState.startTime = Date.now();
+        swipeState.isSwiping = false;
+        swipeState.isDragging = false;
+        swipeState.swipeTarget = null;
+        
+        const screenWidth = window.innerWidth;
+        
+        // 检测是否在边缘区域开始触摸
+        if (!state.leftOpen && !state.rightOpen) {
+            // 两个面板都关闭时，检测边缘触摸
+            if (touch.clientX < SWIPE_CONFIG.EDGE_THRESHOLD) {
+                // 左边缘 - 准备打开左侧面板
+                swipeState.swipeTarget = 'open-left';
+            } else if (touch.clientX > screenWidth - SWIPE_CONFIG.EDGE_THRESHOLD) {
+                // 右边缘 - 准备打开右侧面板
+                swipeState.swipeTarget = 'open-right';
+            }
+        } else if (state.leftOpen) {
+            // 左面板打开时，准备关闭
+            swipeState.swipeTarget = 'close-left';
+        } else if (state.rightOpen) {
+            // 右面板打开时，准备关闭
+            swipeState.swipeTarget = 'close-right';
+        }
+    }
+    
+    /**
+     * 处理触摸移动事件
+     */
+    function handleTouchMove(e) {
+        if (!swipeState.swipeTarget) return;
+        if (window.innerWidth >= 768) return;
+        
+        const touch = e.touches[0];
+        swipeState.currentX = touch.clientX;
+        swipeState.currentY = touch.clientY;
+        
+        const deltaX = swipeState.currentX - swipeState.startX;
+        const deltaY = swipeState.currentY - swipeState.startY;
+        
+        // 如果垂直滑动距离大于水平滑动距离，取消手势（用户可能在滚动）
+        if (!swipeState.isDragging && Math.abs(deltaY) > Math.abs(deltaX) * 1.5) {
+            swipeState.swipeTarget = null;
+            return;
+        }
+        
+        // 开始拖动
+        if (Math.abs(deltaX) > SWIPE_CONFIG.DRAG_THRESHOLD) {
+            swipeState.isSwiping = true;
+            
+            // 首次进入拖动状态时，禁用面板过渡动画
+            if (!swipeState.isDragging) {
+                swipeState.isDragging = true;
+                ui.leftPanel.classList.remove('transition-width');
+                ui.rightPanel.classList.remove('transition-width');
+                ui.leftPanel.classList.add('ido-panel--dragging');
+                ui.rightPanel.classList.add('ido-panel--dragging');
+            }
+            
+            // 阻止默认行为（防止页面滚动）
+            e.preventDefault();
+            
+            // 根据目标类型更新面板位置
+            updatePanelDragPosition(deltaX);
+        }
+    }
+    
+    /**
+     * 更新面板拖动位置
+     */
+    function updatePanelDragPosition(deltaX) {
+        const maxWidth = getPanelMaxWidth();
+        
+        switch (swipeState.swipeTarget) {
+            case 'open-left': {
+                // 从关闭状态向右拖动打开左面板
+                // deltaX > 0 表示向右拖
+                const progress = Math.max(0, Math.min(1, deltaX / maxWidth));
+                const width = progress * maxWidth;
+                ui.leftPanel.style.width = `${width}px`;
+                // 更新遮罩透明度
+                ui.backdrop.classList.remove('hidden');
+                ui.backdrop.style.opacity = progress * 0.5;
+                break;
+            }
+            case 'close-left': {
+                // 从打开状态向左拖动关闭左面板
+                // deltaX < 0 表示向左拖
+                const progress = Math.max(0, Math.min(1, 1 + deltaX / maxWidth));
+                const width = progress * maxWidth;
+                ui.leftPanel.style.width = `${width}px`;
+                ui.backdrop.style.opacity = progress * 0.5;
+                break;
+            }
+            case 'open-right': {
+                // 从关闭状态向左拖动打开右面板
+                // deltaX < 0 表示向左拖
+                const progress = Math.max(0, Math.min(1, -deltaX / maxWidth));
+                const width = progress * maxWidth;
+                ui.rightPanel.style.width = `${width}px`;
+                ui.backdrop.classList.remove('hidden');
+                ui.backdrop.style.opacity = progress * 0.5;
+                break;
+            }
+            case 'close-right': {
+                // 从打开状态向右拖动关闭右面板
+                // deltaX > 0 表示向右拖
+                const progress = Math.max(0, Math.min(1, 1 - deltaX / maxWidth));
+                const width = progress * maxWidth;
+                ui.rightPanel.style.width = `${width}px`;
+                ui.backdrop.style.opacity = progress * 0.5;
+                break;
+            }
+        }
+    }
+    
+    /**
+     * 处理触摸结束事件
+     */
+    function handleTouchEnd(e) {
+        if (!swipeState.swipeTarget) {
+            resetSwipeState();
+            return;
+        }
+        if (window.innerWidth >= 768) {
+            resetSwipeState();
+            return;
+        }
+        
+        const deltaX = swipeState.currentX - swipeState.startX;
+        const deltaTime = Date.now() - swipeState.startTime;
+        const velocity = Math.abs(deltaX) / deltaTime;
+        const maxWidth = getPanelMaxWidth();
+        
+        // 恢复过渡动画
+        ui.leftPanel.classList.remove('ido-panel--dragging');
+        ui.rightPanel.classList.remove('ido-panel--dragging');
+        ui.leftPanel.classList.add('transition-width');
+        ui.rightPanel.classList.add('transition-width');
+        
+        // 清除拖动时设置的内联样式
+        ui.backdrop.style.opacity = '';
+        
+        // 如果进行过拖动，根据最终位置和速度决定结果
+        if (swipeState.isDragging) {
+            // 计算进度
+            let progress = 0;
+            let shouldOpen = false;
+            
+            switch (swipeState.swipeTarget) {
+                case 'open-left':
+                    progress = Math.max(0, Math.min(1, deltaX / maxWidth));
+                    // 如果进度超过 50% 或速度足够快，则打开
+                    shouldOpen = progress > 0.5 || (velocity >= SWIPE_CONFIG.VELOCITY_THRESHOLD && deltaX > 0);
+                    togglePanel('left', shouldOpen);
+                    break;
+                case 'close-left':
+                    progress = Math.max(0, Math.min(1, 1 + deltaX / maxWidth));
+                    // 如果进度低于 50% 或速度足够快，则关闭
+                    shouldOpen = progress > 0.5 && !(velocity >= SWIPE_CONFIG.VELOCITY_THRESHOLD && deltaX < 0);
+                    togglePanel('left', shouldOpen);
+                    break;
+                case 'open-right':
+                    progress = Math.max(0, Math.min(1, -deltaX / maxWidth));
+                    shouldOpen = progress > 0.5 || (velocity >= SWIPE_CONFIG.VELOCITY_THRESHOLD && deltaX < 0);
+                    togglePanel('right', shouldOpen);
+                    break;
+                case 'close-right':
+                    progress = Math.max(0, Math.min(1, 1 - deltaX / maxWidth));
+                    shouldOpen = progress > 0.5 && !(velocity >= SWIPE_CONFIG.VELOCITY_THRESHOLD && deltaX > 0);
+                    togglePanel('right', shouldOpen);
+                    break;
+            }
+        } else if (swipeState.isSwiping) {
+            // 没有拖动但有滑动，使用原来的逻辑
+            const isValidSwipe = Math.abs(deltaX) >= SWIPE_CONFIG.MIN_SWIPE_DISTANCE ||
+                                (velocity >= SWIPE_CONFIG.VELOCITY_THRESHOLD && deltaTime <= SWIPE_CONFIG.MAX_SWIPE_TIME);
+            
+            if (isValidSwipe) {
+                switch (swipeState.swipeTarget) {
+                    case 'open-left':
+                        if (deltaX > 0) togglePanel('left', true);
+                        break;
+                    case 'open-right':
+                        if (deltaX < 0) togglePanel('right', true);
+                        break;
+                    case 'close-left':
+                        if (deltaX < 0) togglePanel('left', false);
+                        break;
+                    case 'close-right':
+                        if (deltaX > 0) togglePanel('right', false);
+                        break;
+                }
+            }
+        }
+        
+        resetSwipeState();
+    }
+    
+    /**
+     * 重置滑动状态
+     */
+    function resetSwipeState() {
+        swipeState.startX = 0;
+        swipeState.startY = 0;
+        swipeState.currentX = 0;
+        swipeState.currentY = 0;
+        swipeState.isSwiping = false;
+        swipeState.isDragging = false;
+        swipeState.swipeTarget = null;
+        swipeState.startTime = 0;
+    }
+
     function bindResponsiveListener() {
         if (resizeHandlerBound) return;
         resizeListener = function() {
@@ -1796,6 +2063,8 @@ const Framework = (function() {
     function init() {
         bindUI();
         initResizers();
+        // 初始化移动端滑动手势
+        initMobileSwipe();
         // Force update initially
         updatePanelWidths();
         
