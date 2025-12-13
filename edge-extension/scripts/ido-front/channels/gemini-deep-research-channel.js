@@ -863,12 +863,12 @@
     // ========== UI 插件：Deep Research 状态指示器 ==========
     
     function registerDeepResearchStatusPlugin() {
-        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPlugin) {
+        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPluginBundle) {
             console.warn('[DeepResearchChannel] Framework API not available for UI registration');
             return;
         }
         
-        const { registerPlugin, SLOTS } = Framework;
+        const { registerPluginBundle, SLOTS } = Framework;
         
         if (!SLOTS || !SLOTS.INPUT_TOP) {
             console.warn('[DeepResearchChannel] INPUT_TOP slot not available');
@@ -965,69 +965,74 @@
             }
         }
         
-        // 使用 core- 前缀，使其被视为核心插件，不在插件管理中显示
-        registerPlugin(SLOTS.INPUT_TOP, 'core-deep-research-status', {
+        // 使用 registerPluginBundle 注册 Deep Research 渠道 UI 组件
+        // 使用 source: 'core' 标记为核心插件，不在插件管理中显示
+        registerPluginBundle('core-deep-research-channel-ui', {
             meta: {
-                id: 'core-deep-research-status',
-                name: 'Deep Research 状态',
+                name: 'Deep Research 渠道 UI',
                 description: '显示 Gemini Deep Research 的研究状态',
                 version: '1.0.0',
                 icon: 'science',
                 author: 'IdoFront',
-                source: 'builtin'
+                source: 'core'  // 核心插件，不在插件管理中显示
             },
             init: function() {
                 ensureStoreEventRegistered();
             },
-            renderer: function() {
-                ensureStoreEventRegistered();
-                
-                const wrapper = document.createElement('div');
-                wrapper.id = WRAPPER_ID;
-                wrapper.className = 'flex items-center gap-2';
-                wrapper.style.display = 'none';
-                
-                // 分隔线
-                const divider = document.createElement('div');
-                divider.className = 'h-5 w-px bg-gray-200';
-                wrapper.appendChild(divider);
-                
-                // 标签
-                const label = document.createElement('span');
-                label.className = 'text-[10px] text-gray-400';
-                label.textContent = '研究';
-                wrapper.appendChild(label);
-                
-                // 状态指示器
-                const statusEl = document.createElement('span');
-                statusEl.setAttribute('data-dr-status', 'true');
-                statusEl.className = 'text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded cursor-help';
-                statusEl.textContent = '新研究';
-                wrapper.appendChild(statusEl);
-                
-                // 清除按钮
-                const clearBtn = document.createElement('button');
-                clearBtn.type = 'button';
-                clearBtn.setAttribute('data-dr-clear-btn', 'true');
-                clearBtn.className = 'text-[10px] text-gray-400 hover:text-red-500 transition-colors';
-                clearBtn.title = '清除续写状态，开始新的研究';
-                clearBtn.innerHTML = '<span class="material-symbols-outlined text-[14px]">close</span>';
-                clearBtn.style.display = 'none';
-                clearBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    const store = getStore();
-                    if (!store) return;
-                    const conv = store.getActiveConversation();
-                    if (!conv) return;
-                    clearPreviousInteractionId(store, conv.id);
-                    updateStatusDisplay();
-                };
-                wrapper.appendChild(clearBtn);
-                
-                setTimeout(() => updateStatusDisplay(), 0);
-                setTimeout(() => updateStatusDisplay(), 100);
-                
-                return wrapper;
+            slots: {
+                [SLOTS.INPUT_TOP]: {
+                    id: 'research-status',
+                    render: function() {
+                        ensureStoreEventRegistered();
+                        
+                        const wrapper = document.createElement('div');
+                        wrapper.id = WRAPPER_ID;
+                        wrapper.className = 'flex items-center gap-2';
+                        wrapper.style.display = 'none';
+                        
+                        // 分隔线
+                        const divider = document.createElement('div');
+                        divider.className = 'h-5 w-px bg-gray-200';
+                        wrapper.appendChild(divider);
+                        
+                        // 标签
+                        const label = document.createElement('span');
+                        label.className = 'text-[10px] text-gray-400';
+                        label.textContent = '研究';
+                        wrapper.appendChild(label);
+                        
+                        // 状态指示器
+                        const statusEl = document.createElement('span');
+                        statusEl.setAttribute('data-dr-status', 'true');
+                        statusEl.className = 'text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded cursor-help';
+                        statusEl.textContent = '新研究';
+                        wrapper.appendChild(statusEl);
+                        
+                        // 清除按钮
+                        const clearBtn = document.createElement('button');
+                        clearBtn.type = 'button';
+                        clearBtn.setAttribute('data-dr-clear-btn', 'true');
+                        clearBtn.className = 'text-[10px] text-gray-400 hover:text-red-500 transition-colors';
+                        clearBtn.title = '清除续写状态，开始新的研究';
+                        clearBtn.innerHTML = '<span class="material-symbols-outlined text-[14px]">close</span>';
+                        clearBtn.style.display = 'none';
+                        clearBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            const store = getStore();
+                            if (!store) return;
+                            const conv = store.getActiveConversation();
+                            if (!conv) return;
+                            clearPreviousInteractionId(store, conv.id);
+                            updateStatusDisplay();
+                        };
+                        wrapper.appendChild(clearBtn);
+                        
+                        setTimeout(() => updateStatusDisplay(), 0);
+                        setTimeout(() => updateStatusDisplay(), 100);
+                        
+                        return wrapper;
+                    }
+                }
             }
         });
     }

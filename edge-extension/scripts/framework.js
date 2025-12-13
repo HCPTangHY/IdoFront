@@ -916,7 +916,9 @@ const Framework = (function() {
                     author: meta.author || definition.author || '',
                     homepage: meta.homepage || definition.homepage || '',
                     source: meta.source || definition.source || 'internal',
-                    tags: meta.tags || definition.tags || undefined
+                    tags: meta.tags || definition.tags || undefined,
+                    // 保留 bundleId 用于 getPlugins() 合并显示
+                    bundleId: meta.bundleId || undefined
                 }
             };
         }
@@ -1003,17 +1005,214 @@ const Framework = (function() {
         });
         refreshSlot(slotName);
     }
+    
+    /**
+     * 批量注册插件 - 允许一个插件同时注册多个 UI 组件到不同插槽
+     *
+     * @param {string} bundleId - 插件包 ID
+     * @param {Object} definition - 插件包定义
+     * @param {Object} definition.meta - 插件元数据
+     * @param {Array|Object} definition.slots - 插槽配置
+     *   数组形式: [{ slot, id?, render }]
+     *   对象形式: { [slotName]: render | { id?, render } }
+     * @param {Function} definition.init - 初始化函数
+     * @param {Function} definition.destroy - 销毁函数
+     *
+     * @example
+     * // 对象形式（推荐）
+     * registerPluginBundle('my-feature', {
+     *   meta: { name: '我的功能', version: '1.0.0' },
+     *   slots: {
+     *     [SLOTS.HEADER_ACTIONS]: (ctx) => createButton(),
+     *     [SLOTS.INPUT_TOP]: {
+     *       id: 'my-toolbar',  // 可选，默认使用 bundleId
+     *       render: (ctx) => createToolbar()
+     *     }
+     *   },
+     *   init: () => console.log('初始化'),
+     *   destroy: () => console.log('销毁')
+     * });
+     *
+     * @example
+     * // 数组形式
+     * registerPluginBundle('my-feature', {
+     *   slots: [
+     *     { slot: SLOTS.HEADER_ACTIONS, render: (ctx) => createButton() },
+     *     { slot: SLOTS.SIDEBAR_BOTTOM, id: 'my-sidebar-btn', render: (ctx) => createSidebarBtn() }
+     *   ]
+     * });
+     */
+    function registerPluginBundle(bundleId, definition) {
+        if (!bundleId || !definition || !definition.slots) {
+            console.error('registerPluginBundle: Invalid arguments', { bundleId, definition });
+            return;
+        }
+        
+        const meta = definition.meta || {};
+        const initFn = definition.init || null;
+        const destroyFn = definition.destroy || null;
+        
+        // 生命周期：init 只在首次注册时调用一次
+        let initCalled = false;
+        const callInitOnce = () => {
+            if (!initCalled && typeof initFn === 'function') {
+                initCalled = true;
+                try {
+                    initFn(publicApi);
+                } catch (e) {
+                    console.error(`PluginBundle init error [${bundleId}]:`, e);
+                }
+            }
+        };
+        
+        // 解析 slots 配置
+        const slotEntries = [];
+        
+        if (Array.isArray(definition.slots)) {
+            // 数组形式: [{ slot, id?, render }]
+            definition.slots.forEach((item, index) => {
+                if (!item.slot || typeof item.render !== 'function') {
+                    console.warn(`registerPluginBundle: Invalid slot entry at index ${index}`, item);
+                    return;
+                }
+                slotEntries.push({
+                    slotName: item.slot,
+                    id: item.id || `${bundleId}-${index}`,
+                    render: item.render
+                });
+            });
+        } else if (typeof definition.slots === 'object') {
+            // 对象形式: { [slotName]: render | { id?, render } | Array<{ id?, render }> }
+            Object.keys(definition.slots).forEach((slotName) => {
+                const slotDef = definition.slots[slotName];
+                
+                if (typeof slotDef === 'function') {
+                    // 单个渲染函数
+                    slotEntries.push({
+                        slotName,
+                        id: `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}`,
+                        render: slotDef
+                    });
+                } else if (Array.isArray(slotDef)) {
+                    // 数组形式：同一个 slot 注册多个组件
+                    slotDef.forEach((item, itemIndex) => {
+                        if (typeof item === 'function') {
+                            slotEntries.push({
+                                slotName,
+                                id: `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}-${itemIndex}`,
+                                render: item
+                            });
+                        } else if (item && typeof item.render === 'function') {
+                            slotEntries.push({
+                                slotName,
+                                id: item.id || `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}-${itemIndex}`,
+                                render: item.render
+                            });
+                        } else {
+                            console.warn(`registerPluginBundle: Invalid slot array entry at "${slotName}[${itemIndex}]"`, item);
+                        }
+                    });
+                } else if (slotDef && typeof slotDef.render === 'function') {
+                    // 对象形式：{ id?, render }
+                    slotEntries.push({
+                        slotName,
+                        id: slotDef.id || `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}`,
+                        render: slotDef.render
+                    });
+                } else {
+                    console.warn(`registerPluginBundle: Invalid slot definition for "${slotName}"`, slotDef);
+                }
+            });
+        }
+        
+        if (slotEntries.length === 0) {
+            console.warn(`registerPluginBundle: No valid slots found for bundle "${bundleId}"`);
+            return;
+        }
+        
+        // 为每个插槽注册插件
+        slotEntries.forEach((entry, index) => {
+            const isLast = index === slotEntries.length - 1;
+            
+            const pluginDef = {
+                meta: {
+                    ...meta,
+                    id: entry.id,
+                    bundleId: bundleId,
+                    source: meta.source || 'bundle'
+                },
+                render: entry.render,
+                // init 只在第一个插槽注册时调用
+                init: index === 0 ? callInitOnce : null,
+                // destroy 只在最后一个插槽注销时调用
+                destroy: isLast ? destroyFn : null
+            };
+            
+            registerPlugin(entry.slotName, entry.id, pluginDef);
+        });
+        
+        // 记录 bundle 信息（用于批量注销）
+        if (!registry._bundles) {
+            registry._bundles = {};
+        }
+        registry._bundles[bundleId] = slotEntries.map(e => ({ slot: e.slotName, id: e.id }));
+    }
+    
+    /**
+     * 注销整个插件包
+     * @param {string} bundleId - 插件包 ID
+     */
+    function unregisterPluginBundle(bundleId) {
+        if (!registry._bundles || !registry._bundles[bundleId]) {
+            console.warn(`unregisterPluginBundle: Bundle "${bundleId}" not found`);
+            return;
+        }
+        
+        const entries = registry._bundles[bundleId];
+        entries.forEach(({ slot, id }) => {
+            unregisterPlugin(slot, id);
+        });
+        
+        delete registry._bundles[bundleId];
+    }
 
     function getPlugins() {
         const all = [];
+        const bundlesSeen = new Set();
+        
         Object.keys(registry).forEach(slot => {
+            // 跳过 bundle 元数据，只遍历真正的插槽
+            if (slot === '_bundles') return;
+            if (!Array.isArray(registry[slot])) return;
+            
             registry[slot].forEach(p => {
-                all.push({
-                    slot,
-                    id: p.id,
-                    enabled: p.enabled,
-                    meta: p.meta || null
-                });
+                const meta = p.meta || {};
+                const bundleId = meta.bundleId;
+                
+                // 如果属于 bundle，只显示一次
+                if (bundleId) {
+                    if (bundlesSeen.has(bundleId)) return; // 跳过已处理的 bundle
+                    bundlesSeen.add(bundleId);
+                    
+                    // 使用 bundle 的 meta 信息
+                    all.push({
+                        slot,
+                        id: bundleId,
+                        enabled: p.enabled,
+                        meta: {
+                            ...meta,
+                            id: bundleId,
+                            isBundle: true
+                        }
+                    });
+                } else {
+                    all.push({
+                        slot,
+                        id: p.id,
+                        enabled: p.enabled,
+                        meta: meta
+                    });
+                }
             });
         });
         return all;
@@ -1377,18 +1576,22 @@ const Framework = (function() {
 
     function addMessage(role, textOrObj, options) {
         options = options || {};
-        // Support object with {content, reasoning, id, attachments}
+        // Support object with {content, reasoning, id, attachments, modelName, channelName}
         let text = textOrObj;
         let reasoning = null;
         let id = Date.now();
         let attachments = null;
         let reasoningDuration = null;
+        let modelName = null;
+        let channelName = null;
         
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
             reasoning = textOrObj.reasoning || null;
             attachments = textOrObj.attachments || null;
             reasoningDuration = textOrObj.reasoningDuration || null;
+            modelName = textOrObj.modelName || null;
+            channelName = textOrObj.channelName || null;
             if (textOrObj.id) id = textOrObj.id;
         }
         
@@ -1407,7 +1610,17 @@ const Framework = (function() {
         // 角色标签
         const roleLabel = document.createElement('div');
         roleLabel.className = 'ido-message__role';
-        roleLabel.textContent = role === 'user' ? 'User' : 'AI';
+        if (role === 'user') {
+            roleLabel.innerHTML = '<span class="material-symbols-outlined ido-message__role-icon">person</span>User';
+        } else {
+            // AI 消息：尝试获取模型名和渠道名
+            let aiLabel = 'AI';
+            // 构建标签文本
+            if (modelName && channelName) {
+                aiLabel = `<strong>${modelName} | ${channelName}</strong>`;
+            }
+            roleLabel.innerHTML = `<span class="material-symbols-outlined ido-message__role-icon">auto_awesome</span>${aiLabel}`;
+        }
         card.appendChild(roleLabel);
         
         // 内容容器
@@ -1558,9 +1771,26 @@ const Framework = (function() {
         card.className = 'ido-message';
         card.dataset.loadingId = loadingId;
         
+        // 尝试获取模型名和渠道名
+        let aiLabel = 'AI';
+        try {
+            const store = window.IdoFront && window.IdoFront.store;
+            if (store && store.state) {
+                const conv = store.getActiveConversation && store.getActiveConversation();
+                if (conv && conv.selectedModel && conv.selectedChannelId) {
+                    const channel = store.state.channels && store.state.channels.find(c => c.id === conv.selectedChannelId);
+                    if (channel) {
+                        aiLabel = `<strong>${conv.selectedModel} | ${channel.name}</strong>`;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to get model/channel info for loading indicator:', e);
+        }
+        
         const roleLabel = document.createElement('div');
         roleLabel.className = 'ido-message__role';
-        roleLabel.textContent = 'AI';
+        roleLabel.innerHTML = `<span class="material-symbols-outlined ido-message__role-icon">auto_awesome</span>${aiLabel}`;
         card.appendChild(roleLabel);
         
         const container = document.createElement('div');
@@ -2197,7 +2427,9 @@ const Framework = (function() {
     publicApi = {
         init,
         registerPlugin,
+        registerPluginBundle,
         unregisterPlugin,
+        unregisterPluginBundle,
         setPluginEnabled,
         getPlugins,
         setMode,
@@ -2229,7 +2461,9 @@ const Framework = (function() {
     return {
         init,
         registerPlugin,
+        registerPluginBundle,
         unregisterPlugin,
+        unregisterPluginBundle,
         setPluginEnabled,
         getPlugins,
         setMode,

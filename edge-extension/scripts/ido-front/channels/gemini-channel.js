@@ -20,7 +20,8 @@
         // 使用 thinkingBudget (数值) 的模型匹配规则
         budgetModelPattern: 'gemini-2\\.5|gemini-2-5',
         // 使用 thinkingLevel (low/high) 的模型匹配规则
-        levelModelPattern: 'gemini-3'
+        // 排除 gemini-3-pro-image 系列（图像生成模型不支持思考功能）
+        levelModelPattern: 'gemini-3(?!.*-pro-image)'
     };
     
     // 全局规则缓存
@@ -778,12 +779,12 @@
      * 直接使用 Framework.registerPlugin，无需外部调用
      */
     function registerThinkingBudgetPlugin() {
-        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPlugin) {
+        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPluginBundle) {
             console.warn('[GeminiChannel] Framework API not available for UI registration');
             return;
         }
         
-        const { registerPlugin, SLOTS, events, showBottomSheet, hideBottomSheet } = Framework;
+        const { registerPluginBundle, SLOTS, events, showBottomSheet, hideBottomSheet } = Framework;
         
         if (!SLOTS || !SLOTS.INPUT_TOP) {
             console.warn('[GeminiChannel] INPUT_TOP slot not available');
@@ -1146,17 +1147,16 @@
             }
         }
 
-        // 向 INPUT_TOP 插槽注册 Gemini 思考预算控件
-        // 使用 core- 前缀，使其被视为核心插件，不在插件管理中显示
-        registerPlugin(SLOTS.INPUT_TOP, 'core-gemini-thinking-budget', {
+        // 使用 registerPluginBundle 注册 Gemini 渠道 UI 组件
+        // 使用 source: 'core' 标记为核心插件，不在插件管理中显示
+        registerPluginBundle('core-gemini-channel-ui', {
             meta: {
-                id: 'core-gemini-thinking-budget',
-                name: 'Gemini 思考预算',
+                name: 'Gemini 渠道 UI',
                 description: '为 Gemini 2.5/3 系列模型提供思考预算/等级配置',
                 version: '1.0.0',
                 icon: 'psychology',
                 author: 'IdoFront',
-                source: 'builtin'
+                source: 'core'  // 核心插件，不在插件管理中显示
             },
             init: function() {
                 // 尝试注册 store 更新事件监听器
@@ -1164,100 +1164,105 @@
                 // 注册 Framework 事件作为备用
                 ensureFrameworkEventRegistered();
             },
-            renderer: function() {
-                // 每次渲染时也尝试注册事件（防止 init 时 store 未就绪）
-                ensureStoreEventRegistered();
-                
-                const wrapper = document.createElement('div');
-                wrapper.id = WRAPPER_ID;
-                wrapper.className = 'flex items-center gap-2';
-                wrapper.style.display = 'none'; // 初始隐藏，由 updateThinkingControls 控制
+            slots: {
+                [SLOTS.INPUT_TOP]: {
+                    id: 'thinking-budget',
+                    render: function() {
+                        // 每次渲染时也尝试注册事件（防止 init 时 store 未就绪）
+                        ensureStoreEventRegistered();
+                        
+                        const wrapper = document.createElement('div');
+                        wrapper.id = WRAPPER_ID;
+                        wrapper.className = 'flex items-center gap-2';
+                        wrapper.style.display = 'none'; // 初始隐藏，由 updateThinkingControls 控制
 
-                // 分隔线
-                const divider = document.createElement('div');
-                divider.className = 'h-5 w-px bg-gray-200';
-                wrapper.appendChild(divider);
+                        // 分隔线
+                        const divider = document.createElement('div');
+                        divider.className = 'h-5 w-px bg-gray-200';
+                        wrapper.appendChild(divider);
 
-                // 思考控件组
-                const controlGroup = document.createElement('div');
-                controlGroup.className = 'flex items-center gap-1';
+                        // 思考控件组
+                        const controlGroup = document.createElement('div');
+                        controlGroup.className = 'flex items-center gap-1';
 
-                const label = document.createElement('span');
-                label.className = 'text-[10px] text-gray-400';
-                label.textContent = '思考';
-                controlGroup.appendChild(label);
+                        const label = document.createElement('span');
+                        label.className = 'text-[10px] text-gray-400';
+                        label.textContent = '思考';
+                        controlGroup.appendChild(label);
 
-                // ===== Budget 模式的按钮（点击打开 BottomSheet）=====
-                const budgetBtn = document.createElement('button');
-                budgetBtn.type = 'button';
-                budgetBtn.className = 'px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors';
-                budgetBtn.setAttribute('data-gemini-budget-btn', 'true');
-                budgetBtn.textContent = '自动';
-                budgetBtn.style.display = 'none'; // 初始隐藏
+                        // ===== Budget 模式的按钮（点击打开 BottomSheet）=====
+                        const budgetBtn = document.createElement('button');
+                        budgetBtn.type = 'button';
+                        budgetBtn.className = 'px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors';
+                        budgetBtn.setAttribute('data-gemini-budget-btn', 'true');
+                        budgetBtn.textContent = '自动';
+                        budgetBtn.style.display = 'none'; // 初始隐藏
 
-                budgetBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    
-                    const store = getStore();
-                    if (!store || !store.getActiveConversation) return;
-                    
-                    const conv = store.getActiveConversation();
-                    if (!conv) return;
+                        budgetBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            
+                            const store = getStore();
+                            if (!store || !store.getActiveConversation) return;
+                            
+                            const conv = store.getActiveConversation();
+                            if (!conv) return;
 
-                    const channelConfig = getChannelConfig(store, conv);
-                    showBudgetBottomSheet(conv, channelConfig);
-                };
-                
-                controlGroup.appendChild(budgetBtn);
+                            const channelConfig = getChannelConfig(store, conv);
+                            showBudgetBottomSheet(conv, channelConfig);
+                        };
+                        
+                        controlGroup.appendChild(budgetBtn);
 
-                // ===== Level 模式的三按钮组（类似 GPT 的 L/M/H）=====
-                const levelGroup = document.createElement('div');
-                levelGroup.className = 'flex items-center gap-0.5';
-                levelGroup.setAttribute('data-gemini-level-group', 'true');
-                levelGroup.style.display = 'none'; // 初始隐藏
+                        // ===== Level 模式的三按钮组（类似 GPT 的 L/M/H）=====
+                        const levelGroup = document.createElement('div');
+                        levelGroup.className = 'flex items-center gap-0.5';
+                        levelGroup.setAttribute('data-gemini-level-group', 'true');
+                        levelGroup.style.display = 'none'; // 初始隐藏
 
-                const createLevelBtn = (key, text, title) => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
-                    btn.textContent = text;
-                    btn.title = title;
-                    btn.onclick = () => {
-                        const store = getStore();
-                        if (!store || !store.getActiveConversation) return;
-                        const conv = store.getActiveConversation();
-                        if (!conv) return;
+                        const createLevelBtn = (key, text, title) => {
+                            const btn = document.createElement('button');
+                            btn.type = 'button';
+                            btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
+                            btn.textContent = text;
+                            btn.title = title;
+                            btn.onclick = () => {
+                                const store = getStore();
+                                if (!store || !store.getActiveConversation) return;
+                                const conv = store.getActiveConversation();
+                                if (!conv) return;
 
-                        setThinkingLevel(store, conv.id, key);
-                        updateThinkingControls();
-                    };
-                    return btn;
-                };
+                                setThinkingLevel(store, conv.id, key);
+                                updateThinkingControls();
+                            };
+                            return btn;
+                        };
 
-                const noneBtn = createLevelBtn('none', 'N', '思考等级：无 (None) - 不使用思考');
-                const lowBtn = createLevelBtn('low', 'L', '思考等级：低 (Low)');
-                const highBtn = createLevelBtn('high', 'H', '思考等级：高 (High)');
+                        const noneBtn = createLevelBtn('none', 'N', '思考等级：无 (None) - 不使用思考');
+                        const lowBtn = createLevelBtn('low', 'L', '思考等级：低 (Low)');
+                        const highBtn = createLevelBtn('high', 'H', '思考等级：高 (High)');
 
-                levelGroup.appendChild(noneBtn);
-                levelGroup.appendChild(lowBtn);
-                levelGroup.appendChild(highBtn);
+                        levelGroup.appendChild(noneBtn);
+                        levelGroup.appendChild(lowBtn);
+                        levelGroup.appendChild(highBtn);
 
-                // 缓存按钮引用
-                levelState.buttons = {
-                    none: noneBtn,
-                    low: lowBtn,
-                    high: highBtn
-                };
+                        // 缓存按钮引用
+                        levelState.buttons = {
+                            none: noneBtn,
+                            low: lowBtn,
+                            high: highBtn
+                        };
 
-                controlGroup.appendChild(levelGroup);
-                wrapper.appendChild(controlGroup);
+                        controlGroup.appendChild(levelGroup);
+                        wrapper.appendChild(controlGroup);
 
-                // 延迟调用 updateThinkingControls，确保元素已添加到 DOM
-                setTimeout(() => updateThinkingControls(), 0);
-                setTimeout(() => updateThinkingControls(), 100);
-                setTimeout(() => updateThinkingControls(), 300);
+                        // 延迟调用 updateThinkingControls，确保元素已添加到 DOM
+                        setTimeout(() => updateThinkingControls(), 0);
+                        setTimeout(() => updateThinkingControls(), 100);
+                        setTimeout(() => updateThinkingControls(), 300);
 
-                return wrapper;
+                        return wrapper;
+                    }
+                }
             }
         });
     }

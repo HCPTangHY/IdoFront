@@ -971,6 +971,20 @@
             msg.metadata = metadata;
         }
         
+        // 保存模型名和渠道名到消息中
+        const conv = store.state.conversations.find(c => c.id === convId);
+        if (conv) {
+            if (conv.selectedModel) {
+                msg.modelName = conv.selectedModel;
+            }
+            if (conv.selectedChannelId) {
+                const channel = store.state.channels && store.state.channels.find(c => c.id === conv.selectedChannelId);
+                if (channel) {
+                    msg.channelName = channel.name;
+                }
+            }
+        }
+        
         store.addMessageToConversation(convId, msg);
         // 仅当该对话当前处于激活状态时才立即写入当前聊天流 UI，
         // 否则只更新 Store，待下次 syncUI 时再统一渲染，避免串台。
@@ -979,6 +993,15 @@
             if (attachments && attachments.length > 0) {
                 payload.attachments = attachments;
             }
+            
+            // 使用已保存到消息中的模型和渠道名称
+            if (msg.modelName) {
+                payload.modelName = msg.modelName;
+            }
+            if (msg.channelName) {
+                payload.channelName = msg.channelName;
+            }
+            
             context.addMessage('ai', payload);
         }
         return msg;

@@ -451,110 +451,122 @@
      * 更多操作：复制、删除 + 插件注册的按钮
      */
     function registerMessageActions() {
-        // 注册核心的复制和删除到 MESSAGE_MORE_ACTIONS 插槽
-        context.registerPlugin(context.SLOTS.MESSAGE_MORE_ACTIONS, 'core-copy', {
-            render: (msg) => {
-                const copyItem = document.createElement('button');
-                copyItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">content_copy</span><span>复制</span>';
-                copyItem.onclick = () => {
-                    const text = msg.text || msg.content;
-                    navigator.clipboard.writeText(text);
-                };
-                return copyItem;
-            }
-        });
-        
-        context.registerPlugin(context.SLOTS.MESSAGE_MORE_ACTIONS, 'core-delete', {
-            render: (msg) => {
-                const deleteItem = document.createElement('button');
-                deleteItem.className = 'danger';
-                deleteItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span><span>删除</span>';
-                deleteItem.onclick = () => {
-                    if (conversationActions && conversationActions.deleteMessage) {
-                        conversationActions.deleteMessage(msg.id);
+        // 使用 registerPluginBundle 统一注册消息操作相关的所有 UI
+        context.registerPluginBundle('core-message-actions', {
+            meta: {
+                name: '消息操作',
+                description: '提供消息的编辑、重试、复制、删除等操作按钮',
+                source: 'core'
+            },
+            slots: {
+                // 同一个 slot 注册多个组件：复制和删除按钮
+                [context.SLOTS.MESSAGE_MORE_ACTIONS]: [
+                    {
+                        id: 'copy',
+                        render: (msg) => {
+                            const copyItem = document.createElement('button');
+                            copyItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">content_copy</span><span>复制</span>';
+                            copyItem.onclick = () => {
+                                const text = msg.text || msg.content;
+                                navigator.clipboard.writeText(text);
+                            };
+                            return copyItem;
+                        }
+                    },
+                    {
+                        id: 'delete',
+                        render: (msg) => {
+                            const deleteItem = document.createElement('button');
+                            deleteItem.className = 'danger';
+                            deleteItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span><span>删除</span>';
+                            deleteItem.onclick = () => {
+                                if (conversationActions && conversationActions.deleteMessage) {
+                                    conversationActions.deleteMessage(msg.id);
+                                }
+                            };
+                            return deleteItem;
+                        }
                     }
-                };
-                return deleteItem;
+                ],
+                // 主操作栏
+                [context.SLOTS.MESSAGE_FOOTER]: (msg) => {
+                    const container = document.createElement('div');
+                    container.className = 'flex items-center gap-1';
+                    
+                    // 1. 编辑按钮（固定）
+                    const editBtn = document.createElement('button');
+                    editBtn.className = 'material-symbols-outlined text-[14px]';
+                    editBtn.textContent = 'edit';
+                    editBtn.title = '编辑';
+                    editBtn.onclick = () => {
+                        if (context.renderMessageEdit) {
+                            context.renderMessageEdit(msg.id);
+                        } else if (messageActions && messageActions.edit) {
+                            messageActions.edit(msg.id);
+                        }
+                    };
+                    container.appendChild(editBtn);
+                    
+                    // 2. 重试按钮（固定）
+                    const retryBtn = document.createElement('button');
+                    retryBtn.className = 'material-symbols-outlined text-[14px]';
+                    retryBtn.textContent = 'refresh';
+                    retryBtn.title = '重试';
+                    retryBtn.onclick = () => {
+                        if (messageActions && messageActions.retry) {
+                            messageActions.retry(msg.id);
+                        }
+                    };
+                    container.appendChild(retryBtn);
+                    
+                    // 3. 更多按钮（下拉菜单，开放插件注册）
+                    const moreBtn = document.createElement('button');
+                    moreBtn.className = 'material-symbols-outlined text-[14px]';
+                    moreBtn.textContent = 'more_horiz';
+                    moreBtn.title = '更多';
+                    
+                    // 创建 Popover
+                    const popover = document.createElement('div');
+                    popover.className = 'ido-message__popover';
+                    
+                    // 从 MESSAGE_MORE_ACTIONS 插槽获取插件注册的按钮
+                    const moreActionPlugins = getDynamicPluginsForMoreActions(msg);
+                    moreActionPlugins.forEach(item => {
+                        if (item) {
+                            item.onclick = ((originalOnclick) => (e) => {
+                                if (originalOnclick) originalOnclick(e);
+                                popover.classList.remove('ido-message__popover--visible');
+                            })(item.onclick);
+                            popover.appendChild(item);
+                        }
+                    });
+                    
+                    // 更多按钮点击事件
+                    let popoverVisible = false;
+                    moreBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        popoverVisible = !popoverVisible;
+                        popover.classList.toggle('ido-message__popover--visible', popoverVisible);
+                    };
+                    
+                    // 点击外部关闭 Popover
+                    document.addEventListener('click', () => {
+                        if (popoverVisible) {
+                            popover.classList.remove('ido-message__popover--visible');
+                            popoverVisible = false;
+                        }
+                    });
+                    
+                    // 相对定位容器
+                    const moreWrapper = document.createElement('div');
+                    moreWrapper.style.position = 'relative';
+                    moreWrapper.appendChild(moreBtn);
+                    moreWrapper.appendChild(popover);
+                    container.appendChild(moreWrapper);
+
+                    return container;
+                }
             }
-        });
-
-        // 主操作栏渲染
-        context.registerPlugin(context.SLOTS.MESSAGE_FOOTER, 'core-msg-actions', (msg) => {
-            const container = document.createElement('div');
-            container.className = 'flex items-center gap-1';
-            
-            // 1. 编辑按钮（固定）
-            const editBtn = document.createElement('button');
-            editBtn.className = 'material-symbols-outlined text-[14px]';
-            editBtn.textContent = 'edit';
-            editBtn.title = '编辑';
-            editBtn.onclick = () => {
-                if (context.renderMessageEdit) {
-                    context.renderMessageEdit(msg.id);
-                } else if (messageActions && messageActions.edit) {
-                    messageActions.edit(msg.id);
-                }
-            };
-            container.appendChild(editBtn);
-            
-            // 2. 重试按钮（固定）
-            const retryBtn = document.createElement('button');
-            retryBtn.className = 'material-symbols-outlined text-[14px]';
-            retryBtn.textContent = 'refresh';
-            retryBtn.title = '重试';
-            retryBtn.onclick = () => {
-                if (messageActions && messageActions.retry) {
-                    messageActions.retry(msg.id);
-                }
-            };
-            container.appendChild(retryBtn);
-            
-            // 3. 更多按钮（下拉菜单，开放插件注册）
-            const moreBtn = document.createElement('button');
-            moreBtn.className = 'material-symbols-outlined text-[14px]';
-            moreBtn.textContent = 'more_horiz';
-            moreBtn.title = '更多';
-            
-            // 创建 Popover
-            const popover = document.createElement('div');
-            popover.className = 'ido-message__popover';
-            
-            // 从 MESSAGE_MORE_ACTIONS 插槽获取插件注册的按钮
-            const moreActionPlugins = getDynamicPluginsForMoreActions(msg);
-            moreActionPlugins.forEach(item => {
-                if (item) {
-                    item.onclick = ((originalOnclick) => (e) => {
-                        if (originalOnclick) originalOnclick(e);
-                        popover.classList.remove('ido-message__popover--visible');
-                    })(item.onclick);
-                    popover.appendChild(item);
-                }
-            });
-            
-            // 更多按钮点击事件
-            let popoverVisible = false;
-            moreBtn.onclick = (e) => {
-                e.stopPropagation();
-                popoverVisible = !popoverVisible;
-                popover.classList.toggle('ido-message__popover--visible', popoverVisible);
-            };
-            
-            // 点击外部关闭 Popover
-            document.addEventListener('click', () => {
-                if (popoverVisible) {
-                    popover.classList.remove('ido-message__popover--visible');
-                    popoverVisible = false;
-                }
-            });
-            
-            // 相对定位容器
-            const moreWrapper = document.createElement('div');
-            moreWrapper.style.position = 'relative';
-            moreWrapper.appendChild(moreBtn);
-            moreWrapper.appendChild(popover);
-            container.appendChild(moreWrapper);
-
-            return container;
         });
     }
     

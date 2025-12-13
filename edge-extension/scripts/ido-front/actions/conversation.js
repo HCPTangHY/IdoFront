@@ -165,6 +165,16 @@
                     payload.attachments = msg.attachments;
                 }
                 
+                // AI 消息：添加模型名和渠道名
+                if (msg.role === 'assistant') {
+                    if (msg.modelName) {
+                        payload.modelName = msg.modelName;
+                    }
+                    if (msg.channelName) {
+                        payload.channelName = msg.channelName;
+                    }
+                }
+                
                 // 批量渲染：所有消息都不触发滚动，使用 fragment 作为目标容器
                 context.addMessage(uiRole, payload, {
                     noScroll: true,

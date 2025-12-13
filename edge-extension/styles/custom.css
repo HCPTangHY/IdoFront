@@ -925,10 +925,19 @@ body.is-resizing {
 
 /* 角色标签 */
 .ido-message__role {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     font-size: 0.75rem;
     color: var(--ido-color-text-secondary);
     margin-bottom: var(--ido-spacing-sm);
     font-weight: 500;
+}
+
+/* 角色标签图标 */
+.ido-message__role-icon {
+    font-size: 0.875rem;
+    line-height: 1;
 }
 
 /* 内容容器 */
