@@ -905,7 +905,7 @@ body.is-resizing {
     display: flex;
     flex-direction: column;
     width: 100%;
-    margin-bottom: var(--ido-spacing-lg);
+    margin-bottom: var(--ido-spacing-sm);
     padding: var(--ido-spacing-lg);
     border: 1px solid transparent;
     border-radius: 16px;
