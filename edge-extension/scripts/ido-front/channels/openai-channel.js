@@ -580,7 +580,7 @@
             return;
         }
         
-        const WRAPPER_ID = 'openai-reasoning-effort-wrapper';
+        const WRAPPER_ID = 'core-openai-reasoning-effort-wrapper';
         
         let storeEventRegistered = false;
         
@@ -677,9 +677,10 @@
         }
         
         // 注册插件
-        registerPlugin(SLOTS.INPUT_TOP, 'openai-reasoning-effort', {
+        // 使用 core- 前缀，使其被视为核心插件，不在插件管理中显示
+        registerPlugin(SLOTS.INPUT_TOP, 'core-openai-reasoning-effort', {
             meta: {
-                id: 'openai-reasoning-effort',
+                id: 'core-openai-reasoning-effort',
                 name: 'OpenAI 思考预算',
                 description: '为支持 reasoning_effort 的模型提供思考预算配置',
                 version: '1.0.0',
@@ -775,7 +776,7 @@
             return;
         }
         
-        const WRAPPER_ID = 'openai-gemini-thinking-wrapper';
+        const WRAPPER_ID = 'core-openai-gemini-thinking-wrapper';
         
         let storeEventRegistered = false;
         
@@ -1140,9 +1141,10 @@
         }
         
         // 注册插件
-        registerPlugin(SLOTS.INPUT_TOP, 'openai-gemini-thinking', {
+        // 使用 core- 前缀，使其被视为核心插件，不在插件管理中显示
+        registerPlugin(SLOTS.INPUT_TOP, 'core-openai-gemini-thinking', {
             meta: {
-                id: 'openai-gemini-thinking',
+                id: 'core-openai-gemini-thinking',
                 name: 'OpenAI 渠道 Gemini 思考',
                 description: '通过 OpenAI 兼容接口调用 Gemini 时的思考预算配置',
                 version: '1.0.0',

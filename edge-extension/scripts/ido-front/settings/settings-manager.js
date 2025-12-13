@@ -532,5 +532,15 @@
     window.IdoFront.settingsManager.openTab = function(tab) {
         toggleSettingsMode(tab);
     };
+    
+    /**
+     * 刷新当前设置标签页内容
+     * 供设置子模块在数据变化后调用
+     */
+    window.IdoFront.settingsManager.refreshCurrentTab = function() {
+        if (activeSettingsTab && mainContainer) {
+            updateSettingsContent();
+        }
+    };
 
 })();

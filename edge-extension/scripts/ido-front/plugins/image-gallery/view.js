@@ -392,23 +392,18 @@
       });
       
       var storageFacade = window.IdoFront && window.IdoFront.storage;
-      if (!storageFacade) {
+      if (!storageFacade || typeof storageFacade.setPluginData !== 'function') {
         alert('存储服务不可用');
         return;
       }
       
       try {
-        // 使用插件存储API保存画廊
-        var galleryId = 'image-gallery.saved.' + Date.now();
-        await storageFacade.savePlugin({
-          id: galleryId,
-          enabled: true,
-          updatedAt: Date.now(),
-          data: {
-            name: name,
-            tasks: snapshotTasks,
-            savedAt: Date.now()
-          }
+        // 使用插件运行时数据存储 API 保存画廊
+        var galleryKey = 'saved.' + Date.now();
+        await storageFacade.setPluginData('builtin-image-gallery', galleryKey, {
+          name: name,
+          tasks: snapshotTasks,
+          savedAt: Date.now()
         });
         
         // 重新渲染侧边栏
@@ -427,22 +422,24 @@
     // 加载已保存的画廊列表
     var storageFacade = window.IdoFront && window.IdoFront.storage;
     
-    if (!storageFacade) {
+    if (!storageFacade || typeof storageFacade.getAllPluginData !== 'function') {
       var error = document.createElement('div');
       error.className = 'text-[11px] text-red-500 text-center py-4';
       error.textContent = '存储服务不可用';
       body.appendChild(error);
     } else {
-      storageFacade.getAllPlugins().then(function(allPlugins) {
-        // 筛选出画廊数据（ID以'image-gallery.saved.'开头）
-        var galleries = allPlugins.filter(function(p) {
-          return p.id && p.id.startsWith('image-gallery.saved.');
-        }).map(function(p) {
+      // 使用插件运行时数据存储 API 加载画廊列表
+      storageFacade.getAllPluginData('builtin-image-gallery').then(function(allData) {
+        // 筛选出画廊数据（key 以 'saved.' 开头）
+        var galleries = allData.filter(function(record) {
+          return record.key && record.key.startsWith('saved.');
+        }).map(function(record) {
+          var data = record.value || {};
           return {
-            id: p.id,
-            name: p.data && p.data.name || '未命名画廊',
-            tasks: p.data && p.data.tasks || [],
-            savedAt: p.data && p.data.savedAt || p.updatedAt
+            key: record.key,
+            name: data.name || '未命名画廊',
+            tasks: data.tasks || [],
+            savedAt: data.savedAt || record.updatedAt
           };
         }).sort(function(a, b) {
           return b.savedAt - a.savedAt;
@@ -473,7 +470,7 @@
               e.stopPropagation();
               if (!confirm('确定要删除画廊"' + item.name + '"吗？')) return;
               
-              storageFacade.deletePlugin(item.id).then(function() {
+              storageFacade.deletePluginData('builtin-image-gallery', item.key).then(function() {
                 renderSidebar(container);
               }).catch(function(e) {
                 alert('删除失败：' + e.message);

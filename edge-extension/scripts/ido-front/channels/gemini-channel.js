@@ -791,7 +791,7 @@
         }
 
         // 使用唯一 ID 来查找 DOM 元素，避免引用失效问题
-        const WRAPPER_ID = 'gemini-thinking-budget-wrapper';
+        const WRAPPER_ID = 'core-gemini-thinking-budget-wrapper';
         
         // UI 状态（仅存储非 DOM 状态）
         let storeEventRegistered = false;
@@ -1147,9 +1147,10 @@
         }
 
         // 向 INPUT_TOP 插槽注册 Gemini 思考预算控件
-        registerPlugin(SLOTS.INPUT_TOP, 'gemini-thinking-budget', {
+        // 使用 core- 前缀，使其被视为核心插件，不在插件管理中显示
+        registerPlugin(SLOTS.INPUT_TOP, 'core-gemini-thinking-budget', {
             meta: {
-                id: 'gemini-thinking-budget',
+                id: 'core-gemini-thinking-budget',
                 name: 'Gemini 思考预算',
                 description: '为 Gemini 2.5/3 系列模型提供思考预算/等级配置',
                 version: '1.0.0',

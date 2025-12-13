@@ -42,7 +42,15 @@
 
         const internalPlugins = context.getPlugins() || [];
         const userPlugins = internalPlugins.filter(p => !p.id.startsWith('core-'));
-        const rerender = () => window.IdoFront.pluginSettings.render(container, context, store);
+        
+        // 使用 settingsManager 的 refreshCurrentTab 来刷新，
+        // 而不是在闭包中捕获容器引用（容器可能是临时离屏容器）
+        const rerender = () => {
+            const manager = window.IdoFront.settingsManager;
+            if (manager && typeof manager.refreshCurrentTab === 'function') {
+                manager.refreshCurrentTab();
+            }
+        };
 
         // 外部插件导入面板（只负责导入，和列表展示解耦）
         container.appendChild(createImportPanel({
@@ -250,10 +258,11 @@
                 codeArea.value = '';
                 updatePreview('');
                 fileInput.value = '';
-                rerender();
+                
+                // 使用 requestAnimationFrame 确保在下一帧渲染前刷新
+                requestAnimationFrame(() => rerender());
             } catch (error) {
                 setStatus(`导入失败：${error.message}`, 'error');
-            } finally {
                 importBtn.disabled = false;
                 importBtn.textContent = '确认导入';
             }
@@ -373,7 +382,7 @@
                 try {
                     await loader.togglePlugin(plugin.id, event.target.checked);
                     setStatus(`已${event.target.checked ? '启用' : '停用'}插件 ${plugin.name}`, 'success');
-                    rerender();
+                    requestAnimationFrame(() => rerender());
                 } catch (error) {
                     setStatus(`切换插件失败：${error.message}`, 'error');
                     event.target.checked = !event.target.checked;
@@ -395,7 +404,7 @@
                 try {
                     await loader.deletePlugin(plugin.id);
                     setStatus(`插件 ${plugin.name || plugin.id} 已删除`, 'success');
-                    rerender();
+                    requestAnimationFrame(() => rerender());
                 } catch (error) {
                     setStatus(`删除失败：${error.message}`, 'error');
                 }
@@ -573,7 +582,8 @@
                     try {
                         await loader.togglePlugin(plugin.id, enabled);
                         setStatus(`已${enabled ? '启用' : '停用'}插件 ${plugin.name || plugin.id}`, 'success');
-                        rerender();
+                        // 使用 requestAnimationFrame 确保在下一帧渲染前刷新
+                        requestAnimationFrame(() => rerender());
                     } catch (error) {
                         setStatus(`切换插件失败：${error.message}`, 'error');
                         event.target.checked = !enabled;
@@ -610,7 +620,8 @@
                     try {
                         await loader.deletePlugin(plugin.id);
                         setStatus(`插件 ${plugin.name || plugin.id} 已删除`, 'success');
-                        rerender();
+                        // 使用 requestAnimationFrame 确保在下一帧渲染前刷新
+                        requestAnimationFrame(() => rerender());
                     } catch (error) {
                         setStatus(`删除失败：${error.message}`, 'error');
                     }

@@ -875,7 +875,7 @@
             return;
         }
         
-        const WRAPPER_ID = 'deep-research-status-wrapper';
+        const WRAPPER_ID = 'core-deep-research-status-wrapper';
         
         /**
          * 获取 Store 实例
@@ -965,9 +965,10 @@
             }
         }
         
-        registerPlugin(SLOTS.INPUT_TOP, 'deep-research-status', {
+        // 使用 core- 前缀，使其被视为核心插件，不在插件管理中显示
+        registerPlugin(SLOTS.INPUT_TOP, 'core-deep-research-status', {
             meta: {
-                id: 'deep-research-status',
+                id: 'core-deep-research-status',
                 name: 'Deep Research 状态',
                 description: '显示 Gemini Deep Research 的研究状态',
                 version: '1.0.0',
