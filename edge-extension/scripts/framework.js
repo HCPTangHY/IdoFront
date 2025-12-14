@@ -2427,6 +2427,7 @@ const Framework = (function() {
     publicApi = {
         init,
         registerPlugin,
+        refreshSlot,
         registerPluginBundle,
         unregisterPlugin,
         unregisterPluginBundle,
@@ -2461,6 +2462,7 @@ const Framework = (function() {
     return {
         init,
         registerPlugin,
+        refreshSlot,
         registerPluginBundle,
         unregisterPlugin,
         unregisterPluginBundle,
@@ -2499,3 +2501,10 @@ const Framework = (function() {
     };
     
 })();
+
+// Expose to global scope for plugin-loader and external plugins
+try {
+    if (typeof globalThis !== 'undefined') {
+        globalThis.Framework = Framework;
+    }
+} catch (e) {}

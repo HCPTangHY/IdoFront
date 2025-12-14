@@ -11,6 +11,51 @@
     let conversationActions = null;
     let messageActions = null;
 
+    // 支持其他模块在加载期注册“核心插件”（如 updater），并在 corePlugins.init 时统一初始化
+    const corePluginRegistry = new Map(); // id -> plugin definition
+    const corePluginInitialized = new Set(); // id
+
+    function initCorePluginIfNeeded(id, pluginDef) {
+        if (!id || corePluginInitialized.has(id)) return;
+        if (!pluginDef || pluginDef.enabled === false) return;
+        if (!context || !store) return;
+        if (typeof pluginDef.init !== 'function') return;
+
+        try {
+            const ret = pluginDef.init(context, store);
+            if (ret && typeof ret.then === 'function') {
+                ret.catch((error) => {
+                    console.warn(`[CorePlugins] core plugin init failed (async): ${id}`, error);
+                });
+            }
+            corePluginInitialized.add(id);
+        } catch (error) {
+            console.warn(`[CorePlugins] core plugin init failed: ${id}`, error);
+        }
+    }
+
+    function initRegisteredCorePlugins() {
+        for (const [id, def] of corePluginRegistry.entries()) {
+            initCorePluginIfNeeded(id, def);
+        }
+    }
+
+    window.IdoFront.corePlugins.register = function(pluginDef) {
+        if (!pluginDef || typeof pluginDef !== 'object') return false;
+        const id = String(pluginDef.id || '').trim();
+        if (!id) {
+            console.warn('[CorePlugins] register() requires pluginDef.id');
+            return false;
+        }
+
+        corePluginRegistry.set(id, pluginDef);
+
+        // 如果 corePlugins 已完成 init，则立即初始化该插件
+        initCorePluginIfNeeded(id, pluginDef);
+
+        return true;
+    };
+
     /**
      * 初始化核心插件
      */
@@ -51,6 +96,9 @@
         if (window.IdoFront.networkLogger) {
             window.IdoFront.networkLogger.installInterceptor();
         }
+
+        // 初始化通过 corePlugins.register 注册的核心插件（如 updater）
+        initRegisteredCorePlugins();
     };
 
     /**

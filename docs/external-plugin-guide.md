@@ -5,8 +5,10 @@
 IdoFront 支持通过"外部插件"扩展 UI 和功能。外部插件与核心扩展解耦，采用以下流程：
 
 1. 在设置页 → 插件管理 → 外部插件 中导入 JS 代码或上传 `.js` 文件
-2. 插件代码在沙箱执行器中运行，可使用 `window.IdoFront` 与 `Framework` API
+2. 插件代码在沙箱 iframe 中安全运行，可使用 `Framework` 和 `IdoFront` API
 3. 插件生命周期：注册 → 启动 → 手动启停/删除
+
+> **注意**：外部插件在沙箱环境中运行，与主线程通过消息机制通信。这确保了安全性，同时提供了与内置插件几乎相同的 API。
 
 ## 2. 插件类型
 
@@ -81,22 +83,32 @@ IdoFront 支持三种主要插件类型：
 
 ## 4. 可用运行环境与 API
 
-### 4.1 全局对象
+### 4.1 沙箱运行机制
+
+外部插件在独立的沙箱 iframe 中运行，与主线程通过 `postMessage` 通信。这种架构带来以下特点：
+
+- **安全隔离**：插件代码无法直接访问主线程的敏感数据
+- **API 代理**：`Framework` 和 `IdoFront` 对象通过消息机制代理到主线程
+- **异步渲染**：UI 组件在沙箱中创建 DOM，序列化后传递到主线程显示
+
+### 4.2 全局对象
 
 沙箱环境提供以下全局对象：
 
 | 对象 | 说明 |
 | --- | --- |
-| `window` | 提供大部分浏览器 API，但请勿依赖 `localStorage/sessionStorage` 等敏感对象 |
-| `document` | 可用于创建 DOM 元素 |
-| `console` | 日志会以 `[Plugin:<Name>]` 前缀输出到控制台 |
-| `Framework` | 框架核心 API，提供插件注册、UI 工具等 |
-| `IdoFront` | 业务核心 API，提供对话、消息、存储等能力 |
-| `PluginRuntime` | 插件运行时信息（`pluginId`、`dryRun` 等） |
+| `window` | 沙箱 window，提供基本浏览器 API |
+| `document` | 沙箱 document，可用于创建 DOM 元素 |
+| `console` | 标准控制台，日志会显示在浏览器 DevTools |
+| `Framework` | 框架核心 API（代理），提供插件注册、UI 工具、消息操作等 |
+| `IdoFront` | 业务核心 API（代理），提供 Channel 注册等能力 |
+| `fetch` | 网络请求 API，支持网络日志记录 |
 
-### 4.2 Framework API
+### 4.3 Framework API（沙箱版本）
 
-#### 4.2.1 插件注册
+> **重要**：以下 API 在沙箱中通过消息代理实现，行为与主线程版本基本一致，但有少量限制。
+
+#### 4.3.1 插件注册
 
 ```javascript
 Framework.registerPlugin(slotName, pluginId, definition)
@@ -143,7 +155,65 @@ Framework.registerPlugin(slotName, pluginId, definition)
 }
 ```
 
-#### 4.2.2 可用插槽（SLOTS）
+#### 4.3.1.1 批量注册（Plugin Bundle）
+
+当一个插件需要同时往多个插槽注册多个组件时，推荐使用 [`Framework.registerPluginBundle()`](edge-extension/scripts/framework.js:1045)：
+
+```javascript
+Framework.registerPluginBundle(bundleId, definition)
+Framework.unregisterPluginBundle(bundleId)
+```
+
+**说明：**
+- `bundleId`：插件包 ID（字符串）
+- `definition.meta`：插件包元数据（可选）
+- `definition.slots`：插槽配置（必填），支持：
+  - **对象形式（推荐）**：`{ [slotName]: render | { id?, render } | Array<{ id?, render } | render> }`
+  - **数组形式**：`[{ slot, id?, render }]`
+- `definition.init(frameworkApi)`：初始化函数（可选，调用一次）
+- `definition.destroy(frameworkApi)`：销毁函数（可选，调用一次；在你调用 `unregisterPluginBundle` 时触发）
+
+> 建议：为每个 slot 组件显式提供 `id`，避免热更新/重载时因自动生成 ID 导致旧组件残留。
+
+**示例：**
+
+```javascript
+(function() {
+  const { SLOTS, ui } = Framework;
+
+  Framework.registerPluginBundle('my-bundle', {
+    meta: { name: 'My Bundle', version: '1.0.0', icon: 'extension' },
+    slots: {
+      [SLOTS.HEADER_ACTIONS]: {
+        id: 'my-bundle:hello',
+        render() {
+          return ui.createIconButton({
+            label: 'Hello',
+            icon: 'waving_hand',
+            className: 'ido-btn ido-btn--ghost text-xs gap-1',
+            onClick() {
+              Framework.addMessage('assistant', { content: 'Hello from bundle!' });
+            }
+          });
+        }
+      },
+      [SLOTS.SIDEBAR_BOTTOM]: {
+        id: 'my-bundle:sidebar',
+        render() {
+          const el = document.createElement('div');
+          el.className = 'text-xs text-gray-500 px-2 py-1';
+          el.textContent = 'Sidebar widget from bundle';
+          return el;
+        }
+      }
+    }
+  });
+})();
+```
+
+#### 4.3.2 可用插槽（SLOTS）
+
+> **注意**：`Framework.SLOTS` 在沙箱初始化时从主线程同步获取，确保与主线程保持一致。
 
 ```javascript
 Framework.SLOTS = {
@@ -158,7 +228,9 @@ Framework.SLOTS = {
 }
 ```
 
-#### 4.2.3 UI 工具
+#### 4.3.3 UI 工具
+
+沙箱提供的 UI 工具用于创建 DOM 元素。这些元素会被序列化为 HTML 传递到主线程渲染。
 
 ```javascript
 // 创建图标按钮
@@ -171,15 +243,13 @@ Framework.ui.createIconButton({
   onClick: () => {}           // 点击回调
 })
 
-// 创建自定义 Header
-Framework.ui.createCustomHeader({
-  center: '标题内容',         // 字符串、元素或渲染函数
-  right: rightElement,        // 可选，右侧内容
-  showOpenInNew: true         // 是否显示"全屏打开"按钮
-})
+// 注意：onClick 回调会通过消息机制异步触发
+// 事件对象中只包含可序列化的基本信息
 ```
 
-#### 4.2.4 消息操作
+#### 4.3.4 消息操作
+
+以下消息操作通过消息代理到主线程执行：
 
 ```javascript
 // 添加消息
@@ -188,107 +258,116 @@ Framework.addMessage(role, content, options)
 // 更新最后一条消息
 Framework.updateLastMessage(content)
 
-// 完成流式消息
+// 完成流式消息（通常在流式结束时调用，触发 Markdown 解析/清理）
 Framework.finalizeStreamingMessage()
+
+// 批量解析所有待 Markdown 的元素（历史消息加载后常用）
+Framework.renderAllPendingMarkdown()
 
 // 清空消息
 Framework.clearMessages()
+
+// ====== Loading 指示器相关 ======
+
+// 添加 loading 气泡（沙箱中是异步的）
+const loadingId = await Framework.addLoadingIndicator()
+
+// 移除 loading 气泡
+Framework.removeLoadingIndicator(loadingId)
+
+// 将 loading 指示器附着到某条消息下方（沙箱中是异步的）
+const ok = await Framework.attachLoadingIndicatorToMessage(loadingId, messageId)
+
+// 移除某条消息下方的 streaming 指示器
+Framework.removeMessageStreamingIndicator(messageId)
+
+// 设置发送按钮 loading 状态
+Framework.setSendButtonLoading(true)
+Framework.setSendButtonLoading(false)
 ```
 
-#### 4.2.5 面板控制
+#### 4.3.5 面板控制
+
+> 说明：在沙箱中，`renderer` 会在 **沙箱内执行**，其产出的 DOM 会被序列化为 HTML 发送到主线程渲染；交互事件通过消息机制回传到沙箱执行。
 
 ```javascript
 // 切换左右面板
 Framework.togglePanel('left'|'right', force)
 
-// 显示底部抽屉
-Framework.showBottomSheet(renderer)
+// 显示底部抽屉（renderer 在沙箱执行）
+Framework.showBottomSheet((container) => {
+  container.innerHTML = '<div>hello</div>'
+})
 
 // 隐藏底部抽屉
 Framework.hideBottomSheet()
 
-// 设置自定义面板
-Framework.setCustomPanel('right', renderer)
-```
-
-#### 4.2.6 视图模式
-
-```javascript
-// 切换视图模式
-Framework.setMode(modeId, {
-  sidebar: (container) => {},  // 侧边栏渲染函数
-  main: (container) => {}      // 主视图渲染函数
+// 设置右侧自定义面板（renderer 在沙箱执行）
+Framework.setCustomPanel('right', (container) => {
+  container.innerHTML = '<div>right panel</div>'
 })
 
-// 获取当前模式
-Framework.getCurrentMode()
+// 恢复右侧默认面板
+Framework.restoreDefaultRightPanel()
 ```
 
-### 4.3 IdoFront API
-
-#### 4.3.1 对话操作
+#### 4.3.6 视图模式
 
 ```javascript
-// 通过 IdoFront.conversationActions 访问
-IdoFront.conversationActions.create()      // 创建新对话
-IdoFront.conversationActions.select(id)    // 切换对话
-IdoFront.conversationActions.delete(id)    // 删除对话
+// 切换视图模式（沙箱中仅支持不带 renderers 的调用）
+Framework.setMode(modeId)
+
+// 获取当前模式（沙箱中返回 null，需通过消息异步获取）
+Framework.getCurrentMode() // 返回 null
 ```
 
-#### 4.3.2 消息操作
+> **限制**：`setMode` 的 `renderers` 参数（包含渲染函数）在沙箱中不支持，因为函数无法跨 iframe 序列化。
+
+#### 4.3.7 Framework Events（事件系统）
+
+沙箱可使用 `Framework.events` 与主线程共享的事件总线交互：
 
 ```javascript
-// 通过 IdoFront.messageActions 访问
-IdoFront.messageActions.send(text)         // 发送消息
-IdoFront.messageActions.edit(messageId)    // 编辑消息
-IdoFront.messageActions.retry(messageId)   // 重试消息
+// 订阅事件（返回取消订阅函数）
+const off = Framework.events.on('mode:changed', (data) => {
+  console.log('mode changed', data)
+})
+
+// 取消订阅（方式一）
+off()
+
+// 取消订阅（方式二）
+Framework.events.off('mode:changed', handler)
+
+// 发射事件
+Framework.events.emit('my-event', { ok: true })
+
+// 异步发射事件
+Framework.events.emitAsync('my-event', { ok: true })
 ```
 
-#### 4.3.3 Store 状态访问
+> 注意：事件数据会通过消息机制传递，请确保 `eventData` 可序列化。
+
+#### 4.3.8 Framework Storage（配置存储）
+
+沙箱可使用 `Framework.storage` 做轻量配置持久化（与内置插件风格一致）：
 
 ```javascript
-// 访问全局状态
-IdoFront.store.state.conversations        // 对话列表
-IdoFront.store.state.activeConversationId // 当前对话 ID
-IdoFront.store.state.personas             // 面具列表
-IdoFront.store.state.activePersonaId      // 当前面具 ID
-IdoFront.store.state.channels             // 渠道列表
-IdoFront.store.state.pluginStates         // 插件状态
+// 读取（沙箱中为异步）
+const value = await Framework.storage.getItem('my-plugin:key', null)
 
-// 获取当前激活对话
-IdoFront.store.getActiveConversation()
-
-// 获取当前激活面具
-IdoFront.store.getActivePersona()
+// 写入（沙箱中为异步）
+await Framework.storage.setItem('my-plugin:key', { enabled: true })
 ```
 
-#### 4.3.4 事件监听
+> 建议：使用插件 ID 作为 key 前缀（如 `my-plugin:key`）避免冲突。
+> 另外也可以使用 [`IdoFront.storage.getItem()`](edge-extension/scripts/sandbox-loader.js:193) / [`IdoFront.storage.setItem()`](edge-extension/scripts/sandbox-loader.js:203)（同样是异步代理）。
 
-```javascript
-// 监听状态变化
-IdoFront.store.events.on('updated', (state) => {
-  console.log('状态已更新', state);
-});
+### 4.4 IdoFront API（沙箱版本）
 
-IdoFront.store.events.on('persona:changed', (personaId) => {
-  console.log('面具已切换', personaId);
-});
+沙箱中的 `IdoFront` 提供 Channel 注册、Store 访问和 Storage 存储能力。
 
-// 取消监听
-IdoFront.store.events.off('updated', callback);
-```
-
-#### 4.3.5 存储 API
-
-```javascript
-// 插件专用存储（IndexedDB）
-await IdoFront.storage.savePlugin(pluginData)
-await IdoFront.storage.getPlugin(pluginId)
-await IdoFront.storage.getAllPlugins()
-await IdoFront.storage.deletePlugin(pluginId)
-```
-
-### 4.4 Channel Registry API
+#### 4.4.1 Channel Registry API
 
 用于注册自定义模型渠道：
 
@@ -339,7 +418,96 @@ IdoFront.channelRegistry.registerType('my-api', {
 });
 ```
 
+#### 4.4.2 Store API（会话状态访问）
+
+沙箱中的 `IdoFront.store` 提供对主线程状态的异步访问：
+
+```javascript
+// 获取完整状态快照
+const state = await IdoFront.store.getState();
+// state 包含：conversations, activeConversationId, channels, personas, activePersonaId
+
+// 获取当前活动会话
+const conv = await IdoFront.store.getActiveConversation();
+// conv 结构：{ id, title, messages, metadata, ... }
+
+// 获取指定会话
+const otherConv = await IdoFront.store.getConversation('conversation-id');
+
+// 更新会话元数据（合并模式）
+await IdoFront.store.updateConversationMetadata('conversation-id', {
+  myPlugin: {
+    lastAction: Date.now(),
+    customData: { ... }
+  }
+});
+
+// 触发状态持久化
+await IdoFront.store.persist();
+```
+
+> **注意**：所有 Store 方法都是异步的，返回 Promise。状态快照是只读的，如需修改请使用 `updateConversationMetadata`。
+
+#### 4.4.3 Store Events（状态事件监听）
+
+沙箱中的 `IdoFront.store.events` 允许监听主线程的状态变化：
+
+```javascript
+// 订阅事件
+const unsubscribe = IdoFront.store.events.on('updated', (eventData) => {
+  console.log('状态已更新:', eventData);
+});
+
+// 可用事件类型：
+// - 'updated': 状态更新
+// - 'conversation:created': 新建会话
+// - 'conversation:deleted': 删除会话
+// - 'message:added': 新增消息
+// - 更多事件请参考 store.js
+
+// 取消订阅（方式一）
+unsubscribe();
+
+// 取消订阅（方式二）
+IdoFront.store.events.off('updated', myCallback);
+```
+
+> **注意**：事件数据通过消息机制传递，只包含可序列化的内容。
+
+#### 4.4.4 Storage API（配置持久化）
+
+沙箱中的 `IdoFront.storage` 提供简单的键值存储，用于保存插件配置：
+
+```javascript
+const CONFIG_KEY = 'my-plugin:config';
+
+// 读取配置
+const config = await IdoFront.storage.getItem(CONFIG_KEY);
+// 如果不存在，返回 null
+
+// 保存配置（自动 JSON 序列化）
+await IdoFront.storage.setItem(CONFIG_KEY, {
+  theme: 'dark',
+  fontSize: 14,
+  customSettings: { ... }
+});
+
+// 删除配置
+await IdoFront.storage.removeItem(CONFIG_KEY);
+```
+
+> **最佳实践**：使用插件 ID 作为键前缀（如 `my-plugin:config`）避免与其他插件冲突。
+
 ## 5. 开发规范与最佳实践
+
+### 5.0 沙箱插件的特殊注意事项
+
+由于外部插件在沙箱中运行，需注意以下限制：
+
+1. **函数不可序列化**：渲染函数返回的 DOM 元素会被序列化为 HTML，`onclick` 等事件处理器需通过 `Framework.ui.createIconButton` 的 `onClick` 参数设置
+2. **异步渲染**：UI 组件从沙箱到主线程需要一次往返消息，可能有轻微延迟
+3. **有限的 DOM 访问**：无法直接访问主线程的 DOM，只能通过 Framework API 操作
+4. **状态同步**：Store 状态不会自动同步到沙箱，如需监听需通过消息机制
 
 ### 5.1 命名规范
 
@@ -597,17 +765,27 @@ node pack.js your-plugin-dir
 
 ## 9. 安全注意事项
 
-### 9.1 沙箱限制
+### 9.1 沙箱安全机制
 
-- 外部插件在沙箱 iframe 中运行，但仍可访问扩展内部 API
-- 不要在插件中存储敏感信息（如 API 密钥）
-- 避免执行不受信任的代码
+外部插件运行在独立的沙箱 iframe 中，这提供了以下安全保障：
 
-### 9.2 用户提示
+- **代码隔离**：插件代码无法直接访问主线程的全局变量和 DOM
+- **API 白名单**：只有通过 `Framework` 和 `IdoFront` 代理的 API 可用
+- **消息验证**：主线程会验证消息来源，只处理来自沙箱的消息
+- **资源限制**：沙箱中的网络请求会被记录到网络日志面板
+
+### 9.2 仍需注意
+
+- 插件可以发起网络请求，可能泄露数据
+- 不要在插件代码中硬编码敏感信息（如 API 密钥）
+- 插件可以通过 `Framework.addMessage` 修改对话内容
+
+### 9.3 用户提示
 
 - 只安装来自可信来源的插件
 - 审查插件代码，了解其功能
 - 定期检查插件更新和安全公告
+- 在网络日志面板中监控插件的网络活动
 
 ## 10. 参考资源
 
@@ -621,8 +799,23 @@ node pack.js your-plugin-dir
 ### Q: 插件无法加载怎么办？
 A: 检查浏览器控制台是否有错误信息，确保插件语法正确，并在设置页查看"最近的外部插件错误"。
 
-### Q: 如何访问插件自己的配置？
-A: 使用 `IdoFront.storage.savePlugin()` 和 `getPlugin()` 存储插件专用数据。
+### Q: 为什么我的 UI 插件不显示？
+A: 确保：
+1. 使用了正确的 `Framework.SLOTS` 常量
+2. `render` 函数返回了有效的 DOM 元素或 HTML 字符串
+3. 检查控制台是否有 `[Sandbox]` 或 `[PluginLoader]` 前缀的错误信息
+
+### Q: 如何处理点击事件？
+A: 使用 `Framework.ui.createIconButton` 的 `onClick` 参数：
+```javascript
+Framework.ui.createIconButton({
+  icon: 'star',
+  onClick: () => {
+    // 这个函数会通过消息机制调用
+    Framework.addMessage('assistant', { content: '点击了！' });
+  }
+});
+```
 
 ### Q: 插件可以修改核心功能吗？
 A: 插件只能通过暴露的 API 与核心交互，无法直接修改核心代码，这确保了系统稳定性。
