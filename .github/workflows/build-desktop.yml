@@ -99,16 +99,23 @@ jobs:
       - name: 配置 Electron Builder
         shell: bash
         run: |
-          # 移除 package.json 中的 directories 字段
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # 移除 package.json 中的 directories 字段，添加版本和仓库信息
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
             delete pkg.directories;
             pkg.main = 'electron/main.js';
+            pkg.version = '${VERSION}';
+            pkg.repository = {
+              type: 'git',
+              url: 'https://github.com/HCPTangHY/IdoFront.git'
+            };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
           
-          # 创建 electron-builder 配置文件
+          # 创建 electron-builder 配置文件（支持自动更新）
           cat > electron-builder.yml << 'EOFYML'
           appId: com.idofront.app
           productName: IdoFront
@@ -123,7 +130,15 @@ jobs:
             allowToChangeInstallationDirectory: true
             createDesktopShortcut: true
             createStartMenuShortcut: true
+          publish:
+            provider: github
+            owner: HCPTangHY
+            repo: IdoFront
+            releaseType: release
           EOFYML
+      
+      - name: 安装 electron-updater
+        run: npm install electron-updater
       
       - name: 构建 Windows 应用
         run: npx electron-builder --win --x64 --config electron-builder.yml --publish never

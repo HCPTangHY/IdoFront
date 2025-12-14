@@ -103,7 +103,20 @@ for (const scriptPath of SCRIPT_ORDER) {
   bundledCode += '\n';
 }
 
-// 5. 在末尾触发 IdoFrontLoaded 事件（模拟 loader.js 的行为）
+// 5. 读取版本号并嵌入
+const manifestPath = path.join(EXTENSION_DIR, 'manifest.json');
+let appVersion = '1.0.0';
+try {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  appVersion = manifest.version || appVersion;
+} catch (e) {
+  console.warn('⚠️  无法读取 manifest.json 版本号');
+}
+
+// 在所有代码之前注入版本号
+bundledCode = `// IdoFront Version\nwindow.IdoFront = window.IdoFront || {};\nwindow.IdoFront.version = '${appVersion}';\n\n` + bundledCode;
+
+// 6. 在末尾触发 IdoFrontLoaded 事件（模拟 loader.js 的行为）
 bundledCode += `\n// ========== 触发加载完成事件 ==========\n`;
 bundledCode += `document.dispatchEvent(new CustomEvent('IdoFrontLoaded'));\n`;
 
@@ -252,15 +265,8 @@ if (fs.existsSync(indexTemplate)) {
   console.log(`✅ 已生成: ${indexDest} (自动转换 + 移动端优化)`);
 }
 
-// 12. 读取版本号（用于日志）
-const manifestPath = path.join(EXTENSION_DIR, 'manifest.json');
-let version = 'web';
-try {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  version = manifest.version ? `v${manifest.version}-web` : 'web';
-} catch (e) {
-  console.warn('⚠️  无法读取版本号');
-}
+// 12. 版本号日志
+const version = `v${appVersion}-web`;
 
 console.log('\n✅ Web 版构建完成！');
 console.log(`📁 输出目录: ${WEB_DIST_DIR}/`);

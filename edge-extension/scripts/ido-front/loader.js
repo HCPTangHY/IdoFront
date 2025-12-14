@@ -36,6 +36,12 @@
         // Builtin theme toggle (light / dark / system)
         'plugins/theme-toggle.js',
         
+        // Updater 模块（自动更新检查）
+        'updater/update-config.js',
+        'updater/update-service.js',
+        'updater/update-ui.js',
+        'updater/update-plugin.js',
+        
         // 4. Settings 模块（依赖基础模块）
         'settings/channel-editor.js',
         'settings/channel-settings.js',
