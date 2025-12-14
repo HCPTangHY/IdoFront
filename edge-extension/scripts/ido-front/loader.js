@@ -16,6 +16,7 @@
         'channels/channel-registry.js',
         'plugin-loader.js',  // 外部插件加载器（依赖 channel-registry）
         'channels/openai-channel.js',
+        'channels/openai-responses-channel.js',
         'channels/gemini-channel.js',
         'channels/gemini-deep-research-channel.js',  // Gemini Deep Research Agent
         'service.js',
