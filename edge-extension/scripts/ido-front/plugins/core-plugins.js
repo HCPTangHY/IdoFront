@@ -426,8 +426,9 @@
             store.events.on('updated', updateHeaderControls);
         }
 
-        // 向 INPUT_TOP 插槽（输入框上方工具栏）注册实际渲染函数
-        context.registerPlugin(context.SLOTS.INPUT_TOP, 'core-chat-toggles', () => {
+        // 向 INPUT_TOP 插槽（输入框上方工具栏）注册纯 UI 组件
+        const registerUI = context.registerUIComponent || context.registerPlugin;
+        registerUI(context.SLOTS.INPUT_TOP, 'core-chat-toggles', () => {
             const container = document.createElement('div');
             container.className = 'flex items-center gap-3';
 
@@ -499,13 +500,11 @@
      * 更多操作：复制、删除 + 插件注册的按钮
      */
     function registerMessageActions() {
-        // 使用 registerPluginBundle 统一注册消息操作相关的所有 UI
-        context.registerPluginBundle('core-message-actions', {
-            meta: {
-                name: '消息操作',
-                description: '提供消息的编辑、重试、复制、删除等操作按钮',
-                source: 'core'
-            },
+        // 优先使用 registerUIBundle（纯 UI 组件），回退到 registerPluginBundle
+        const registerBundle = context.registerUIBundle || context.registerPluginBundle;
+        
+        // 使用 registerUIBundle 统一注册消息操作相关的所有 UI（无需 meta）
+        registerBundle('core-message-actions', {
             slots: {
                 // 同一个 slot 注册多个组件：复制和删除按钮
                 [context.SLOTS.MESSAGE_MORE_ACTIONS]: [

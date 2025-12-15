@@ -5,6 +5,14 @@
  */
 (function() {
     const BASE_PATH = 'scripts/ido-front/';
+    const LIB_PATH = 'scripts/lib/';
+    
+    // 需要先加载的库文件（在 IdoFront 模块之前）
+    const libScripts = [
+        'js-yaml.min.js',   // YAML 解析器
+        'jexl.min.js',      // 表达式引擎
+        'comlink.min.js'    // Comlink RPC 库
+    ];
     
     const scripts = [
         // 1. 基础模块（无依赖）
@@ -14,7 +22,14 @@
         'runtime.js',      // Runtime: 统一对外暴露 store 等核心能力
         'network-logger.js',
         'channels/channel-registry.js',
-        'plugin-loader.js',  // 外部插件加载器（依赖 channel-registry）
+        
+        // 2. 混合格式插件支持（声明式渲染 + Comlink 通信）
+        'hybrid-plugin-parser.js',      // YAML/JS 混合格式解析器
+        'declarative-ui-renderer.js',   // 声明式 UI 渲染器（MD3 组件）
+        'comlink-bridge.js',            // Comlink 主线程桥接
+        
+        // 3. 外部插件加载器（依赖 channel-registry, hybrid-parser, declarative-ui, comlink-bridge）
+        'plugin-loader.js',
         'channels/openai-channel.js',
         'channels/openai-responses-channel.js',
         'channels/gemini-channel.js',
@@ -55,22 +70,58 @@
         'main.js'
     ];
 
-    function loadScript(index) {
-        if (index >= scripts.length) {
-            // 所有脚本加载完毕
+    /**
+     * 加载单个脚本
+     * @param {string} src 脚本路径
+     * @returns {Promise<void>}
+     */
+    function loadScriptAsync(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = () => resolve();
+            script.onerror = (e) => reject(new Error(`Failed to load: ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+    
+    /**
+     * 按顺序加载脚本列表
+     * @param {string[]} scriptList 脚本路径列表
+     * @param {string} basePath 基础路径
+     */
+    async function loadScriptsSequentially(scriptList, basePath) {
+        for (const scriptName of scriptList) {
+            const src = basePath + scriptName;
+            try {
+                await loadScriptAsync(src);
+            } catch (e) {
+                console.error(`IdoFront: 加载失败 ${src}`, e);
+            }
+        }
+    }
+    
+    /**
+     * 主加载流程
+     */
+    async function startLoading() {
+        try {
+            // 1. 先加载库文件
+            console.log('IdoFront: 加载依赖库...');
+            await loadScriptsSequentially(libScripts, LIB_PATH);
+            
+            // 2. 加载 IdoFront 模块
+            console.log('IdoFront: 加载核心模块...');
+            await loadScriptsSequentially(scripts, BASE_PATH);
+            
+            // 3. 所有脚本加载完毕
             console.log('IdoFront: 所有脚本已加载。');
             document.dispatchEvent(new CustomEvent('IdoFrontLoaded'));
-            return;
+        } catch (e) {
+            console.error('IdoFront: 加载过程出错', e);
         }
-
-        const src = BASE_PATH + scripts[index];
-        const script = document.createElement('script');
-        script.src = src;
-        script.onload = () => loadScript(index + 1);
-        script.onerror = (e) => console.error(`IdoFront: 加载失败 ${src}`, e);
-        document.head.appendChild(script);
     }
 
     // Start loading
-    loadScript(0);
+    startLoading();
 })();

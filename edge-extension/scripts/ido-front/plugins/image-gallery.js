@@ -231,7 +231,8 @@
             icon: 'photo_library',
             author: 'IdoFront',
             homepage: '',
-            source: 'builtin'
+            source: 'builtin',
+            listable: true  // 显式标记为可列出，以便在插件列表中显示
         },
         init(frameworkApi) {
             const api = frameworkApi || Framework;

@@ -590,6 +590,48 @@
                 conv.reasoningEffort = normalized;
                 this.persist();
             }
+        },
+
+        /**
+         * 更新会话元数据
+         * @param {string} convId - 会话 ID
+         * @param {Object} updates - 要更新的元数据键值对（值为 null 时删除该键）
+         */
+        updateConversationMetadata(convId, updates) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv) return false;
+            
+            if (!conv.metadata) {
+                conv.metadata = {};
+            }
+            
+            for (const [key, value] of Object.entries(updates)) {
+                if (value === null || value === undefined) {
+                    delete conv.metadata[key];
+                } else {
+                    conv.metadata[key] = value;
+                }
+            }
+            
+            conv.updatedAt = Date.now();
+            this.persist();
+            return true;
+        },
+
+        /**
+         * 获取会话元数据
+         * @param {string} convId - 会话 ID
+         * @param {string} [key] - 可选的键名，不传返回全部元数据
+         * @returns {*} 元数据值或全部元数据对象
+         */
+        getConversationMetadata(convId, key) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv || !conv.metadata) return key ? undefined : {};
+            
+            if (key) {
+                return conv.metadata[key];
+            }
+            return { ...conv.metadata };
         }
     };
 

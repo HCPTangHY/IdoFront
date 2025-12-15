@@ -779,12 +779,19 @@
      * 直接使用 Framework.registerPlugin，无需外部调用
      */
     function registerThinkingBudgetPlugin() {
-        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPluginBundle) {
+        if (typeof Framework === 'undefined' || !Framework) {
             console.warn('[GeminiChannel] Framework API not available for UI registration');
             return;
         }
         
-        const { registerPluginBundle, SLOTS, events, showBottomSheet, hideBottomSheet } = Framework;
+        // 优先使用 registerUIBundle（纯 UI 组件），回退到 registerPluginBundle
+        const registerBundle = Framework.registerUIBundle || Framework.registerPluginBundle;
+        if (!registerBundle) {
+            console.warn('[GeminiChannel] No bundle registration API available');
+            return;
+        }
+        
+        const { SLOTS, events, showBottomSheet, hideBottomSheet } = Framework;
         
         if (!SLOTS || !SLOTS.INPUT_TOP) {
             console.warn('[GeminiChannel] INPUT_TOP slot not available');
@@ -1147,17 +1154,8 @@
             }
         }
 
-        // 使用 registerPluginBundle 注册 Gemini 渠道 UI 组件
-        // 使用 source: 'core' 标记为核心插件，不在插件管理中显示
-        registerPluginBundle('core-gemini-channel-ui', {
-            meta: {
-                name: 'Gemini 渠道 UI',
-                description: '为 Gemini 2.5/3 系列模型提供思考预算/等级配置',
-                version: '1.0.0',
-                icon: 'psychology',
-                author: 'IdoFront',
-                source: 'core'  // 核心插件，不在插件管理中显示
-            },
+        // 使用 registerUIBundle 注册 Gemini 渠道 UI 组件（纯 UI，无需 meta）
+        registerBundle('core-gemini-channel-ui', {
             init: function() {
                 // 尝试注册 store 更新事件监听器
                 ensureStoreEventRegistered();

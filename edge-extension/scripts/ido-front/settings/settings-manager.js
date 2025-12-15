@@ -247,12 +247,41 @@
     }
     
     /**
-     * 渲染“通用设置”标签页内容
+     * 渲染"通用设置"标签页内容
+     * 同时支持：
+     * 1. 通过 registerGeneralSection() 注册的设置分区
+     * 2. 通过 Framework.registerPlugin(SLOTS.SETTINGS_GENERAL, ...) 注册的插件设置
      */
     function renderGeneralTab(container, ctx, st) {
         container.innerHTML = '';
         
-        if (!generalSections.length) {
+        const list = document.createElement('div');
+        list.className = 'space-y-4';
+        
+        // 1. 渲染通过 registerGeneralSection 注册的设置分区
+        generalSections.forEach(section => {
+            const card = renderSettingsSection(section, ctx, st);
+            list.appendChild(card);
+        });
+        
+        // 2. 渲染通过 Framework 插槽注册的设置组件
+        if (ctx && typeof ctx.getDynamicPlugins === 'function') {
+            const slotName = ctx.SLOTS?.SETTINGS_GENERAL || 'slot-settings-general';
+            const pluginComponents = ctx.getDynamicPlugins(slotName, { context: ctx, store: st });
+            
+            pluginComponents.forEach(component => {
+                if (component instanceof HTMLElement) {
+                    list.appendChild(component);
+                } else if (typeof component === 'string') {
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = component;
+                    list.appendChild(wrapper);
+                }
+            });
+        }
+        
+        // 如果没有任何设置
+        if (list.childNodes.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'ido-empty';
             empty.textContent = '暂无通用设置';
@@ -260,59 +289,59 @@
             return;
         }
         
-        const list = document.createElement('div');
-        list.className = 'space-y-4';
-        
-        generalSections.forEach(section => {
-            const card = document.createElement('div');
-            card.className = 'ido-card p-4 space-y-2';
-            
-            const header = document.createElement('div');
-            header.className = 'flex items-center gap-2';
-            
-            if (section.icon) {
-                if (section.icon.indexOf('<svg') === 0 || section.icon.indexOf('<svg') === 0) {
-                    const iconWrapper = document.createElement('div');
-                    iconWrapper.className = 'text-gray-500 flex items-center justify-center w-[18px] h-[18px]';
-                    iconWrapper.innerHTML = section.icon;
-                    header.appendChild(iconWrapper);
-                } else {
-                    const iconSpan = document.createElement('span');
-                    iconSpan.className = 'material-symbols-outlined text-[18px] text-gray-500';
-                    iconSpan.textContent = section.icon;
-                    header.appendChild(iconSpan);
-                }
-            }
-            
-            const title = document.createElement('span');
-            title.className = 'font-medium text-gray-800';
-            title.textContent = section.title || section.id;
-            header.appendChild(title);
-            
-            card.appendChild(header);
-            
-            if (section.description) {
-                const desc = document.createElement('p');
-                desc.className = 'text-xs text-gray-500';
-                desc.textContent = section.description;
-                card.appendChild(desc);
-            }
-            
-            const body = document.createElement('div');
-            body.className = 'mt-2 space-y-2';
-            
-            try {
-                section.render(body, ctx, st);
-            } catch (e) {
-                console.error('General settings section render error:', e);
-                body.innerHTML = '<div class="text-red-500 text-xs">渲染错误: ' + (e.message || e) + '</div>';
-            }
-            
-            card.appendChild(body);
-            list.appendChild(card);
-        });
-        
         container.appendChild(list);
+    }
+    
+    /**
+     * 渲染单个设置分区
+     */
+    function renderSettingsSection(section, ctx, st) {
+        const card = document.createElement('div');
+        card.className = 'ido-card p-4 space-y-2';
+        
+        const header = document.createElement('div');
+        header.className = 'flex items-center gap-2';
+        
+        if (section.icon) {
+            if (section.icon.indexOf('<svg') === 0) {
+                const iconWrapper = document.createElement('div');
+                iconWrapper.className = 'text-gray-500 flex items-center justify-center w-[18px] h-[18px]';
+                iconWrapper.innerHTML = section.icon;
+                header.appendChild(iconWrapper);
+            } else {
+                const iconSpan = document.createElement('span');
+                iconSpan.className = 'material-symbols-outlined text-[18px] text-gray-500';
+                iconSpan.textContent = section.icon;
+                header.appendChild(iconSpan);
+            }
+        }
+        
+        const title = document.createElement('span');
+        title.className = 'font-medium text-gray-800';
+        title.textContent = section.title || section.id;
+        header.appendChild(title);
+        
+        card.appendChild(header);
+        
+        if (section.description) {
+            const desc = document.createElement('p');
+            desc.className = 'text-xs text-gray-500';
+            desc.textContent = section.description;
+            card.appendChild(desc);
+        }
+        
+        const body = document.createElement('div');
+        body.className = 'mt-2 space-y-2';
+        
+        try {
+            section.render(body, ctx, st);
+        } catch (e) {
+            console.error('General settings section render error:', e);
+            body.innerHTML = '<div class="text-red-500 text-xs">渲染错误: ' + (e.message || e) + '</div>';
+        }
+        
+        card.appendChild(body);
+        return card;
     }
 
     /**

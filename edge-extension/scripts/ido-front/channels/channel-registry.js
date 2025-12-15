@@ -86,8 +86,15 @@
         const source = options.source || definition?.source || 'external';
         const normalized = normalizeDefinition(typeId, definition, source);
         const existing = registry.get(typeId);
-        if (existing && existing.source !== normalized.source) {
-            throw new Error(`[ChannelRegistry] 渠道类型 ${typeId} 已由 ${existing.source} 注册`);
+        
+        // 如果已存在同类型渠道
+        if (existing) {
+            // 同源允许覆盖
+            if (existing.source === normalized.source) {
+                console.info(`[ChannelRegistry] Replacing channel type ${typeId} from same source: ${source}`);
+            } else {
+                throw new Error(`[ChannelRegistry] 渠道类型 ${typeId} 已由 ${existing.source} 注册`);
+            }
         }
 
         registry.set(typeId, normalized);

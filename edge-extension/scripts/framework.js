@@ -865,11 +865,179 @@ const Framework = (function() {
         INPUT_ACTIONS_LEFT: 'slot-input-actions-left',
         INPUT_ACTIONS_RIGHT: 'slot-input-actions-right',
         MESSAGE_FOOTER: 'message-footer',
-        MESSAGE_MORE_ACTIONS: 'message-more-actions'  // 更多操作下拉菜单插槽
+        MESSAGE_MORE_ACTIONS: 'message-more-actions',  // 更多操作下拉菜单插槽
+        SETTINGS_GENERAL: 'slot-settings-general'  // 通用设置插槽（动态渲染）
     };
     
     const registry = {};
+    const uiComponents = {}; // 纯 UI 组件注册表，与插件分开
     let publicApi = null;
+    
+    /**
+     * 注册纯 UI 组件 - 不需要元数据，不会出现在插件列表
+     * @param {string} slotName - 插槽名称
+     * @param {string} id - 组件 ID
+     * @param {Function} renderFn - 渲染函数
+     */
+    function registerUIComponent(slotName, id, renderFn) {
+        if (!uiComponents[slotName]) uiComponents[slotName] = [];
+        
+        // 检查是否已存在
+        const existing = uiComponents[slotName].findIndex(c => c.id === id);
+        const component = {
+            id,
+            enabled: true,
+            render: renderFn
+        };
+        
+        if (existing !== -1) {
+            uiComponents[slotName][existing] = component;
+        } else {
+            uiComponents[slotName].push(component);
+        }
+        
+        // 延迟刷新插槽
+        setTimeout(() => refreshSlot(slotName), 0);
+    }
+    
+    /**
+     * 注销 UI 组件
+     */
+    function unregisterUIComponent(slotName, id) {
+        if (!uiComponents[slotName]) return;
+        uiComponents[slotName] = uiComponents[slotName].filter(c => c.id !== id);
+        refreshSlot(slotName);
+    }
+    
+    /**
+     * 批量注册纯 UI 组件 - 不需要元数据，不会出现在插件列表
+     * 类似 registerPluginBundle，但用于纯渲染组件
+     *
+     * @param {string} bundleId - 组件包 ID（用于批量注销）
+     * @param {Object} definition - 组件包定义
+     * @param {Object|Array} definition.slots - 插槽配置
+     * @param {Function} definition.init - 初始化函数（可选）
+     * @param {Function} definition.destroy - 销毁函数（可选）
+     */
+    function registerUIBundle(bundleId, definition) {
+        if (!bundleId || !definition || !definition.slots) {
+            console.error('registerUIBundle: Invalid arguments', { bundleId, definition });
+            return;
+        }
+        
+        const initFn = definition.init || null;
+        const destroyFn = definition.destroy || null;
+        
+        // 生命周期：init 只在首次注册时调用一次
+        let initCalled = false;
+        if (typeof initFn === 'function') {
+            try {
+                initFn(publicApi);
+                initCalled = true;
+            } catch (e) {
+                console.error(`UIBundle init error [${bundleId}]:`, e);
+            }
+        }
+        
+        // 解析 slots 配置
+        const slotEntries = [];
+        
+        if (Array.isArray(definition.slots)) {
+            definition.slots.forEach((item, index) => {
+                if (!item.slot || typeof item.render !== 'function') {
+                    console.warn(`registerUIBundle: Invalid slot entry at index ${index}`, item);
+                    return;
+                }
+                slotEntries.push({
+                    slotName: item.slot,
+                    id: item.id || `${bundleId}-${index}`,
+                    render: item.render
+                });
+            });
+        } else if (typeof definition.slots === 'object') {
+            Object.keys(definition.slots).forEach((slotName) => {
+                const slotDef = definition.slots[slotName];
+                
+                if (typeof slotDef === 'function') {
+                    slotEntries.push({
+                        slotName,
+                        id: `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}`,
+                        render: slotDef
+                    });
+                } else if (Array.isArray(slotDef)) {
+                    slotDef.forEach((item, itemIndex) => {
+                        if (typeof item === 'function') {
+                            slotEntries.push({
+                                slotName,
+                                id: `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}-${itemIndex}`,
+                                render: item
+                            });
+                        } else if (item && typeof item.render === 'function') {
+                            slotEntries.push({
+                                slotName,
+                                id: item.id || `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}-${itemIndex}`,
+                                render: item.render
+                            });
+                        }
+                    });
+                } else if (slotDef && typeof slotDef.render === 'function') {
+                    slotEntries.push({
+                        slotName,
+                        id: slotDef.id || `${bundleId}-${slotName.replace(/[^a-zA-Z0-9]/g, '-')}`,
+                        render: slotDef.render
+                    });
+                }
+            });
+        }
+        
+        if (slotEntries.length === 0) {
+            console.warn(`registerUIBundle: No valid slots found for bundle "${bundleId}"`);
+            return;
+        }
+        
+        // 使用 registerUIComponent 注册每个组件
+        slotEntries.forEach((entry) => {
+            registerUIComponent(entry.slotName, entry.id, entry.render);
+        });
+        
+        // 记录 bundle 信息（用于批量注销）
+        if (!uiComponents._bundles) {
+            uiComponents._bundles = {};
+        }
+        uiComponents._bundles[bundleId] = {
+            entries: slotEntries.map(e => ({ slot: e.slotName, id: e.id })),
+            destroy: destroyFn
+        };
+    }
+    
+    /**
+     * 注销整个 UI 组件包
+     * @param {string} bundleId - 组件包 ID
+     */
+    function unregisterUIBundle(bundleId) {
+        if (!uiComponents._bundles || !uiComponents._bundles[bundleId]) {
+            console.warn(`unregisterUIBundle: Bundle "${bundleId}" not found`);
+            return;
+        }
+        
+        const bundle = uiComponents._bundles[bundleId];
+        
+        // 调用 destroy 回调
+        if (typeof bundle.destroy === 'function') {
+            try {
+                bundle.destroy(publicApi);
+            } catch (e) {
+                console.error(`UIBundle destroy error [${bundleId}]:`, e);
+            }
+        }
+        
+        // 注销所有组件
+        bundle.entries.forEach(({ slot, id }) => {
+            unregisterUIComponent(slot, id);
+        });
+        
+        delete uiComponents._bundles[bundleId];
+    }
     
     function registerPlugin(slotName, id, definition) {
         if (!registry[slotName]) registry[slotName] = [];
@@ -878,6 +1046,7 @@ const Framework = (function() {
         let plugin;
         if (typeof definition === 'function' || definition == null) {
             // 函数签名的插件：只有渲染函数，没有显式元数据
+            // 这种方式注册的是纯 UI 组件，不应出现在插件列表
             plugin = {
                 id,
                 enabled: true,
@@ -894,12 +1063,23 @@ const Framework = (function() {
                     author: '',
                     homepage: '',
                     source: 'internal',
-                    tags: undefined
+                    tags: undefined,
+                    // 纯渲染函数默认不在插件列表中显示
+                    listable: false
                 }
             };
         } else {
             // 对象签名的插件：支持 meta / name / description 等元数据字段
             var meta = definition.meta || {};
+            // 决定是否在插件列表中显示：
+            // 1. 显式设置 listable
+            // 2. core- 开头的内置插件默认显示
+            // 3. 其他默认不显示（纯 UI 组件）
+            const isCore = id.startsWith('core-');
+            const listable = meta.listable !== undefined
+                ? meta.listable
+                : (isCore || meta.bundleId !== undefined);
+            
             plugin = {
                 id,
                 enabled: definition.enabled !== false,
@@ -918,7 +1098,9 @@ const Framework = (function() {
                     source: meta.source || definition.source || 'internal',
                     tags: meta.tags || definition.tags || undefined,
                     // 保留 bundleId 用于 getPlugins() 合并显示
-                    bundleId: meta.bundleId || undefined
+                    bundleId: meta.bundleId || undefined,
+                    // 是否在插件列表中显示
+                    listable: listable
                 }
             };
         }
@@ -940,10 +1122,30 @@ const Framework = (function() {
     function refreshSlot(slotName) {
         // Static slots only
         const el = document.getElementById(slotName);
-        if (!el || !registry[slotName]) return;
+        if (!el) return;
         
         el.innerHTML = '';
-        registry[slotName].forEach(plugin => {
+        
+        // 渲染纯 UI 组件（无元数据）
+        const components = uiComponents[slotName] || [];
+        components.forEach(component => {
+            if (!component || component.enabled === false) return;
+            if (typeof component.render !== 'function') return;
+            try {
+                const content = component.render(publicApi);
+                if (content instanceof HTMLElement) {
+                    el.appendChild(content);
+                } else if (typeof content === 'string') {
+                    el.insertAdjacentHTML('beforeend', content);
+                }
+            } catch (e) {
+                console.error(`UI component error in ${slotName}/${component.id}:`, e);
+            }
+        });
+        
+        // 渲染插件
+        const plugins = registry[slotName] || [];
+        plugins.forEach(plugin => {
             if (!plugin || plugin.enabled === false) return;
             const renderer = plugin.renderStatic || plugin.renderDynamic;
             if (typeof renderer !== 'function') return;
@@ -958,24 +1160,42 @@ const Framework = (function() {
                 console.error(`Plugin error in ${slotName}/${plugin.id}:`, e);
             }
         });
+        
         // Show if content exists
         el.classList.toggle('hidden', el.childNodes.length === 0);
     }
     
     function getDynamicPlugins(slotName, context) {
-        if (!registry[slotName]) return [];
-        return registry[slotName].map(plugin => {
-            if (!plugin || plugin.enabled === false) return null;
-            const renderer = plugin.renderDynamic || plugin.renderStatic;
-            if (typeof renderer !== 'function') return null;
+        const results = [];
+        
+        // 获取纯 UI 组件
+        const components = uiComponents[slotName] || [];
+        components.forEach(component => {
+            if (!component || component.enabled === false) return;
+            if (typeof component.render !== 'function') return;
             try {
-                // 保持向后兼容：优先传入调用方上下文，其次传入 Framework API
-                return renderer(context || publicApi);
-            } catch(e) {
-                console.error(`Dynamic plugin error ${slotName}/${plugin.id}:`, e);
-                return null;
+                const content = component.render(context || publicApi);
+                if (content) results.push(content);
+            } catch (e) {
+                console.error(`Dynamic UI component error ${slotName}/${component.id}:`, e);
             }
-        }).filter(Boolean);
+        });
+        
+        // 获取插件
+        const plugins = registry[slotName] || [];
+        plugins.forEach(plugin => {
+            if (!plugin || plugin.enabled === false) return;
+            const renderer = plugin.renderDynamic || plugin.renderStatic;
+            if (typeof renderer !== 'function') return;
+            try {
+                const content = renderer(context || publicApi);
+                if (content) results.push(content);
+            } catch (e) {
+                console.error(`Dynamic plugin error ${slotName}/${plugin.id}:`, e);
+            }
+        });
+        
+        return results;
     }
     
     function setPluginEnabled(slotName, id, enabled) {
@@ -1176,9 +1396,18 @@ const Framework = (function() {
         delete registry._bundles[bundleId];
     }
 
-    function getPlugins() {
+    /**
+     * 获取已注册的插件列表
+     * 只返回 meta.listable === true 的插件（core- 开头的和 bundle 默认为 true）
+     *
+     * @param {Object} options - 选项
+     * @param {boolean} options.all - 是否返回所有注册的组件（包括纯 UI 组件）
+     * @returns {Array} 插件列表
+     */
+    function getPlugins(options = {}) {
         const all = [];
         const bundlesSeen = new Set();
+        const returnAll = options.all === true;
         
         Object.keys(registry).forEach(slot => {
             // 跳过 bundle 元数据，只遍历真正的插槽
@@ -1194,6 +1423,9 @@ const Framework = (function() {
                     if (bundlesSeen.has(bundleId)) return; // 跳过已处理的 bundle
                     bundlesSeen.add(bundleId);
                     
+                    // Bundle 默认可列出
+                    if (!returnAll && meta.listable === false) return;
+                    
                     // 使用 bundle 的 meta 信息
                     all.push({
                         slot,
@@ -1202,10 +1434,14 @@ const Framework = (function() {
                         meta: {
                             ...meta,
                             id: bundleId,
-                            isBundle: true
+                            isBundle: true,
+                            listable: true
                         }
                     });
                 } else {
+                    // 只返回 listable 为 true 的（或者 returnAll 模式）
+                    if (!returnAll && !meta.listable) return;
+                    
                     all.push({
                         slot,
                         id: p.id,
@@ -2427,12 +2663,17 @@ const Framework = (function() {
     publicApi = {
         init,
         registerPlugin,
+        registerUIComponent,
+        unregisterUIComponent,
+        registerUIBundle,
+        unregisterUIBundle,
         refreshSlot,
         registerPluginBundle,
         unregisterPlugin,
         unregisterPluginBundle,
         setPluginEnabled,
         getPlugins,
+        getDynamicPlugins,
         setMode,
         setCustomPanel,
         setDefaultRightPanel,
@@ -2462,12 +2703,17 @@ const Framework = (function() {
     return {
         init,
         registerPlugin,
+        registerUIComponent,
+        unregisterUIComponent,
+        registerUIBundle,
+        unregisterUIBundle,
         refreshSlot,
         registerPluginBundle,
         unregisterPlugin,
         unregisterPluginBundle,
         setPluginEnabled,
         getPlugins,
+        getDynamicPlugins,
         setMode,
         setCustomPanel,
         setDefaultRightPanel,

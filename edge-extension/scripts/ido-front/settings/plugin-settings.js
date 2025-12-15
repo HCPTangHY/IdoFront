@@ -127,7 +127,7 @@
 
         const intro = document.createElement('p');
         intro.className = 'text-xs text-gray-500';
-        intro.textContent = '支持粘贴 JS 代码或上传 .js 文件。系统会自动解析 Userscript 风格的元数据 (如 // @name, // @version)。';
+        intro.textContent = '支持 YAML 混合格式插件 (.yaml / .yml)。声明式 UI 在主线程解析，复杂脚本在沙箱执行。';
         card.appendChild(intro);
 
         // 状态管理
@@ -172,14 +172,60 @@
         // 代码输入区域
         const codeArea = document.createElement('textarea');
         codeArea.className = 'ido-textarea w-full min-h-[160px] font-mono text-xs leading-relaxed';
-        codeArea.placeholder = '// ==UserScript==\n// @name My Plugin\n// @version 1.0.0\n// ==/UserScript==\n\n(function() { ... })();';
+        codeArea.placeholder = `# YAML 混合格式插件示例
+id: my-plugin
+name: 我的插件
+version: 1.0.0
+
+ui:
+  HEADER_ACTIONS:
+    - component: md-icon-button
+      props:
+        icon: star
+        title: 收藏
+
+script: |
+  console.log("Hello from sandbox!");`;
+        
+        /**
+         * 使用 hybridParser 解析 YAML 元数据
+         */
+        const parseYamlMeta = (code) => {
+            // 空内容直接返回空对象，不调用解析器
+            if (!code || !code.trim()) {
+                return {};
+            }
+            
+            const hybridParser = window.IdoFront.hybridParser;
+            if (!hybridParser) {
+                console.warn('[PluginSettings] hybridParser not available');
+                return {};
+            }
+            
+            try {
+                const parsed = hybridParser.parse(code);
+                const normalized = hybridParser.normalize(parsed);
+                return {
+                    id: normalized.id,
+                    name: normalized.name,
+                    version: normalized.version,
+                    description: normalized.description,
+                    author: normalized.author,
+                    icon: normalized.icon,
+                    homepage: normalized.homepage
+                };
+            } catch (e) {
+                console.warn('[PluginSettings] YAML parse error:', e);
+                return {};
+            }
+        };
         
         const updatePreview = (code) => {
             currentCode = code;
-            const meta = loader.parseMetadata(code);
-            currentMeta = { ...meta }; // Reset to parsed
+            const meta = parseYamlMeta(code);
+            currentMeta = { ...meta };
             
-            nameField.input.value = meta.name || '';
+            nameField.input.value = meta.name || meta.id || '';
             versionField.input.value = meta.version || '1.0.0';
             descField.input.value = meta.description || '';
             
@@ -202,7 +248,7 @@
 
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
-        fileInput.accept = '.js,.mjs,text/javascript';
+        fileInput.accept = '.yaml,.yml,text/yaml,application/x-yaml';
         fileInput.className = 'hidden';
         fileInput.addEventListener('change', async (event) => {
             const file = event.target.files && event.target.files[0];
@@ -220,7 +266,7 @@
 
         const uploadBtn = document.createElement('button');
         uploadBtn.className = 'ido-btn ido-btn--secondary ido-btn--sm';
-        uploadBtn.innerHTML = '<span class="material-symbols-outlined text-sm">upload_file</span> 加载文件';
+        uploadBtn.innerHTML = '<span class="material-symbols-outlined text-sm">upload_file</span> 加载 YAML 文件';
         uploadBtn.onclick = () => fileInput.click();
         
         leftActions.appendChild(uploadBtn);
@@ -235,7 +281,7 @@
             const code = currentCode.trim();
             
             if (!name || !code) {
-                setStatus('请填写插件名称与代码后再导入。', 'error');
+                setStatus('请填写插件名称与 YAML 内容后再导入。', 'error');
                 return;
             }
             
@@ -251,7 +297,8 @@
                     description: descField.input.value.trim()
                 };
 
-                await loader.addPlugin(finalMeta.name, code, finalMeta);
+                // 使用 hybridPlugin 加载方法
+                await loader.addHybridPlugin(code, finalMeta);
                 setStatus(`插件 ${finalMeta.name} 导入成功`, 'success');
                 
                 // Reset

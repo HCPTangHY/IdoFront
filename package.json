@@ -26,6 +26,7 @@
   "devDependencies": {
     "@capacitor/cli": "^6.0.0",
     "esbuild": "^0.27.0",
+    "jexl": "^2.3.0",
     "terser": "^5.44.1"
   },
   "dependencies": {

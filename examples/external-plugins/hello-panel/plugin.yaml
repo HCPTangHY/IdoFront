@@ -1,0 +1,143 @@
+# Hello Panel - 混合格式插件示例
+# 展示如何使用声明式 UI + JS 脚本 + 自定义样式
+
+id: external-hello-panel
+version: 2.1.0
+name: Hello Panel
+description: 展示如何在 IdoFront 中注册自定义 UI 按钮，使用 Store 和 Storage API，以及自定义 CSS 样式
+author: IdoFront Team
+icon: waving_hand
+
+# ============================================================
+# 自定义样式 - 主线程直接注入，零延迟
+# ============================================================
+styles: |
+  /* Hello Panel 自定义样式 */
+  .hello-panel-btn {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    border-radius: 12px !important;
+    transition: all 0.3s ease !important;
+  }
+  
+  .hello-panel-btn:hover {
+    transform: scale(1.1) !important;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+  }
+  
+  .hello-panel-btn .material-symbols-rounded {
+    color: white !important;
+  }
+  
+  /* 动画效果 */
+  @keyframes hello-wave {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(20deg); }
+    75% { transform: rotate(-15deg); }
+  }
+  
+  .hello-panel-btn:active .material-symbols-rounded {
+    animation: hello-wave 0.5s ease-in-out;
+  }
+
+# ============================================================
+# 声明式 UI 部分 - 主线程直接渲染，零延迟
+# ============================================================
+ui:
+  HEADER_ACTIONS:
+    - id: hello-button
+      component: md-icon-button
+      props:
+        icon: waving_hand
+        label: Hello
+        title: 点击插入问候语
+        class: hello-panel-btn
+      onClick:
+        action: emit
+        event: plugin:hello-button:click
+
+# ============================================================
+# 设置声明 - 自动生成设置表单
+# ============================================================
+settings:
+  section:
+    title: Hello Panel 设置
+    icon: waving_hand
+  fields:
+    greeting:
+      type: text
+      label: 问候语前缀
+      hint: 点击按钮时显示的问候语
+      default: 来自外部插件的问候 👋
+
+# ============================================================
+# JS 脚本部分 - 仅处理点击逻辑，在沙箱执行
+# ============================================================
+script: |
+  (function() {
+      'use strict';
+      
+      const CONFIG_KEY = 'hello-panel:config';
+      let clickCount = 0;
+      
+      // 加载保存的配置
+      async function loadConfig() {
+          try {
+              const config = await IdoFront.storage.getItem(CONFIG_KEY);
+              if (config && typeof config.clickCount === 'number') {
+                  clickCount = config.clickCount;
+                  console.log('[HelloPanel] 已恢复点击计数:', clickCount);
+              }
+          } catch (error) {
+              console.warn('[HelloPanel] 加载配置失败:', error);
+          }
+      }
+      
+      // 保存配置
+      async function saveConfig() {
+          try {
+              await IdoFront.storage.setItem(CONFIG_KEY, {
+                  clickCount,
+                  lastUpdated: Date.now()
+              });
+          } catch (error) {
+              console.warn('[HelloPanel] 保存配置失败:', error);
+          }
+      }
+      
+      // 处理按钮点击
+      async function handleClick() {
+          clickCount++;
+          await saveConfig();
+          
+          // 获取设置
+          const settings = await Plugin.getSettings();
+          const greeting = settings.greeting || '来自外部插件的问候 👋';
+          
+          // 获取当前会话信息
+          let conversationInfo = '';
+          try {
+              const conv = await IdoFront.store.getActiveConversation();
+              if (conv) {
+                  conversationInfo = `\n当前会话：「${conv.title || '未命名'}」，共 ${conv.messages?.length || 0} 条消息`;
+              }
+          } catch (error) {
+              console.warn('[HelloPanel] 获取会话信息失败:', error);
+          }
+          
+          // 发送消息
+          Framework.addMessage('assistant', {
+              content: `${greeting} (第 ${clickCount} 次点击)${conversationInfo}`,
+              reasoning: '这是一个混合格式插件示例'
+          });
+      }
+      
+      // 初始化
+      loadConfig().then(() => {
+          console.log('[HelloPanel] 插件已初始化');
+      });
+      
+      // 监听来自主线程的点击事件
+      IdoFront.store.events.on('plugin:hello-button:click', handleClick);
+      
+      console.log('[HelloPanel] 混合格式插件加载完成');
+  })();

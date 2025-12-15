@@ -569,12 +569,19 @@
      * 使用 registerPluginBundle 统一注册所有 OpenAI 渠道相关的 UI 组件
      */
     function registerOpenAIChannelPlugins() {
-        if (typeof Framework === 'undefined' || !Framework || !Framework.registerPluginBundle) {
+        if (typeof Framework === 'undefined' || !Framework) {
             console.warn('[OpenAIChannel] Framework API not available for UI registration');
             return;
         }
-        
-        const { registerPluginBundle, SLOTS, showBottomSheet, hideBottomSheet } = Framework;
+
+        // 优先使用 registerUIBundle（纯 UI 组件），降级到 registerPluginBundle
+        const registerBundle = Framework.registerUIBundle || Framework.registerPluginBundle;
+        if (!registerBundle) {
+            console.warn('[OpenAIChannel] No bundle registration API available');
+            return;
+        }
+
+        const { SLOTS, showBottomSheet, hideBottomSheet } = Framework;
         
         if (!SLOTS || !SLOTS.INPUT_TOP) {
             console.warn('[OpenAIChannel] INPUT_TOP slot not available');
@@ -987,17 +994,9 @@
             }
         }
         
-        // ===== 使用 registerPluginBundle 统一注册 =====
+        // ===== 使用 registerUIBundle 注册纯 UI 组件 =====
         
-        registerPluginBundle('core-openai-channel-ui', {
-            meta: {
-                name: 'OpenAI 渠道控件',
-                description: 'OpenAI 渠道的思考预算和 Gemini 模型适配控件',
-                version: '1.0.0',
-                icon: 'psychology',
-                author: 'IdoFront',
-                source: 'builtin'
-            },
+        registerBundle('core-openai-channel-ui', {
             slots: {
                 [SLOTS.INPUT_TOP]: [
                     { id: 'reasoning-effort', render: renderReasoningEffort },

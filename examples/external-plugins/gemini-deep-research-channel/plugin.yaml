@@ -1,0 +1,363 @@
+# Gemini Deep Research Channel Plugin
+# 混合格式插件示例：YAML 声明 UI/Settings，JS 实现 Channel 逻辑
+
+id: gemini-deep-research
+version: 1.0.0
+name: Gemini Deep Research
+description: 多步骤研究任务，适用于市场分析、文献综述、竞品分析等场景
+author: IdoFront Team
+icon: science
+
+# ========== Channel 声明 ==========
+channel:
+  type: gemini-deep-research
+  label: Gemini Deep Research
+  defaults:
+    baseUrl: https://generativelanguage.googleapis.com/v1beta
+    model: deep-research-pro-preview-12-2025
+  capabilities:
+    streaming: true
+    vision: false
+
+# ========== UI 声明（主线程直接渲染，零延迟）==========
+ui:
+  INPUT_TOP:
+    - id: deep-research-status
+      component: md-container
+      visible: $channel.type == 'gemini-deep-research'
+      props:
+        class: flex items-center gap-2
+        children:
+          - component: md-divider
+            props:
+              class: h-5 w-px bg-gray-200
+          - component: md-text
+            props:
+              class: text-[10px] text-gray-400
+              text: 研究
+          - component: md-chip
+            props:
+              class: text-[10px] cursor-help
+              variants:
+                - when: $meta.previousInteractionId
+                  text: 续写模式
+                  color: green
+                  title: 交互 ID 已保存，可继续提问
+                - default: true
+                  text: 新研究
+                  color: blue
+                  title: 将开始一个全新的深度研究任务
+      actions:
+        clear:
+          icon: close
+          class: text-[10px] text-gray-400 hover:text-red-500 transition-colors
+          title: 清除续写状态，开始新的研究
+          visible: $meta.previousInteractionId
+          onClick:
+            action: clearMeta
+            key: previousInteractionId
+
+  # 设置面板作为 SETTINGS_GENERAL 插槽的组件
+  SETTINGS_GENERAL:
+    - id: deep-research-settings
+      component: settings-form
+      props:
+        title: Deep Research 行为设置
+        icon: science
+        order: 21
+        fields:
+          thinkingSummaries:
+            type: select
+            label: 思考摘要
+            hint: 是否在流式输出中显示中间思考过程
+            default: auto
+            options:
+              - { value: auto, label: 自动 (auto) }
+              - { value: none, label: 不显示 (none) }
+          pollInterval:
+            type: number
+            label: 轮询间隔（秒）
+            hint: 非流式模式下检查研究进度的间隔
+            default: 10
+            min: 5
+            max: 60
+          maxResearchTime:
+            type: number
+            label: 最大研究时间（分钟）
+            hint: 研究任务的超时时间（官方限制为 60 分钟）
+            default: 60
+            min: 5
+            max: 60
+
+# ========== Channel 脚本（沙箱执行）==========
+script: |
+  (function() {
+      'use strict';
+
+      // 延迟函数
+      const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+      // 解析 SSE 事件
+      function parseSSEEvent(data) {
+          if (!data || data === '[DONE]') return null;
+          try {
+              return JSON.parse(data);
+          } catch (e) {
+              console.warn('[DeepResearch] SSE parse error:', data, e);
+              return null;
+          }
+      }
+
+      const adapter = {
+          async call(messages, config, onUpdate, signal) {
+              let baseUrl = (config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+              const settings = await Plugin.getSettings();
+              const meta = await Plugin.getConversationMeta();
+              
+              // 获取最后一条用户消息
+              let inputText = '';
+              let systemInstruction = '';
+              for (const msg of messages) {
+                  if (msg.role === 'system') systemInstruction = msg.content || '';
+                  else if (msg.role === 'user') inputText = msg.content || '';
+              }
+              if (systemInstruction) inputText = `${systemInstruction}\n\n${inputText}`;
+
+              const isFollowUp = !!meta.previousInteractionId;
+              
+              // 构建请求体
+              const body = {
+                  input: inputText,
+                  agent: config.model || 'deep-research-pro-preview-12-2025'
+              };
+
+              if (!isFollowUp) {
+                  body.background = true;
+                  body.store = true;
+              }
+
+              const isStream = !!onUpdate && !isFollowUp;
+              if (isStream) {
+                  body.stream = true;
+                  body.agent_config = {
+                      type: 'deep-research',
+                      thinking_summaries: settings.thinkingSummaries || 'auto'
+                  };
+              }
+
+              if (isFollowUp) {
+                  body.previous_interaction_id = meta.previousInteractionId;
+              }
+
+              const headers = {
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': config.apiKey
+              };
+
+              let url = `${baseUrl}/interactions${isStream ? '?alt=sse' : ''}`;
+
+              const response = await fetch(url, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify(body),
+                  signal
+              });
+
+              if (!response.ok) {
+                  const errorText = await response.text();
+                  throw new Error(`API Error ${response.status}: ${errorText}`);
+              }
+
+              if (isFollowUp) {
+                  return await this.handleFollowUp(response, onUpdate);
+              } else if (isStream) {
+                  return await this.handleStream(response, settings, onUpdate, signal, baseUrl, headers);
+              } else {
+                  return await this.handlePolling(response, settings, onUpdate, signal, baseUrl, headers);
+              }
+          },
+
+          async handleStream(response, settings, onUpdate, signal, baseUrl, headers) {
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder('utf-8');
+              let buffer = '';
+              let fullContent = '';
+              let fullReasoning = '';
+              let interactionId = null;
+              let isComplete = false;
+
+              try {
+                  while (true) {
+                      const { done, value } = await reader.read();
+                      if (done) break;
+
+                      buffer += decoder.decode(value, { stream: true });
+                      const lines = buffer.split('\n');
+                      buffer = lines.pop() || '';
+
+                      for (const line of lines) {
+                          const trimmed = line.trim();
+                          if (!trimmed || trimmed === 'data: [DONE]') continue;
+
+                          if (trimmed.startsWith('data: ')) {
+                              const event = parseSSEEvent(trimmed.substring(6));
+                              if (!event) continue;
+
+                              if (event.event_type === 'interaction.start' && event.interaction?.id) {
+                                  interactionId = event.interaction.id;
+                                  onUpdate({
+                                      content: '🔬 深度研究任务已启动...',
+                                      reasoning: fullReasoning || null
+                                  });
+                              }
+
+                              if (event.event_type === 'content.delta') {
+                                  if (event.delta?.type === 'text') {
+                                      fullContent += event.delta.text || '';
+                                      onUpdate({ content: fullContent, reasoning: fullReasoning || null });
+                                  } else if (event.delta?.type === 'thought_summary') {
+                                      fullReasoning += (event.delta.content?.text || '') + '\n\n';
+                                      const displayContent = fullContent || '🔬 正在研究中...';
+                                      onUpdate({ content: displayContent, reasoning: fullReasoning });
+                                  }
+                              }
+
+                              if (event.event_type === 'interaction.complete') {
+                                  isComplete = true;
+                                  if (event.interaction?.status === 'failed') {
+                                      throw new Error(`Research failed: ${event.interaction?.error?.message || 'Unknown'}`);
+                                  }
+                              }
+
+                              if (event.event_type === 'error' && !isComplete) {
+                                  throw new Error(`Research error: ${event.error?.message || 'Unknown'}`);
+                              }
+                          }
+                      }
+                  }
+              } catch (streamError) {
+                  if (!isComplete && interactionId && !signal?.aborted) {
+                      return await this.pollForCompletion(interactionId, fullContent, fullReasoning, settings, onUpdate, signal, baseUrl, headers);
+                  }
+                  if (!signal?.aborted) throw streamError;
+              }
+
+              if (!isComplete && interactionId) {
+                  return await this.pollForCompletion(interactionId, fullContent, fullReasoning, settings, onUpdate, signal, baseUrl, headers);
+              }
+
+              if (interactionId) {
+                  await Plugin.setConversationMeta('previousInteractionId', interactionId);
+              }
+
+              return {
+                  choices: [{
+                      message: {
+                          role: 'assistant',
+                          content: fullContent || '研究已完成。',
+                          reasoning_content: fullReasoning || null
+                      },
+                      finish_reason: 'stop'
+                  }]
+              };
+          },
+
+          async handleFollowUp(response, onUpdate) {
+              const data = await response.json();
+              let content = '';
+              if (data.outputs && data.outputs.length > 0) {
+                  content = data.outputs[data.outputs.length - 1].text || '';
+              }
+
+              if (onUpdate && content) {
+                  onUpdate({ content, reasoning: null });
+              }
+
+              if (data.id) {
+                  await Plugin.setConversationMeta('previousInteractionId', data.id);
+              }
+
+              return {
+                  choices: [{
+                      message: { role: 'assistant', content: content || '未返回内容。' },
+                      finish_reason: 'stop'
+                  }]
+              };
+          },
+
+          async handlePolling(response, settings, onUpdate, signal, baseUrl, headers) {
+              const data = await response.json();
+              const interactionId = data.id;
+              if (!interactionId) throw new Error('No interaction ID returned');
+
+              return await this.pollForCompletion(interactionId, '', '', settings, onUpdate, signal, baseUrl, headers);
+          },
+
+          async pollForCompletion(interactionId, currentContent, currentReasoning, settings, onUpdate, signal, baseUrl, headers) {
+              const pollInterval = (settings.pollInterval || 10) * 1000;
+              const maxTime = (settings.maxResearchTime || 60) * 60 * 1000;
+              const startTime = Date.now();
+              let fullContent = currentContent;
+              let fullReasoning = currentReasoning;
+
+              while (Date.now() - startTime < maxTime) {
+                  if (signal?.aborted) throw new Error('Research cancelled');
+
+                  const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+                  const statusContent = fullContent || `🔬 研究进行中... (${elapsedSec}秒)`;
+                  onUpdate({ content: statusContent, reasoning: fullReasoning || null });
+
+                  await delay(pollInterval);
+
+                  try {
+                      const pollResponse = await fetch(`${baseUrl}/interactions/${interactionId}`, {
+                          method: 'GET',
+                          headers,
+                          signal
+                      });
+
+                      if (!pollResponse.ok) continue;
+                      const result = await pollResponse.json();
+
+                      if (result.status === 'completed') {
+                          const outputs = result.outputs || [];
+                          let finalContent = '';
+                          for (const output of outputs) {
+                              if (output.text) finalContent += output.text;
+                          }
+                          if (finalContent) fullContent = finalContent;
+
+                          await Plugin.setConversationMeta('previousInteractionId', interactionId);
+                          onUpdate({ content: fullContent, reasoning: fullReasoning || null });
+
+                          return {
+                              choices: [{
+                                  message: {
+                                      role: 'assistant',
+                                      content: fullContent || '研究已完成。',
+                                      reasoning_content: fullReasoning || null
+                                  },
+                                  finish_reason: 'stop'
+                              }]
+                          };
+                      }
+
+                      if (result.status === 'failed') {
+                          throw new Error(`Research failed: ${result.error || 'Unknown'}`);
+                      }
+                  } catch (pollError) {
+                      if (signal?.aborted) throw pollError;
+                      console.warn('[DeepResearch] Poll error:', pollError.message);
+                  }
+              }
+
+              throw new Error(`Research timed out after ${settings.maxResearchTime} minutes`);
+          },
+
+          async fetchModels(config) {
+              return ['deep-research-pro-preview-12-2025'];
+          }
+      };
+
+      Plugin.registerChannel(adapter);
+  })();
