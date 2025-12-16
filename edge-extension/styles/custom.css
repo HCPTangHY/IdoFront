@@ -336,21 +336,135 @@ body.is-resizing {
     font-size: 0.85em;
 }
 
+/* --- Enhanced Code Blocks with Toolbar --- */
+.code-block-wrapper {
+    position: relative;
+    margin: 1rem 0;
+    border-radius: var(--ido-radius-lg);
+    overflow: hidden;
+    background-color: var(--code-bg);
+    border: 1px solid var(--code-border);
+}
+
+.code-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 12px;
+    background-color: var(--code-header-bg);
+    color: var(--code-text-muted);
+    font-size: 11px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    border-bottom: 1px solid var(--code-border);
+    cursor: pointer;
+    user-select: none;
+    transition: background-color var(--ido-transition-fast);
+}
+
+.code-block-header:hover {
+    background-color: var(--code-copy-hover-bg);
+}
+
+.code-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.code-collapse-icon {
+    font-size: 16px;
+    transition: transform var(--ido-transition-fast);
+}
+
+.code-block-wrapper.collapsed .code-collapse-icon {
+    transform: rotate(-90deg);
+}
+
+.code-lang {
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--code-lang-color);
+}
+
+.code-copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    color: var(--code-text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--ido-radius-sm);
+    font-size: 11px;
+    font-family: inherit;
+    transition: all var(--ido-transition-fast);
+}
+
+.code-copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--code-text);
+}
+
+.code-copy-btn .material-symbols-outlined {
+    font-size: 14px;
+}
+
+/* 折叠状态 */
+.code-block-wrapper.collapsed pre {
+    display: none;
+}
+
+.code-block-wrapper.collapsed {
+    border-bottom: none;
+}
+
+.code-block-wrapper.collapsed .code-block-header {
+    border-bottom: none;
+}
+
 .markdown-body pre {
-    background-color: #f6f8fa;
-    border-radius: 6px;
-    padding: 1em;
+    background-color: var(--code-bg);
+    border-radius: 0;
+    padding: 12px 16px;
     overflow-x: auto;
+    margin: 0;
+}
+
+/* 独立的 pre（没有被 wrapper 包裹时） */
+.markdown-body > pre {
+    border-radius: var(--ido-radius-lg);
     margin-top: 0;
     margin-bottom: 0.75em;
+    border: 1px solid var(--code-border);
 }
 
 .markdown-body pre code {
     background-color: transparent;
     padding: 0;
     border-radius: 0;
-    font-size: 0.9em;
-    line-height: 1.45;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--code-text);
+    font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+}
+
+/* --- KaTeX / LaTeX Styles --- */
+.katex-display {
+    margin: 0.1em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 0;
+    text-align: center;
+}
+
+.katex {
+    font-size: 1.1em;
+}
+
+.katex-display > .katex {
+    font-size: 1.2em;
 }
 
 /* Blockquotes */
@@ -501,6 +615,15 @@ body.is-resizing {
     --action-btn-bg: #FFFFFF;
     --action-btn-hover: #F3F4F6;
     --overlay-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    
+    /* Code Block Colors */
+    --code-bg: #f6f8fa;
+    --code-header-bg: #eaecef;
+    --code-border: #d0d7de;
+    --code-text: #24292f;
+    --code-text-muted: #656d76;
+    --code-lang-color: #57606a;
+    --code-copy-hover-bg: rgba(0, 0, 0, 0.05);
     
     /* Spacing */
     --ido-spacing-xs: 0.25rem;   /* 4px */

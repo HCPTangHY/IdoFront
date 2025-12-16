@@ -2133,24 +2133,215 @@ const Framework = (function() {
             didTimeout: true,
             timeRemaining: () => 50
         }), 16));
- 
+
+    // 初始化 markdown-it 实例（延迟初始化，等待库加载）
+    let md = null;
+    
+    /**
+     * 获取或初始化 markdown-it 实例
+     */
+    function getMarkdownIt() {
+        if (md) return md;
+        
+        if (typeof markdownit === 'undefined') {
+            console.warn('markdown-it not loaded yet');
+            return null;
+        }
+        
+        // 初始化 markdown-it，配置代码高亮
+        md = markdownit({
+            html: true,
+            linkify: true,
+            typographer: true,
+            breaks: false,
+            highlight: function(str, lang) {
+                // 使用 highlight.js 进行代码高亮
+                if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+                    try {
+                        return hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+                    } catch (e) {
+                        console.warn('Highlight.js error:', e);
+                    }
+                }
+                // 如果没有语言或高亮失败，返回转义后的代码
+                return md.utils.escapeHtml(str);
+            }
+        });
+        
+        return md;
+    }
+    
+    /**
+     * 预处理 LaTeX 公式，将 $...$ 和 $$...$$ 转换为 KaTeX 渲染
+     *
+     * 改进的正则表达式规则：
+     * 1. 块级公式 $$...$$ 优先处理
+     * 2. 行内公式 $...$ 必须满足：
+     *    - $ 前后不能紧邻中文字符（避免误匹配 "价格$5" 或 "$公式$"）
+     *    - 内容中需要包含数学符号或 LaTeX 命令
+     *
+     * @param {string} text - Markdown 文本
+     * @returns {string} 处理后的文本
+     */
+    function preprocessLatex(text) {
+        if (typeof katex === 'undefined' || !text) return text;
+        
+        // 处理块级公式 $$...$$ （优先处理，避免被行内公式干扰）
+        text = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, formula) => {
+            // 检查是否包含有效的 LaTeX 内容
+            if (!isValidLatexContent(formula)) return match;
+            try {
+                return '<div class="katex-display">' + katex.renderToString(formula.trim(), {
+                    throwOnError: false,
+                    displayMode: true,
+                    strict: false
+                }) + '</div>';
+            } catch (e) {
+                console.warn('KaTeX block error:', e);
+                return match;
+            }
+        });
+        
+        // 处理行内公式 $...$
+        // 使用更严格的正则：$ 前后不能紧邻字母/中文
+        text = text.replace(/(?<![a-zA-Z\u4e00-\u9fa5])\$([^\$\n]+?)\$(?![a-zA-Z\u4e00-\u9fa5])/g, (match, formula) => {
+            // 检查是否包含有效的 LaTeX 内容
+            if (!isValidLatexContent(formula)) return match;
+            try {
+                return katex.renderToString(formula.trim(), {
+                    throwOnError: false,
+                    displayMode: false,
+                    strict: false
+                });
+            } catch (e) {
+                console.warn('KaTeX inline error:', e);
+                return match;
+            }
+        });
+        
+        return text;
+    }
+    
+    /**
+     * 检查内容是否像有效的 LaTeX 公式
+     * @param {string} content - 待检查的内容
+     * @returns {boolean}
+     */
+    function isValidLatexContent(content) {
+        if (!content || content.trim().length === 0) return false;
+        
+        // 如果内容主要是中文字符，不当作公式处理
+        const chineseRatio = (content.match(/[\u4e00-\u9fa5]/g) || []).length / content.length;
+        if (chineseRatio > 0.5) return false;
+        
+        // 检查是否包含 LaTeX 命令或数学符号
+        const hasLatexCommand = /\\[a-zA-Z]+/.test(content);  // \frac, \sqrt 等
+        const hasMathSymbol = /[+\-*/=<>^_{}\\|]/.test(content);  // 数学运算符
+        const hasGreekLetter = /\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega)/i.test(content);
+        const hasNumber = /\d/.test(content);
+        const hasFraction = /\\frac|\\dfrac/.test(content);
+        const hasSuperSub = /[\^_]/.test(content);  // 上下标
+        
+        return hasLatexCommand || hasFraction || hasGreekLetter || (hasMathSymbol && hasNumber) || hasSuperSub;
+    }
+    
+    /**
+     * 为代码块添加工具栏（语言标签 + 复制按钮）
+     * @param {HTMLElement} container - 包含渲染后 Markdown 的容器
+     */
+    function enhanceCodeBlocks(container) {
+        const codeBlocks = container.querySelectorAll('pre > code');
+        
+        codeBlocks.forEach((code) => {
+            const pre = code.parentElement;
+            if (!pre || pre.dataset.enhanced) return;
+            pre.dataset.enhanced = 'true';
+            
+            // 获取语言
+            const langClass = Array.from(code.classList).find(c => c.startsWith('language-') || c.startsWith('hljs-'));
+            let lang = 'text';
+            if (langClass) {
+                lang = langClass.replace('language-', '').replace('hljs-', '');
+            }
+            
+            // 创建包装器
+            const wrapper = document.createElement('div');
+            wrapper.className = 'code-block-wrapper';
+            
+            // 创建头部工具栏
+            const header = document.createElement('div');
+            header.className = 'code-block-header';
+            header.title = '点击折叠/展开代码';
+            
+            // 左侧区域：折叠图标（展开时朝下，收起时朝右）
+            const collapseIcon = document.createElement('span');
+            collapseIcon.className = 'code-collapse-icon material-symbols-outlined';
+            collapseIcon.textContent = 'expand_more';
+            
+            // 右侧：语言标签 + 复制按钮
+            const rightSection = document.createElement('div');
+            rightSection.className = 'code-header-right';
+            
+            const langLabel = document.createElement('span');
+            langLabel.className = 'code-lang';
+            langLabel.textContent = lang;
+            
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'code-copy-btn';
+            copyBtn.innerHTML = '<span class="material-symbols-outlined">content_copy</span><span>复制</span>';
+            copyBtn.onclick = async (e) => {
+                e.stopPropagation(); // 阻止触发折叠
+                try {
+                    await navigator.clipboard.writeText(code.textContent);
+                    copyBtn.innerHTML = '<span class="material-symbols-outlined">check</span><span>已复制</span>';
+                    setTimeout(() => {
+                        copyBtn.innerHTML = '<span class="material-symbols-outlined">content_copy</span><span>复制</span>';
+                    }, 2000);
+                } catch (err) {
+                    console.warn('Copy failed:', err);
+                }
+            };
+            
+            // 头部点击折叠（只切换 class，CSS 负责旋转动画）
+            header.onclick = () => {
+                wrapper.classList.toggle('collapsed');
+            };
+            
+            rightSection.appendChild(langLabel);
+            rightSection.appendChild(copyBtn);
+            
+            header.appendChild(collapseIcon);
+            header.appendChild(rightSection);
+            
+            // 组装
+            pre.parentNode.insertBefore(wrapper, pre);
+            wrapper.appendChild(header);
+            wrapper.appendChild(pre);
+        });
+    }
+
     /**
      * 同步渲染 Markdown（用于流式更新，避免闪烁）
      * @param {HTMLElement} target - 目标元素
      * @param {string} markdownText - Markdown 文本
      */
     function renderMarkdownSync(target, markdownText) {
-        if (!target || typeof marked === 'undefined') {
-            target.textContent = markdownText || '';
+        const mdInstance = getMarkdownIt();
+        if (!target || !mdInstance) {
+            if (target) target.textContent = markdownText || '';
             return;
         }
         
         const safeText = typeof markdownText === 'string' ? markdownText : '';
         
         try {
-            // 同步渲染，避免先显示纯文本导致闪烁
-            target.innerHTML = marked.parse(safeText);
+            // 预处理 LaTeX 公式
+            const preprocessed = preprocessLatex(safeText);
+            // 渲染 Markdown
+            target.innerHTML = mdInstance.render(preprocessed);
             target.classList.add('markdown-body');
+            // 增强代码块
+            enhanceCodeBlocks(target);
         } catch (err) {
             console.warn('Markdown sync render failed:', err);
             target.textContent = safeText;
@@ -2163,43 +2354,46 @@ const Framework = (function() {
         if (!target.textContent) {
             target.textContent = safeText;
         }
- 
+
         for (let i = markdownRenderQueue.length - 1; i >= 0; i -= 1) {
             if (markdownRenderQueue[i].target === target) {
                 markdownRenderQueue.splice(i, 1);
             }
         }
- 
+
         markdownRenderQueue.push({ target, markdownText: safeText });
- 
+
         if (!markdownRenderHandle) {
             markdownRenderHandle = scheduleIdle(processMarkdownRenderQueue);
         }
     }
- 
+
     function processMarkdownRenderQueue(deadline) {
         markdownRenderHandle = null;
-        if (typeof marked === 'undefined') {
+        const mdInstance = getMarkdownIt();
+        if (!mdInstance) {
             markdownRenderQueue.length = 0;
             return;
         }
- 
+
         const start = performance.now();
         const hasDeadline = deadline && typeof deadline.timeRemaining === 'function';
- 
+
         while (markdownRenderQueue.length > 0) {
             if (hasDeadline && deadline.timeRemaining() < 5) break;
             if (!hasDeadline && performance.now() - start > 12) break;
- 
+
             const { target, markdownText } = markdownRenderQueue.shift();
             if (!target) continue;
             const isAttached = typeof target.isConnected === 'boolean'
                 ? target.isConnected
                 : document.documentElement.contains(target);
             if (!isAttached) continue;
- 
+
             try {
-                target.innerHTML = marked.parse(markdownText || '');
+                const preprocessed = preprocessLatex(markdownText || '');
+                target.innerHTML = mdInstance.render(preprocessed);
+                enhanceCodeBlocks(target);
             } catch (err) {
                 console.warn('Markdown render failed:', err);
                 target.textContent = markdownText || '';
@@ -2208,7 +2402,7 @@ const Framework = (function() {
                 target.removeAttribute('data-needs-markdown');
             }
         }
- 
+
         if (markdownRenderQueue.length > 0) {
             markdownRenderHandle = scheduleIdle(processMarkdownRenderQueue);
         }

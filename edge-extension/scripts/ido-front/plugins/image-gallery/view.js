@@ -57,16 +57,21 @@
     return span;
   }
 
-  // 用全局 marked 渲染 Markdown，与 chat 相同风格
+  // 用全局 markdownit 渲染 Markdown，与 chat 相同风格
   function renderMarkdown(target, text) {
     if (!target) return;
     var safe = typeof text === 'string' ? text : '';
-    if (typeof marked === 'undefined') {
+    if (typeof markdownit === 'undefined') {
       target.textContent = safe;
       return;
     }
     try {
-      target.innerHTML = marked.parse(safe);
+      var md = markdownit({
+        html: true,
+        linkify: true,
+        typographer: true
+      });
+      target.innerHTML = md.render(safe);
       target.classList.add('markdown-body');
     } catch (e) {
       console.warn('[imageGallery.view] markdown 渲染失败:', e);

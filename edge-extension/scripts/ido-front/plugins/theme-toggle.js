@@ -47,6 +47,15 @@ body.ido-theme-dark {
     --ido-color-primary-hover: #3b82f6;  /* blue-500 */
     --ido-color-primary-active: #1d4ed8; /* blue-700 */
 
+    /* Code Block Colors (Dark theme) */
+    --code-bg: #0d1117;
+    --code-header-bg: #161b22;
+    --code-border: #30363d;
+    --code-text: #e6edf3;
+    --code-text-muted: #8b949e;
+    --code-lang-color: #8b949e;
+    --code-copy-hover-bg: rgba(255, 255, 255, 0.1);
+
     /* Base page background & text (override tailwind body bg-light) */
     background-color: #020617;
     color: #e5e7eb;

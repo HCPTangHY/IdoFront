@@ -11,7 +11,11 @@
     const libScripts = [
         'js-yaml.min.js',   // YAML 解析器
         'jexl.min.js',      // 表达式引擎
-        'comlink.min.js'    // Comlink RPC 库
+        'comlink.min.js',   // Comlink RPC 库
+        // Markdown 渲染相关
+        'markdown-it.min.js', // Markdown-it 解析器
+        'katex.min.js',     // LaTeX 数学公式渲染
+        'highlight.min.js'  // 代码语法高亮
     ];
     
     const scripts = [
