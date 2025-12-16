@@ -454,11 +454,9 @@
             } else if (useLevelMode(model, config)) {
                 // 等级模式：使用 thinkingLevel
                 const level = geminiMeta.thinkingLevel || 'none';
-                if (level !== 'none') {
-                    thinkingConfig.thinkingLevel = level;
-                    // 启用思考摘要（仅当非 none 时）
-                    thinkingConfig.includeThoughts = true;
-                }
+                thinkingConfig.thinkingLevel = level;
+                // 始终启用思考摘要（思维链）
+                thinkingConfig.includeThoughts = true;
             }
 
             // 将 thinkingConfig 合并到 generationConfig
@@ -520,6 +518,7 @@
                     let accumulatedParts = [];
                     let lastThoughtSignature = null;
                     let lastFinishReason = null;
+                    let streamUsageMetadata = null; // 流式响应中的 usage 信息
 
                     try {
                         while (true) {
@@ -542,6 +541,11 @@
                                     try {
                                         const json = JSON.parse(jsonStr);
                                         const candidate = json.candidates?.[0];
+                                        
+                                        // 提取 usageMetadata（Gemini API 的 usage 信息）
+                                        if (json.usageMetadata) {
+                                            streamUsageMetadata = json.usageMetadata;
+                                        }
                                         
                                         // 检测 finishReason - Gemini 的流式结束标志
                                         if (candidate?.finishReason) {
@@ -627,6 +631,15 @@
                         }]
                     };
                     
+                    // 添加 usage 信息（转换为 OpenAI 格式）
+                    if (streamUsageMetadata) {
+                        result.usage = {
+                            prompt_tokens: streamUsageMetadata.promptTokenCount || 0,
+                            completion_tokens: streamUsageMetadata.candidatesTokenCount || 0,
+                            total_tokens: streamUsageMetadata.totalTokenCount || 0
+                        };
+                    }
+                    
                     return result;
 
                 } else {
@@ -636,6 +649,7 @@
                     const parts = candidate?.content?.parts || [];
                     const thoughtSignature = candidate?.thoughtSignature;
                     const finishReason = candidate?.finishReason;
+                    const usageMetadata = data.usageMetadata;
                     let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(parts);
                     
                     // 处理非正常结束的情况，添加警告提示
@@ -644,7 +658,6 @@
                         content = content ? `${content}\n\n${finishWarning}` : finishWarning;
                     }
                     
-                    // Mimic OpenAI response structure for compatibility
                     const result = {
                         choices: [{
                             message: {
@@ -661,6 +674,15 @@
                             finish_reason: finishReason
                         }]
                     };
+                    
+                    // 添加 usage 信息
+                    if (usageMetadata) {
+                        result.usage = {
+                            prompt_tokens: usageMetadata.promptTokenCount || 0,
+                            completion_tokens: usageMetadata.candidatesTokenCount || 0,
+                            total_tokens: usageMetadata.totalTokenCount || 0
+                        };
+                    }
                     
                     return result;
                 }

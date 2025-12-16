@@ -1812,7 +1812,7 @@ const Framework = (function() {
 
     function addMessage(role, textOrObj, options) {
         options = options || {};
-        // Support object with {content, reasoning, id, attachments, modelName, channelName}
+        // Support object with {content, reasoning, id, attachments, modelName, channelName, stats}
         let text = textOrObj;
         let reasoning = null;
         let id = Date.now();
@@ -1820,6 +1820,7 @@ const Framework = (function() {
         let reasoningDuration = null;
         let modelName = null;
         let channelName = null;
+        let stats = null;
         
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
@@ -1828,6 +1829,7 @@ const Framework = (function() {
             reasoningDuration = textOrObj.reasoningDuration || null;
             modelName = textOrObj.modelName || null;
             channelName = textOrObj.channelName || null;
+            stats = textOrObj.stats || null;
             if (textOrObj.id) id = textOrObj.id;
         }
         
@@ -1975,6 +1977,12 @@ const Framework = (function() {
         }
         
         card.appendChild(container);
+        
+        // 统计信息栏（仅 AI 消息且有 stats 时显示）
+        if (role !== 'user' && stats) {
+            const statsBar = createStatsBar(stats);
+            card.appendChild(statsBar);
+        }
         
         // 操作栏（通过插件系统注入）
         const actionPlugins = getDynamicPlugins(SLOTS.MESSAGE_FOOTER, msg);
@@ -2633,7 +2641,75 @@ const Framework = (function() {
     /**
      * 完成流式消息更新，解析 Markdown
      */
-    function finalizeStreamingMessage() {
+    /**
+     * 创建统计信息栏
+     * @param {Object} stats - 统计信息对象
+     * @returns {HTMLElement}
+     */
+    function createStatsBar(stats) {
+        const statsBar = document.createElement('div');
+        statsBar.className = 'ido-message__stats';
+        
+        const items = [];
+        
+        // 总用时
+        if (stats.duration !== undefined && stats.duration !== null) {
+            items.push(`<span class="ido-stats__item" title="总用时"><span class="material-symbols-outlined">timer</span>${stats.duration.toFixed(1)}s</span>`);
+        }
+        
+        // Token 信息
+        if (stats.usage) {
+            if (stats.usage.prompt_tokens) {
+                items.push(`<span class="ido-stats__item" title="输入 tokens"><span class="material-symbols-outlined">login</span>${stats.usage.prompt_tokens}</span>`);
+            }
+            if (stats.usage.completion_tokens) {
+                items.push(`<span class="ido-stats__item" title="输出 tokens"><span class="material-symbols-outlined">logout</span>${stats.usage.completion_tokens}</span>`);
+            }
+        }
+        
+        // TPS（基于正文生成时间计算）
+        if (stats.tps !== undefined && stats.tps !== null) {
+            items.push(`<span class="ido-stats__item" title="生成速度 (tokens/秒)"><span class="material-symbols-outlined">speed</span>${stats.tps.toFixed(1)} t/s</span>`);
+        }
+        
+        statsBar.innerHTML = items.join('<span class="ido-stats__divider">·</span>');
+        
+        return statsBar;
+    }
+    
+    /**
+     * 更新消息的统计信息
+     * @param {string} messageId - 消息 ID
+     * @param {Object} stats - 统计信息对象
+     */
+    function updateMessageStats(messageId, stats) {
+        if (!messageId || !stats) return;
+        
+        const card = ui.chatStream.querySelector(`[data-message-id="${messageId}"]`);
+        if (!card) return;
+        
+        // 检查是否已有统计栏
+        let statsBar = card.querySelector('.ido-message__stats');
+        
+        if (!statsBar) {
+            // 创建新的统计栏
+            statsBar = createStatsBar(stats);
+            
+            // 插入到操作栏之前
+            const actions = card.querySelector('.ido-message__actions');
+            if (actions) {
+                card.insertBefore(statsBar, actions);
+            } else {
+                card.appendChild(statsBar);
+            }
+        } else {
+            // 更新现有统计栏
+            const newStatsBar = createStatsBar(stats);
+            statsBar.innerHTML = newStatsBar.innerHTML;
+        }
+    }
+
+    function finalizeStreamingMessage(stats) {
         // 强制刷新任何待处理的 RAF 更新，确保 DOM 内容是最新的
         // 这也会触发 performUIUpdate 中的思维链计时器停止逻辑
         if (pendingUpdate) {
@@ -2721,6 +2797,11 @@ const Framework = (function() {
         strayIndicators.forEach(indicator => indicator.remove());
         const floatingIndicators = ui.chatStream.querySelectorAll('[data-loading-id]');
         floatingIndicators.forEach(indicator => indicator.remove());
+        
+        // 如果有统计信息，渲染统计栏
+        if (stats && lastMsgId) {
+            updateMessageStats(lastMsgId, stats);
+        }
     }
     
     /**

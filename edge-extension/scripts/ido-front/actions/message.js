@@ -494,6 +494,13 @@
     async function generateResponse(conv, relatedUserMessageId) {
         const isActiveConv = () => store.state.activeConversationId === conv.id;
 
+        // 记录请求开始时间，用于计算持续时长
+        const requestStartTime = Date.now();
+        // 首字时间（收到第一个任何内容的时间，包括思维链）
+        let firstTokenTime = null;
+        // 正文首字时间（收到第一个正文内容的时间，用于计算 TPS）
+        let firstContentTime = null;
+
         // 为当前对话生成一个唯一的请求标识，用于忽略旧请求的流式更新/清理
         const generationToken = (utils && typeof utils.createId === 'function')
             ? utils.createId('gen')
@@ -731,6 +738,16 @@
                     currentMetadata = data.metadata || null;
                 }
                 
+                // 记录首字时间（第一次收到任何内容，包括思维链）
+                if (!firstTokenTime && (currentContent || currentReasoning)) {
+                    firstTokenTime = Date.now();
+                }
+                
+                // 记录正文首字时间（第一次收到正文内容，用于计算 TPS）
+                if (!firstContentTime && currentContent) {
+                    firstContentTime = Date.now();
+                }
+                
                 fullContent = currentContent;
                 fullReasoning = currentReasoning;
                 
@@ -858,6 +875,52 @@
                 throw apiError;
             }
             
+            // 计算时间统计
+            const requestEndTime = Date.now();
+            const totalDuration = (requestEndTime - requestStartTime) / 1000; // 总用时（秒）
+            
+            // 首字延迟：从发送请求到收到第一个 token 的时间（包含思维链）
+            let ttft = null;
+            if (firstTokenTime) {
+                ttft = (firstTokenTime - requestStartTime) / 1000;
+            }
+            
+            // 正文首字延迟：从发送请求到收到第一个正文内容的时间
+            let ttfc = null;
+            if (firstContentTime) {
+                ttfc = (firstContentTime - requestStartTime) / 1000;
+            }
+            
+            // 正文生成时间：从正文首字到最后一个字的时间（用于计算 TPS）
+            let generationTime = null;
+            if (firstContentTime) {
+                generationTime = (requestEndTime - firstContentTime) / 1000;
+            } else if (firstTokenTime) {
+                // 降级：如果没有正文首字时间，使用首字时间
+                generationTime = (requestEndTime - firstTokenTime) / 1000;
+            }
+            
+            // 提取 usage 信息并计算 TPS
+            const usage = response.usage || null;
+            let tps = null;
+            // TPS 基于正文生成时间计算（从正文首字开始）
+            if (usage && usage.completion_tokens && generationTime && generationTime > 0) {
+                tps = usage.completion_tokens / generationTime;
+            } else if (usage && usage.completion_tokens && totalDuration > 0) {
+                // 降级：如果没有首字时间，使用总用时计算
+                tps = usage.completion_tokens / totalDuration;
+            }
+            
+            // 构建统计信息对象
+            const stats = {
+                duration: totalDuration,        // 总用时
+                ttft: ttft,                     // 首字延迟 (Time to First Token，包含思维链)
+                ttfc: ttfc,                     // 正文首字延迟 (Time to First Content)
+                generationTime: generationTime, // 正文生成时间
+                usage: usage,
+                tps: tps
+            };
+            
             if (!assistantMessage) {
                 const choice = response.choices?.[0];
                 const content = choice?.message?.content || '无内容响应';
@@ -869,7 +932,8 @@
                     content,
                     reasoning,
                     attachments,
-                    metadata
+                    metadata,
+                    stats
                 });
                 fullContent = content;
                 if (reasoning) fullReasoning = reasoning;
@@ -877,9 +941,12 @@
                 // 标记流式结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的内容
                 streamEnded = true;
                 
+                // 更新助手消息的统计信息
+                assistantMessage.stats = stats;
+                
                 // 流式更新完成，解析 Markdown（仅在当前对话处于激活状态时处理当前屏幕）
                 if (context && context.finalizeStreamingMessage && isActiveConv()) {
-                    context.finalizeStreamingMessage();
+                    context.finalizeStreamingMessage(stats);
                 }
                 store.persist();
             }
@@ -942,6 +1009,7 @@
         let reasoning = null;
         let metadata = null;
         let attachments = null;
+        let stats = null;
         
         if (typeof contentOrObj === 'object' && contentOrObj !== null) {
             content = contentOrObj.content || '';
@@ -949,6 +1017,8 @@
             metadata = contentOrObj.metadata || null;
             // 直接从顶层提取 attachments
             attachments = contentOrObj.attachments || null;
+            // 提取统计信息
+            stats = contentOrObj.stats || null;
         }
         
         const msg = {
@@ -969,6 +1039,10 @@
         // 持久化 metadata（框架层不关心具体内容，直接存储）
         if (metadata) {
             msg.metadata = metadata;
+        }
+        // 保存统计信息
+        if (stats) {
+            msg.stats = stats;
         }
         
         // 保存模型名和渠道名到消息中
@@ -1000,6 +1074,10 @@
             }
             if (msg.channelName) {
                 payload.channelName = msg.channelName;
+            }
+            // 传递统计信息
+            if (stats) {
+                payload.stats = stats;
             }
             
             context.addMessage('ai', payload);

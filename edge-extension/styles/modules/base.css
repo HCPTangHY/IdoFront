@@ -1,0 +1,165 @@
+/**
+ * base.css - 全局基础样式 + 设计令牌
+ * 包含：光标行为、选择控制、滚动条、CSS变量
+ */
+
+/* ========================================
+   Global Cursor & Selection Behavior
+   ======================================== */
+
+/* Global cursor behavior:
+ * - Default: arrow cursor everywhere
+ * - Text cursor: only on real editable areas (input/textarea/contenteditable)
+ * - Pointer: on clickable elements
+ * - Selection: disabled by default, re-enabled only where needed
+ */
+body,
+body * {
+    cursor: default;
+    -webkit-user-select: text;
+    user-select: text;
+    caret-color: transparent;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+    cursor: text;
+    -webkit-user-select: text;
+    user-select: text;
+    caret-color: auto;
+}
+
+/* Areas where text selection is allowed but content is not editable */
+#chat-stream,
+#network-list,
+#detail-json,
+pre,
+code,
+.selectable,
+.message-content,
+.markdown-body,
+.reasoning-content {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+button,
+a,
+[role="button"],
+.cursor-pointer {
+    cursor: pointer;
+}
+
+/* ========================================
+   Custom Scrollbar
+   ======================================== */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* ========================================
+   Syntax Highlighting (JSON)
+   ======================================== */
+
+.json-key { color: #e11d48; }
+.json-string { color: #16a34a; }
+.json-number { color: #2563eb; }
+.json-boolean { color: #7c3aed; }
+.json-null { color: #9ca3af; }
+
+/* ========================================
+   Design Tokens (CSS Variables)
+   ======================================== */
+
+:root {
+    /* Colors - Primary */
+    --ido-color-primary: #3b82f6;
+    --ido-color-primary-hover: #2563eb;
+    --ido-color-primary-active: #1d4ed8;
+    
+    /* Colors - Secondary */
+    --ido-color-secondary: #6b7280;
+    --ido-color-secondary-hover: #4b5563;
+    
+    /* Colors - Semantic */
+    --ido-color-success: #10b981;
+    --ido-color-success-hover: #059669;
+    --ido-color-warning: #f59e0b;
+    --ido-color-warning-hover: #d97706;
+    --ido-color-danger: #ef4444;
+    --ido-color-danger-hover: #dc2626;
+    --ido-color-info: #06b6d4;
+    --ido-color-info-hover: #0891b2;
+    
+    /* Colors - Background */
+    --ido-color-bg-primary: #ffffff;
+    --ido-color-bg-secondary: #f9fafb;
+    --ido-color-bg-tertiary: #f3f4f6;
+    --ido-color-bg-hover: #f3f4f6;
+    --ido-color-bg-active: #e5e7eb;
+    
+    /* Colors - Text */
+    --ido-color-text-primary: #111827;
+    --ido-color-text-secondary: #6b7280;
+    --ido-color-text-tertiary: #9ca3af;
+    --ido-color-text-disabled: #d1d5db;
+    
+    /* Colors - Border */
+    --ido-color-border: #e5e7eb;
+    --ido-color-border-hover: #d1d5db;
+    --ido-color-border-focus: #3b82f6;
+    
+    /* Message Card Colors (New Design) */
+    --card-bg-default: #FFFFFF;
+    --card-bg-edit: #FAFAFA;
+    --card-border: #E5E7EB;
+    --card-border-focus: #3B82F6;
+    --action-btn-bg: #FFFFFF;
+    --action-btn-hover: #F3F4F6;
+    --overlay-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    
+    /* Stats Bar Colors */
+    --stats-bg: #FCFCFC;
+    --stats-bg-hover: #F8F9FA;
+    
+    /* Code Block Colors */
+    --code-bg: #f6f8fa;
+    --code-header-bg: #eaecef;
+    --code-border: #d0d7de;
+    --code-text: #24292f;
+    --code-text-muted: #656d76;
+    --code-lang-color: #57606a;
+    --code-copy-hover-bg: rgba(0, 0, 0, 0.05);
+    
+    /* Spacing */
+    --ido-spacing-xs: 0.25rem;   /* 4px */
+    --ido-spacing-sm: 0.5rem;    /* 8px */
+    --ido-spacing-md: 0.75rem;   /* 12px */
+    --ido-spacing-lg: 1rem;      /* 16px */
+    --ido-spacing-xl: 1.5rem;    /* 24px */
+    --ido-spacing-2xl: 2rem;     /* 32px */
+    
+    /* Border Radius */
+    --ido-radius-sm: 0.375rem;   /* 6px */
+    --ido-radius-md: 0.5rem;     /* 8px */
+    --ido-radius-lg: 0.75rem;    /* 12px */
+    --ido-radius-xl: 1rem;       /* 16px */
+    --ido-radius-2xl: 1.5rem;    /* 24px */
+    --ido-radius-full: 9999px;
+    
+    /* Shadows */
+    --ido-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --ido-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    --ido-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+    --ido-shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    
+    /* Transitions */
+    --ido-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --ido-transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    --ido-transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Dark theme overrides are injected by the builtin theme plugin via <style> to keep core CSS neutral. */

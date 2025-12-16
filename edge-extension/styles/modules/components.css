@@ -1,0 +1,624 @@
+/**
+ * components.css - UI 组件系统
+ * 包含：按钮、面板、卡片、表单、徽章、列表、头部、侧边栏等
+ */
+
+/* ========================================
+   Button System
+   ======================================== */
+
+/* Base Button */
+.ido-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ido-spacing-sm);
+    padding: var(--ido-spacing-sm) var(--ido-spacing-lg);
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.5;
+    border-radius: var(--ido-radius-md);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+    user-select: none;
+    white-space: nowrap;
+}
+
+.ido-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Button Variants */
+.ido-btn--primary {
+    background-color: var(--ido-color-primary);
+    color: white;
+}
+
+.ido-btn--primary:hover:not(:disabled) {
+    background-color: var(--ido-color-primary-hover);
+}
+
+.ido-btn--primary:active:not(:disabled) {
+    background-color: var(--ido-color-primary-active);
+}
+
+.ido-btn--secondary {
+    background-color: var(--ido-color-bg-secondary);
+    color: var(--ido-color-text-primary);
+    border-color: var(--ido-color-border);
+}
+
+.ido-btn--secondary:hover:not(:disabled) {
+    background-color: var(--ido-color-bg-hover);
+    border-color: var(--ido-color-border-hover);
+}
+
+.ido-btn--ghost {
+    background-color: transparent;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-btn--ghost:hover:not(:disabled) {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-primary);
+}
+
+.ido-btn--danger {
+    background-color: var(--ido-color-danger);
+    color: white;
+}
+
+.ido-btn--danger:hover:not(:disabled) {
+    background-color: var(--ido-color-danger-hover);
+}
+
+/* Button Sizes */
+.ido-btn--sm {
+    padding: var(--ido-spacing-xs) var(--ido-spacing-md);
+    font-size: 0.75rem;
+}
+
+.ido-btn--md {
+    padding: var(--ido-spacing-sm) var(--ido-spacing-lg);
+    font-size: 0.875rem;
+}
+
+.ido-btn--lg {
+    padding: var(--ido-spacing-md) var(--ido-spacing-xl);
+    font-size: 1rem;
+}
+
+/* Icon Button */
+.ido-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--ido-spacing-sm);
+    border-radius: var(--ido-radius-md);
+    color: var(--ido-color-text-secondary);
+    background-color: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+}
+
+.ido-icon-btn:hover {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-primary);
+}
+
+.ido-icon-btn--active {
+    background-color: var(--ido-color-bg-active);
+    color: var(--ido-color-primary);
+}
+
+/* ========================================
+   Panel System
+   ======================================== */
+
+.ido-panel {
+    display: flex;
+    flex-direction: column;
+    background-color: var(--ido-color-bg-primary);
+    border-radius: var(--ido-radius-lg);
+    overflow: hidden;
+}
+
+.ido-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--ido-spacing-md) var(--ido-spacing-lg);
+    border-bottom: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-primary);
+    flex-shrink: 0;
+}
+
+.ido-panel__title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--ido-color-text-primary);
+}
+
+.ido-panel__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+}
+
+.ido-panel__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--ido-spacing-lg);
+}
+
+.ido-panel__footer {
+    padding: var(--ido-spacing-md) var(--ido-spacing-lg);
+    border-top: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-secondary);
+    flex-shrink: 0;
+}
+
+/* ========================================
+   Card System
+   ======================================== */
+
+.ido-card {
+    background-color: var(--ido-color-bg-primary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-lg);
+    padding: var(--ido-spacing-md);
+    transition: all var(--ido-transition-base);
+}
+
+.ido-card--compact {
+    padding: var(--ido-spacing-sm);
+}
+
+.ido-card--hover:hover {
+    border-color: var(--ido-color-primary);
+    box-shadow: var(--ido-shadow-md);
+}
+
+.ido-card--selected {
+    border-color: var(--ido-color-primary);
+    background-color: #eff6ff;
+}
+
+.ido-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--ido-spacing-sm);
+}
+
+.ido-card__body {
+    color: var(--ido-color-text-secondary);
+    font-size: 0.875rem;
+}
+
+.ido-card__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--ido-spacing-sm);
+    padding-top: var(--ido-spacing-sm);
+    border-top: 1px solid var(--ido-color-border);
+}
+
+/* ========================================
+   Form System
+   ======================================== */
+
+.ido-form-group {
+    margin-bottom: var(--ido-spacing-lg);
+}
+
+.ido-form-label {
+    display: block;
+    margin-bottom: var(--ido-spacing-xs);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--ido-color-text-primary);
+}
+
+.ido-form-input,
+.ido-form-textarea,
+.ido-form-select {
+    width: 100%;
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    font-size: 0.875rem;
+    color: var(--ido-color-text-primary);
+    background-color: var(--ido-color-bg-primary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-md);
+    transition: all var(--ido-transition-base);
+}
+
+.ido-form-input:focus,
+.ido-form-textarea:focus,
+.ido-form-select:focus {
+    outline: none;
+    border-color: var(--ido-color-border-focus);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.ido-form-textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+/* Form Switch */
+.ido-form-switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.ido-form-switch__input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ido-form-switch__slider {
+    position: relative;
+    width: 2.25rem;
+    height: 1.25rem;
+    background-color: var(--ido-color-bg-active);
+    border-radius: var(--ido-radius-full);
+    transition: background-color var(--ido-transition-base);
+}
+
+.ido-form-switch__slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 1rem;
+    height: 1rem;
+    background-color: white;
+    border-radius: var(--ido-radius-full);
+    transition: transform var(--ido-transition-base);
+}
+
+.ido-form-switch__input:checked + .ido-form-switch__slider {
+    background-color: var(--ido-color-primary);
+}
+
+.ido-form-switch__input:checked + .ido-form-switch__slider::after {
+    transform: translateX(1rem);
+}
+
+/* ========================================
+   Badge System
+   ======================================== */
+
+.ido-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 500;
+    border-radius: var(--ido-radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.ido-badge--primary {
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+.ido-badge--success {
+    background-color: #d1fae5;
+    color: #065f46;
+}
+
+.ido-badge--warning {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+.ido-badge--danger {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.ido-badge--info {
+    background-color: #cffafe;
+    color: #155e75;
+}
+
+.ido-badge--secondary {
+    background-color: var(--ido-color-bg-tertiary);
+    color: var(--ido-color-text-secondary);
+}
+
+/* ========================================
+   List System
+   ======================================== */
+
+.ido-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ido-spacing-xs);
+}
+
+.ido-list__item {
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    border-radius: var(--ido-radius-md);
+    transition: all var(--ido-transition-base);
+    cursor: pointer;
+}
+
+.ido-list__item:hover {
+    background-color: var(--ido-color-bg-hover);
+}
+
+.ido-list__item--active {
+    background-color: #eff6ff;
+    color: var(--ido-color-primary);
+    font-weight: 500;
+}
+
+/* ========================================
+   Utility Classes
+   ======================================== */
+
+.ido-divider {
+    height: 1px;
+    background-color: var(--ido-color-border);
+    margin: var(--ido-spacing-lg) 0;
+}
+
+.ido-divider--vertical {
+    width: 1px;
+    height: 1rem;
+    background-color: var(--ido-color-border);
+    margin: 0 var(--ido-spacing-sm);
+}
+
+.ido-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--ido-spacing-2xl);
+    color: var(--ido-color-text-tertiary);
+    text-align: center;
+}
+
+.ido-status-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: var(--ido-radius-full);
+    background-color: var(--ido-color-bg-active);
+}
+
+.ido-status-dot--active {
+    background-color: var(--ido-color-success);
+}
+
+.ido-status-dot--inactive {
+    background-color: var(--ido-color-text-tertiary);
+}
+
+.ido-status-dot--error {
+    background-color: var(--ido-color-danger);
+}
+
+.ido-status-dot--warning {
+    background-color: var(--ido-color-warning);
+}
+
+/* ========================================
+   Header System
+   ======================================== */
+
+.ido-header {
+    height: 3rem;
+    border-bottom: 1px solid var(--ido-color-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--ido-spacing-lg);
+    background-color: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(8px);
+    flex-shrink: 0;
+}
+
+.ido-header__left {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+    flex-shrink: 0; /* 防止左侧按钮被压缩 */
+}
+
+.ido-header__right {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+    flex-shrink: 0; /* 防止右侧按钮被压缩 */
+}
+
+.ido-header__center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0; /* 允许 flex 子元素缩小 */
+    overflow: hidden; /* 隐藏溢出内容 */
+}
+
+.ido-header__title {
+    font-weight: 500;
+    color: var(--ido-color-text-primary);
+    truncate: true;
+}
+
+.ido-header__subtitle {
+    font-size: 0.625rem;
+    color: var(--ido-color-text-tertiary);
+    truncate: true;
+}
+
+/* ========================================
+   Sidebar System
+   ======================================== */
+
+.ido-sidebar {
+    display: flex;
+    flex-direction: column;
+    background-color: var(--ido-color-bg-primary);
+    border-right: 1px solid var(--ido-color-border);
+    overflow: hidden;
+}
+
+.ido-sidebar__header {
+    height: 3rem;
+    border-bottom: 1px solid var(--ido-color-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--ido-spacing-md);
+    flex-shrink: 0;
+}
+
+.ido-sidebar__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--ido-spacing-sm);
+}
+
+.ido-sidebar__footer {
+    padding: var(--ido-spacing-md);
+    border-top: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-secondary);
+    flex-shrink: 0;
+}
+
+/* ========================================
+   Action Group
+   ======================================== */
+
+.ido-action-group {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    opacity: 0;
+    transition: opacity var(--ido-transition-base);
+}
+
+.ido-card:hover .ido-action-group,
+.ido-list__item:hover .ido-action-group {
+    opacity: 1;
+}
+
+/* ========================================
+   Loading Indicator (Typing Dots)
+   ======================================== */
+
+.ido-loading-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 0;
+}
+
+.ido-loading-dots__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background-color: currentColor;
+    opacity: 0.4;
+    animation: loadingDotPulse 1.4s infinite ease-in-out;
+}
+
+.ido-loading-dots__dot:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.ido-loading-dots__dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.ido-loading-dots__dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes loadingDotPulse {
+    0%, 60%, 100% {
+        opacity: 0.4;
+        transform: translateY(0);
+    }
+    30% {
+        opacity: 1;
+        transform: translateY(-0.5rem);
+    }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    .ido-loading-dots__dot {
+        animation: loadingDotFade 1.4s infinite ease-in-out;
+    }
+    
+    @keyframes loadingDotFade {
+        0%, 60%, 100% {
+            opacity: 0.4;
+        }
+        30% {
+            opacity: 1;
+        }
+    }
+}
+
+/* ========================================
+   Send Button Loading State
+   ======================================== */
+
+#btn-send {
+    transition: all var(--ido-transition-base);
+    position: relative;
+}
+
+/* 加载状态 - 变成停止按钮 */
+#btn-send.btn-send--loading {
+    background-color: #ef4444; /* red-500 */
+    animation: sendButtonPulse 1.5s ease-in-out infinite;
+}
+
+#btn-send.btn-send--loading:hover {
+    background-color: #dc2626; /* red-600 */
+}
+
+/* 加载时图标旋转动画 */
+#btn-send.btn-send--loading .material-symbols-outlined {
+    animation: none; /* 停止图标不需要旋转 */
+}
+
+/* 脉冲动画 - 提示用户可以点击停止 */
+@keyframes sendButtonPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+    }
+}
+
+/* 尊重用户的减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+    #btn-send.btn-send--loading {
+        animation: none;
+    }
+    
+    #btn-send.btn-send--loading .material-symbols-outlined {
+        animation: none;
+    }
+}

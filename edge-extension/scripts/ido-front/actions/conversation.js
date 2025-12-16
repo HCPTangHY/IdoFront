@@ -173,6 +173,10 @@
                     if (msg.channelName) {
                         payload.channelName = msg.channelName;
                     }
+                    // 添加统计信息（如果存在）
+                    if (msg.stats) {
+                        payload.stats = msg.stats;
+                    }
                 }
                 
                 // 批量渲染：所有消息都不触发滚动，使用 fragment 作为目标容器

@@ -1,0 +1,768 @@
+/**
+ * messages.css - 消息系统样式
+ * 包含：消息卡片、操作栏、编辑模式、附件管理、流式指示器
+ */
+
+/* ========================================
+   Message System (New Card Design)
+   ======================================== */
+
+.ido-message {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin-bottom: var(--ido-spacing-sm);
+    padding: var(--ido-spacing-lg);
+    border: 1px solid transparent;
+    border-radius: 16px;
+    transition: all var(--ido-transition-base);
+}
+
+.ido-message:hover {
+    background-color: var(--card-bg-default);
+    border-color: var(--card-border);
+}
+
+/* 编辑模式样式 */
+.ido-message--editing {
+    background-color: var(--card-bg-edit) !important;
+    border-color: var(--card-border-focus) !important;
+}
+
+/* 角色标签 */
+.ido-message__role {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--ido-color-text-secondary);
+    margin-bottom: var(--ido-spacing-sm);
+    font-weight: 500;
+}
+
+/* 角色标签图标 */
+.ido-message__role-icon {
+    font-size: 0.875rem;
+    line-height: 1;
+}
+
+/* 内容容器 */
+.ido-message__container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+/* 内容区域（浏览模式） */
+.ido-message__content {
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--ido-color-text-primary);
+}
+
+.message-content {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+/* 未解析 Markdown 时保留空白格式 */
+.message-content:not(.markdown-body) {
+    white-space: pre-wrap;
+}
+
+/* 解析 Markdown 后使用正常空白处理 */
+.message-content.markdown-body {
+    white-space: normal;
+}
+
+/* ========================================
+   智能操作栏 (Action Bar)
+   ======================================== */
+
+.ido-message__actions {
+    position: absolute;
+    top: 0;
+    right: var(--ido-spacing-lg);
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    padding: var(--ido-spacing-xs) var(--ido-spacing-sm);
+    background-color: var(--action-btn-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--ido-radius-full);
+    box-shadow: var(--ido-shadow-sm);
+    opacity: 0;
+    transition: opacity var(--ido-transition-base);
+    z-index: 10;
+}
+
+.ido-message:hover .ido-message__actions {
+    opacity: 1;
+}
+
+/* 编辑模式下常驻显示 */
+.ido-message--editing .ido-message__actions {
+    opacity: 1;
+}
+
+/* 操作按钮 */
+.ido-message__actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background-color: transparent;
+    border: none;
+    border-radius: var(--ido-radius-md);
+    color: var(--ido-color-text-secondary);
+    cursor: pointer;
+    transition: all var(--ido-transition-fast);
+}
+
+.ido-message__actions button:hover {
+    background-color: var(--action-btn-hover);
+    color: var(--ido-color-primary);
+}
+
+/* 编辑状态的 Textarea */
+.ido-message__edit-textarea {
+    width: 100%;
+    min-height: 60px;
+    padding: var(--ido-spacing-md);
+    font-size: 0.875rem;
+    font-family: inherit;
+    line-height: 1.6;
+    color: var(--ido-color-text-primary);
+    background-color: transparent;
+    border: none;
+    outline: none;
+    resize: none;
+    overflow-y: auto; /* 允许垂直滚动，修复长消息编辑无法滚动的问题 */
+    field-sizing: content; /* 现代浏览器自适应高度 */
+    max-height: 500px;
+}
+
+.ido-message__edit-textarea:focus {
+    outline: none;
+}
+
+/* 旧版兼容：保留一些必要的类 */
+.ido-message__avatar {
+    display: none; /* 新设计不使用头像 */
+}
+
+.ido-message__footer {
+    display: none; /* 新设计操作按钮在卡片右上角 */
+}
+
+/* 加载指示器容器 */
+.ido-message__container--loading {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+/* ========================================
+   Popover/Dropdown Menu
+   ======================================== */
+
+.ido-message__popover {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: auto;
+    white-space: nowrap;
+    padding: var(--ido-spacing-xs);
+    background-color: var(--card-bg-default);
+    border: 1px solid var(--card-border);
+    border-radius: var(--ido-radius-lg);
+    box-shadow: var(--overlay-shadow);
+    z-index: 100;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px);
+    transition: all var(--ido-transition-fast);
+}
+
+.ido-message__popover--visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.ido-message__popover button {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    width: 100%;
+    padding: var(--ido-spacing-xs) var(--ido-spacing-sm);
+    font-size: 0.75rem;
+    color: var(--ido-color-text-primary);
+    background-color: transparent;
+    border: none;
+    border-radius: var(--ido-radius-md);
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    transition: background-color var(--ido-transition-fast);
+}
+
+.ido-message__popover button:hover {
+    background-color: var(--action-btn-hover);
+}
+
+.ido-message__popover button.danger {
+    color: var(--ido-color-danger);
+}
+
+.ido-message__popover button.danger:hover {
+    background-color: #fee2e2;
+}
+
+/* ========================================
+   Message Streaming Indicator
+   ======================================== */
+
+.message-streaming-indicator {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--ido-color-border);
+}
+
+/* ========================================
+   Message Edit Styles - New Design
+   ======================================== */
+
+/* 新版编辑容器 */
+.message-edit-container-new {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--ido-spacing-sm);
+    row-gap: var(--ido-spacing-sm);
+    width: 100%;
+    margin-top: var(--ido-spacing-sm);
+}
+
+/* 输入框包装器 - 整行圆角设计 */
+.message-edit-input-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    background-color: var(--ido-color-bg-primary);
+    border: 2px solid var(--ido-color-primary);
+    border-radius: var(--ido-radius-2xl);
+    padding: var(--ido-spacing-md);
+    transition: all var(--ido-transition-base);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    grid-column: 1 / -1; /* 在网格中占满整行 */
+}
+
+.message-edit-input-wrapper:focus-within {
+    border-color: var(--ido-color-primary-hover);
+    box-shadow: 0 6px 16px rgba(59, 130, 246, 0.25);
+}
+
+/* 输入框 */
+.message-edit-input {
+    flex: 1;
+    min-height: 40px;
+    max-height: 60vh; /* 允许长文本占据更多高度，由 JS 自动高度控制，最多占视口 60% 高度 */
+    padding: 0;
+    font-size: 0.9375rem;
+    font-family: inherit;
+    line-height: 1.6;
+    color: var(--ido-color-text-primary);
+    background-color: transparent;
+    border: none;
+    resize: none;
+    outline: none;
+    overflow-y: auto;
+}
+
+.message-edit-input::placeholder {
+    color: var(--ido-color-text-tertiary);
+}
+
+/* 按钮组（位于下方同一行右侧） */
+.message-edit-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--ido-spacing-sm);
+    flex-shrink: 0;
+    /* 默认放在右侧第二列，与附件同一行 */
+    grid-column: 2 / 3;
+}
+
+/* Icon按钮 */
+.message-edit-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--ido-radius-full);
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+    flex-shrink: 0;
+}
+
+.message-edit-icon-btn .material-symbols-outlined {
+    font-size: 1.25rem;
+}
+
+/* 取消按钮 */
+.message-edit-icon-btn--cancel {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-secondary);
+}
+
+/* User Bubble: Cancel Button */
+.ido-message--user .message-edit-icon-btn--cancel {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.message-edit-icon-btn--cancel:hover {
+    background-color: var(--ido-color-bg-active);
+    color: var(--ido-color-danger);
+    transform: scale(1.05);
+}
+
+.ido-message--user .message-edit-icon-btn--cancel:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+}
+
+/* 发送按钮 */
+.message-edit-icon-btn--send {
+    background: linear-gradient(135deg, var(--ido-color-primary) 0%, var(--ido-color-primary-hover) 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+/* User Bubble: Send Button (White bg, Blue icon) */
+.ido-message--user .message-edit-icon-btn--send {
+    background: white;
+    color: var(--ido-color-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.message-edit-icon-btn--send:hover {
+    background: linear-gradient(135deg, var(--ido-color-primary-hover) 0%, var(--ido-color-primary-active) 100%);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    transform: scale(1.05);
+}
+
+.ido-message--user .message-edit-icon-btn--send:hover {
+    background: #f8fafc;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.message-edit-icon-btn--send:active {
+    transform: scale(0.95);
+}
+
+/* 附件管理区域（与发送/取消同一行，贴近输入框底部） */
+.message-edit-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+    /* 默认放在左侧第一列，与按钮同一行 */
+    grid-column: 1 / 2;
+}
+
+.message-edit-attachment-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ido-spacing-sm);
+    margin-bottom: var(--ido-spacing-sm);
+}
+
+/* 附件预览项 */
+.message-edit-attachment-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    padding: var(--ido-spacing-xs) var(--ido-spacing-sm);
+    background-color: var(--ido-color-bg-secondary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-lg);
+    max-width: 200px;
+    transition: all var(--ido-transition-base);
+}
+
+.message-edit-attachment-item:hover {
+    border-color: var(--ido-color-primary);
+    box-shadow: var(--ido-shadow-sm);
+}
+
+.message-edit-attachment-item img {
+    width: 3rem;
+    height: 3rem;
+    object-fit: cover;
+    border-radius: var(--ido-radius-md);
+    flex-shrink: 0;
+}
+
+.message-edit-attachment-item .material-symbols-outlined {
+    font-size: 2rem;
+    color: var(--ido-color-text-secondary);
+    flex-shrink: 0;
+}
+
+.message-edit-attachment-item .attachment-name {
+    flex: 1;
+    font-size: 0.75rem;
+    color: var(--ido-color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 附件删除按钮 */
+.attachment-remove-btn {
+    position: absolute;
+    top: -0.375rem;
+    right: -0.375rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--ido-color-danger);
+    color: white;
+    border: 2px solid white;
+    border-radius: var(--ido-radius-full);
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--ido-transition-base);
+    box-shadow: var(--ido-shadow-sm);
+}
+
+.message-edit-attachment-item:hover .attachment-remove-btn {
+    opacity: 1;
+}
+
+.attachment-remove-btn:hover {
+    background-color: var(--ido-color-danger-hover);
+    transform: scale(1.1);
+}
+
+.attachment-remove-btn .material-symbols-outlined {
+    font-size: 0.875rem;
+}
+
+/* 添加附件按钮 */
+.message-edit-add-attachment {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ido-spacing-xs);
+    padding: var(--ido-spacing-xs) var(--ido-spacing-md);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ido-color-primary);
+    background-color: transparent;
+    border: 1px dashed var(--ido-color-primary);
+    border-radius: var(--ido-radius-lg);
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+}
+
+.message-edit-add-attachment:hover {
+    background-color: rgba(59, 130, 246, 0.05);
+    border-style: solid;
+}
+
+/* User Bubble: Add Attachment Button (White text/border) */
+.ido-message--user .message-edit-add-attachment {
+    color: rgba(255, 255, 255, 0.9);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.ido-message--user .message-edit-add-attachment:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: white;
+}
+
+.message-edit-add-attachment .material-symbols-outlined {
+    font-size: 1rem;
+}
+
+/* ========================================
+   编辑模式布局控制
+   ======================================== */
+
+.ido-message:has(.message-editing-new) {
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
+    gap: var(--ido-spacing-sm);
+}
+
+.ido-message:has(.message-editing-new) > .ido-message__avatar {
+    width: 2.5rem;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ido-message--user:has(.message-editing-new) {
+    justify-content: flex-start !important;
+}
+
+.ido-message:has(.message-editing-new) .message-edit-shell {
+    flex: 1;
+    min-width: 0;
+    width: calc(100% - 3rem);
+    max-width: calc(100% - 3rem);
+}
+
+@media (max-width: 768px) {
+    .ido-message:has(.message-editing-new) {
+        flex-direction: column;
+    }
+    
+    /* 仅让编辑外壳占满宽度，头像保持固定圆形尺寸，避免在移动端被拉伸 */
+    .ido-message:has(.message-editing-new) .message-edit-shell {
+        width: 100%;
+        max-width: 100%;
+    }
+    
+    .ido-message:has(.message-editing-new) > .ido-message__avatar {
+        order: -1;
+        justify-content: flex-start;
+        margin-bottom: var(--ido-spacing-sm);
+    }
+}
+
+/* 气泡本身也占满，并移除原有样式以适应输入框设计 */
+.ido-message__bubble.message-editing-new {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 0 !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    display: block !important; /* 确保块级显示 */
+}
+
+/* 编辑模式下隐藏气泡内原始图片附件（上方预览），仅保留下方可编辑缩略图 */
+.ido-message__bubble.message-editing-new .flex.gap-2.flex-wrap.mb-2 {
+    display: none !important;
+}
+
+/* 编辑模式下的取消按钮：统一高对比度样式，避免在不同气泡背景下不可见 */
+.ido-message:has(.message-editing-new) .message-edit-icon-btn--cancel {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-message:has(.message-editing-new) .message-edit-icon-btn--cancel:hover {
+    background-color: var(--ido-color-bg-active);
+    color: var(--ido-color-danger);
+}
+
+/* 编辑模式下隐藏消息 footer 操作区，避免误触其他操作 */
+.ido-message:has(.message-editing-new) .ido-message__footer {
+    display: none !important;
+}
+
+/* 编辑模式下统一附件按钮样式，避免在浅色背景下变成白色不可见 */
+.ido-message:has(.message-editing-new) .message-edit-add-attachment {
+    color: var(--ido-color-primary);
+    border-color: var(--ido-color-primary);
+    background-color: transparent;
+}
+
+/* 强制覆盖 User 气泡的背景色 */
+.ido-message--user .ido-message__bubble.message-editing-new {
+    background-color: transparent !important;
+    color: inherit !important;
+    border-bottom-right-radius: 0 !important; /* 移除圆角 */
+}
+
+/* 确保输入框容器占满 */
+.message-edit-container-new {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+@media (max-width: 768px) {
+    .message-edit-input-wrapper {
+        padding: var(--ido-spacing-sm);
+    }
+    
+    .message-edit-attachment-item {
+        max-width: 100%;
+    }
+
+    /* 移动端下改为单列堆叠，避免附件和按钮在一行过于拥挤 */
+    .message-edit-container-new {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .message-edit-attachments {
+        grid-column: 1 / -1;
+    }
+    .message-edit-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-end;
+    }
+}
+
+/* 动画效果 */
+@keyframes editSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message-edit-container-new {
+    animation: editSlideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 尊重用户的减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+    .message-edit-container-new {
+        animation: none;
+    }
+    
+    .message-edit-icon-btn:hover,
+    .message-edit-icon-btn--send:hover,
+    .attachment-remove-btn:hover {
+        transform: none;
+    }
+}
+
+/* ========================================
+   Legacy Message Edit Styles (保留兼容)
+   ======================================== */
+
+.message-edit-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ido-spacing-sm);
+    width: 100%;
+    margin-top: var(--ido-spacing-sm);
+}
+
+.message-edit-textarea {
+    width: 100%;
+    min-height: 80px;
+    max-height: 400px;
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    font-size: 0.875rem;
+    font-family: inherit;
+    line-height: 1.5;
+    color: var(--ido-color-text-primary);
+    background-color: var(--ido-color-bg-primary);
+    border: 2px solid var(--ido-color-primary);
+    border-radius: var(--ido-radius-md);
+    resize: vertical;
+    transition: all var(--ido-transition-base);
+    box-sizing: border-box;
+}
+
+.ido-message__bubble.message-editing {
+    width: 100% !important;
+    max-width: none !important;
+}
+
+.ido-message:has(.message-editing) > div {
+    max-width:100% !important;
+}
+
+.message-edit-textarea:focus {
+    outline: none;
+    border-color: var(--ido-color-primary-hover);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.message-edit-buttons {
+    display: flex;
+    gap: var(--ido-spacing-sm);
+    justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+    .message-edit-buttons {
+        flex-direction: column;
+    }
+    
+    .message-edit-buttons .ido-btn {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
+/* ========================================
+   消息统计信息栏 (Stats Bar)
+   ======================================== */
+
+.ido-message__stats {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    margin-top: 0.5rem;
+    font-size: 0.6875rem;
+    color: var(--ido-color-text-tertiary);
+    background: var(--stats-bg);
+    border-radius: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.ido-stats__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.1875rem;
+    white-space: nowrap;
+}
+
+.ido-stats__item .material-symbols-outlined {
+    font-size: 0.8125rem;
+    opacity: 0.65;
+}
+
+.ido-stats__divider {
+    color: var(--ido-color-border);
+    margin: 0 0.125rem;
+    opacity: 0.5;
+}
+
+/* 悬停时高亮 */
+.ido-message:hover .ido-message__stats {
+    background: var(--stats-bg-hover);
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .ido-message__stats {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.625rem;
+        gap: 0.25rem;
+    }
+    
+    .ido-stats__item .material-symbols-outlined {
+        font-size: 0.75rem;
+    }
+}

@@ -1,0 +1,288 @@
+/**
+ * lightbox.css - 图片附件与灯箱查看器
+ * 包含：消息附件缩略图、Lightbox 弹窗、导航按钮、移动端适配
+ */
+
+/* ========================================
+   Message Image Attachments - Thumbnail
+   ======================================== */
+
+/* 附件图片容器 */
+.ido-message__attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ido-spacing-sm);
+    margin-bottom: var(--ido-spacing-sm);
+}
+
+/* 图片包装器 - 缩略图尺寸限制 */
+.ido-message__attachment-wrapper {
+    position: relative;
+    max-width: 120px;
+    max-height: 120px;
+    border-radius: var(--ido-radius-lg);
+    overflow: hidden;
+    border: 1px solid var(--ido-color-border);
+    background-color: var(--ido-color-bg-secondary);
+    cursor: pointer;
+    transition: all var(--ido-transition-base);
+}
+
+.ido-message__attachment-wrapper:hover {
+    border-color: var(--ido-color-primary);
+    box-shadow: var(--ido-shadow-md);
+    transform: scale(1.02);
+}
+
+/* 缩略图 */
+.ido-message__attachment-wrapper img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: 120px;
+    max-height: 120px;
+    object-fit: cover;
+}
+
+/* 多图网格布局 - 2列 */
+.ido-message__attachments--grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 120px));
+    gap: var(--ido-spacing-sm);
+}
+
+/* 单图时不使用网格 */
+.ido-message__attachments--single {
+    display: flex;
+}
+
+.ido-message__attachments--single .ido-message__attachment-wrapper {
+    max-width: 200px;
+    max-height: 200px;
+}
+
+.ido-message__attachments--single .ido-message__attachment-wrapper img {
+    max-width: 200px;
+    max-height: 200px;
+}
+
+/* 图片放大图标覆盖层 */
+.ido-message__attachment-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0);
+    transition: background-color var(--ido-transition-base);
+    pointer-events: none;
+}
+
+.ido-message__attachment-wrapper:hover .ido-message__attachment-overlay {
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+.ido-message__attachment-overlay .material-symbols-outlined {
+    color: white;
+    font-size: 2rem;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all var(--ido-transition-base);
+}
+
+.ido-message__attachment-wrapper:hover .ido-message__attachment-overlay .material-symbols-outlined {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* ========================================
+   Lightbox 样式
+   ======================================== */
+
+.ido-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.9);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--ido-transition-base), visibility var(--ido-transition-base);
+}
+
+.ido-lightbox--visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.ido-lightbox__content {
+    position: relative;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ido-lightbox__image {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: var(--ido-radius-lg);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    transform: scale(0.9);
+    transition: transform var(--ido-transition-base);
+}
+
+.ido-lightbox--visible .ido-lightbox__image {
+    transform: scale(1);
+}
+
+/* ========================================
+   Lightbox 关闭按钮
+   ======================================== */
+
+.ido-lightbox__close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: var(--ido-radius-full);
+    color: white;
+    cursor: pointer;
+    transition: background-color var(--ido-transition-base);
+    z-index: 10000;
+}
+
+.ido-lightbox__close:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.ido-lightbox__close .material-symbols-outlined {
+    font-size: 1.5rem;
+}
+
+/* ========================================
+   Lightbox 导航按钮
+   ======================================== */
+
+.ido-lightbox__nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3rem;
+    height: 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: var(--ido-radius-full);
+    color: white;
+    cursor: pointer;
+    transition: background-color var(--ido-transition-base);
+    z-index: 10000;
+}
+
+.ido-lightbox__nav:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.ido-lightbox__nav--prev {
+    left: 1rem;
+}
+
+.ido-lightbox__nav--next {
+    right: 1rem;
+}
+
+.ido-lightbox__nav .material-symbols-outlined {
+    font-size: 1.75rem;
+}
+
+/* ========================================
+   图片计数器
+   ======================================== */
+
+.ido-lightbox__counter {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.5rem 1rem;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: var(--ido-radius-full);
+    color: white;
+    font-size: 0.875rem;
+    z-index: 10000;
+}
+
+/* ========================================
+   移动端适配
+   ======================================== */
+
+@media (max-width: 768px) {
+    .ido-message__attachment-wrapper {
+        max-width: 100px;
+        max-height: 100px;
+    }
+    
+    .ido-message__attachment-wrapper img {
+        max-width: 100px;
+        max-height: 100px;
+    }
+    
+    .ido-message__attachments--single .ido-message__attachment-wrapper {
+        max-width: 160px;
+        max-height: 160px;
+    }
+    
+    .ido-message__attachments--single .ido-message__attachment-wrapper img {
+        max-width: 160px;
+        max-height: 160px;
+    }
+    
+    .ido-message__attachments--grid {
+        grid-template-columns: repeat(2, minmax(0, 100px));
+    }
+    
+    .ido-lightbox__nav {
+        width: 2.5rem;
+        height: 2.5rem;
+    }
+    
+    .ido-lightbox__nav--prev {
+        left: 0.5rem;
+    }
+    
+    .ido-lightbox__nav--next {
+        right: 0.5rem;
+    }
+}
+
+/* ========================================
+   尊重用户的减少动画偏好
+   ======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    .ido-message__attachment-wrapper:hover {
+        transform: none;
+    }
+    
+    .ido-lightbox,
+    .ido-lightbox__image {
+        transition: none;
+    }
+    
+    .ido-lightbox--visible .ido-lightbox__image {
+        transform: scale(1);
+    }
+}

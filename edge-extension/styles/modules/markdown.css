@@ -1,0 +1,397 @@
+/**
+ * markdown.css - Markdown 渲染样式
+ * 包含：标题、段落、列表、代码块、表格、引用、KaTeX等
+ */
+
+/* ========================================
+   Reasoning / Chain of Thought Styles
+   ======================================== */
+
+.reasoning-block {
+    margin-bottom: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.reasoning-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    color: #64748b; /* slate-500 */
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+    background-color: #f1f5f9; /* slate-100 */
+    border-radius: 0.375rem;
+    transition: background-color 0.2s;
+    user-select: none;
+}
+
+.reasoning-toggle:hover {
+    background-color: #e2e8f0; /* slate-200 */
+    color: #475569; /* slate-600 */
+}
+
+.reasoning-content {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    background-color: #f8fafc; /* slate-50 */
+    border: 1px solid #e2e8f0; /* slate-200 */
+    border-radius: 0.5rem;
+    color: #475569; /* slate-600 */
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    white-space: pre-wrap;
+    display: none; /* Hidden by default, toggled by JS */
+}
+
+.reasoning-content.open {
+    display: block;
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ========================================
+   Markdown Base Styles
+   ======================================== */
+
+.markdown-body {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: inherit;
+}
+
+.markdown-body > *:first-child {
+    margin-top: 0 !important;
+}
+
+.markdown-body > *:last-child {
+    margin-bottom: 0 !important;
+}
+
+/* ========================================
+   Headings
+   ======================================== */
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3, 
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+    font-weight: 600;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.25;
+}
+
+.markdown-body h1 { font-size: 1.5em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.3em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+.markdown-body h3 { font-size: 1.15em; }
+.markdown-body h4 { font-size: 1em; }
+.markdown-body h5 { font-size: 0.9em; }
+.markdown-body h6 { font-size: 0.85em; color: #6b7280; }
+
+/* ========================================
+   Paragraphs
+   ======================================== */
+
+.markdown-body p {
+    margin-top: 0;
+    margin-bottom: 0.75em;
+}
+
+.markdown-body p:last-child {
+    margin-bottom: 0;
+}
+
+/* ========================================
+   Lists
+   ======================================== */
+
+.markdown-body ul, .markdown-body ol {
+    margin-top: 0;
+    margin-bottom: 0.75em;
+    padding-left: 2em;
+}
+
+.markdown-body li {
+    margin-bottom: 0.25em;
+}
+
+.markdown-body li > p {
+    margin-bottom: 0.5em;
+}
+
+/* ========================================
+   Inline Code
+   ======================================== */
+
+.markdown-body code {
+    background-color: rgba(175, 184, 193, 0.2);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85em;
+}
+
+/* ========================================
+   Code Blocks with Toolbar
+   ======================================== */
+
+.code-block-wrapper {
+    position: relative;
+    margin: 1rem 0;
+    border-radius: var(--ido-radius-lg);
+    overflow: hidden;
+    background-color: var(--code-bg);
+    border: 1px solid var(--code-border);
+}
+
+.code-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 12px;
+    background-color: var(--code-header-bg);
+    color: var(--code-text-muted);
+    font-size: 11px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    border-bottom: 1px solid var(--code-border);
+    cursor: pointer;
+    user-select: none;
+    transition: background-color var(--ido-transition-fast);
+}
+
+.code-block-header:hover {
+    background-color: var(--code-copy-hover-bg);
+}
+
+.code-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.code-collapse-icon {
+    font-size: 16px;
+    transition: transform var(--ido-transition-fast);
+}
+
+.code-block-wrapper.collapsed .code-collapse-icon {
+    transform: rotate(-90deg);
+}
+
+.code-lang {
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--code-lang-color);
+}
+
+.code-copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    color: var(--code-text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--ido-radius-sm);
+    font-size: 11px;
+    font-family: inherit;
+    transition: all var(--ido-transition-fast);
+}
+
+.code-copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--code-text);
+}
+
+.code-copy-btn .material-symbols-outlined {
+    font-size: 14px;
+}
+
+/* 折叠状态 */
+.code-block-wrapper.collapsed pre {
+    display: none;
+}
+
+.code-block-wrapper.collapsed {
+    border-bottom: none;
+}
+
+.code-block-wrapper.collapsed .code-block-header {
+    border-bottom: none;
+}
+
+.markdown-body pre {
+    background-color: var(--code-bg);
+    border-radius: 0;
+    padding: 12px 16px;
+    overflow-x: auto;
+    margin: 0;
+    /* 移动端：隔离触摸事件，阻止水平滑动时触发父容器手势 */
+    touch-action: pan-x pinch-zoom;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* 独立的 pre（没有被 wrapper 包裹时） */
+.markdown-body > pre {
+    border-radius: var(--ido-radius-lg);
+    margin-top: 0;
+    margin-bottom: 0.75em;
+    border: 1px solid var(--code-border);
+}
+
+.markdown-body pre code {
+    background-color: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--code-text);
+    font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+}
+
+/* ========================================
+   KaTeX / LaTeX Styles
+   ======================================== */
+
+.katex-display {
+    margin: 0.1em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 0;
+    text-align: center;
+}
+
+.katex {
+    font-size: 1.1em;
+}
+
+.katex-display > .katex {
+    font-size: 1.2em;
+}
+
+/* ========================================
+   Blockquotes
+   ======================================== */
+
+.markdown-body blockquote {
+    margin: 0 0 0.75em 0;
+    padding: 0 1em;
+    color: #6b7280;
+    border-left: 0.25em solid #d1d5db;
+}
+
+.markdown-body blockquote > :first-child {
+    margin-top: 0;
+}
+
+.markdown-body blockquote > :last-child {
+    margin-bottom: 0;
+}
+
+/* ========================================
+   Links
+   ======================================== */
+
+.markdown-body a {
+    color: #3b82f6;
+    text-decoration: none;
+}
+
+.markdown-body a:hover {
+    text-decoration: underline;
+}
+
+/* ========================================
+   Horizontal Rule
+   ======================================== */
+
+.markdown-body hr {
+    height: 0.25em;
+    padding: 0;
+    margin: 1.5em 0;
+    background-color: #e5e7eb;
+    border: 0;
+}
+
+/* ========================================
+   Tables
+   ======================================== */
+
+.markdown-body table {
+    border-collapse: collapse;
+    border-spacing: 0;
+    margin-top: 0;
+    margin-bottom: 0.75em;
+    width: 100%;
+}
+
+.markdown-body table th,
+.markdown-body table td {
+    padding: 6px 13px;
+    border: 1px solid #d1d5db;
+}
+
+.markdown-body table th {
+    font-weight: 600;
+    background-color: #f9fafb;
+}
+
+.markdown-body table tr {
+    background-color: #fff;
+    border-top: 1px solid #d1d5db;
+}
+
+.markdown-body table tr:nth-child(2n) {
+    background-color: #f9fafb;
+}
+
+/* ========================================
+   Images
+   ======================================== */
+
+.markdown-body img {
+    max-width: 100%;
+    box-sizing: content-box;
+    background-color: #fff;
+}
+
+/* ========================================
+   Task Lists
+   ======================================== */
+
+.markdown-body input[type="checkbox"] {
+    margin-right: 0.5em;
+}
+
+/* ========================================
+   Strong and Emphasis
+   ======================================== */
+
+.markdown-body strong {
+    font-weight: 600;
+}
+
+.markdown-body em {
+    font-style: italic;
+}
+
+/* ========================================
+   Strikethrough
+   ======================================== */
+
+.markdown-body del {
+    text-decoration: line-through;
+}
+
+/* ========================================
+   Reasoning content also gets markdown styling
+   ======================================== */
+
+.reasoning-content.markdown-body {
+    font-size: 0.875rem;
+}

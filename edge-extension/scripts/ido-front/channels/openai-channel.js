@@ -310,11 +310,9 @@
                 } else if (isGeminiLevelModel(model)) {
                     // Level 模式 (Gemini 3 系列)：使用 thinking_level
                     const level = thinkingCfg.level;
-                    if (level !== 'none') {
-                        thinkingConfig.thinking_level = level;
-                        // 启用思考摘要（仅当非 none 时）
-                        thinkingConfig.include_thoughts = true;
-                    }
+                    thinkingConfig.thinking_level = level;
+                    // 始终启用思考摘要（思维链）
+                    thinkingConfig.include_thoughts = true;
                 }
                 
                 // 如果有配置，添加到 extra_body.google
@@ -367,6 +365,7 @@
                     let fullContent = '';
                     let fullReasoning = '';
                     let buffer = '';
+                    let streamUsage = null; // 流式响应中的 usage 信息
 
                     try {
                         while (true) {
@@ -384,6 +383,12 @@
                                     try {
                                         const json = JSON.parse(trimmed.substring(6));
                                         const delta = json.choices?.[0]?.delta;
+                                        
+                                        // 提取流式响应中的 usage 信息（通常在最后一个 chunk 中）
+                                        if (json.usage) {
+                                            streamUsage = json.usage;
+                                        }
+                                        
                                         if (delta) {
                                             let updated = false;
                                             if (delta.content) {
@@ -416,6 +421,12 @@
                                 try {
                                     const json = JSON.parse(trimmed.substring(6));
                                     const delta = json.choices?.[0]?.delta;
+                                    
+                                    // 提取 usage 信息
+                                    if (json.usage) {
+                                        streamUsage = json.usage;
+                                    }
+                                    
                                     if (delta) {
                                         let updated = false;
                                         if (delta.content) {
@@ -444,7 +455,7 @@
                         throw streamError;
                     }
 
-                    return {
+                    const result = {
                         choices: [{
                             message: {
                                 role: 'assistant',
@@ -452,6 +463,13 @@
                             }
                         }]
                     };
+                    
+                    // 添加 usage 信息到响应
+                    if (streamUsage) {
+                        result.usage = streamUsage;
+                    }
+                    
+                    return result;
                 } else {
                     // Fallback for non-streaming or non-SSE responses (even if streaming was requested)
                     const data = await response.json();
@@ -470,6 +488,7 @@
                         });
                     }
                     
+                    // 非流式响应通常已包含 usage，直接返回
                     return data;
                 }
             } catch (error) {
