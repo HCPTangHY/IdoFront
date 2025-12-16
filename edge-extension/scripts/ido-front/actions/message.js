@@ -136,7 +136,8 @@
         contentSpan.style.display = 'none';
         
         // 移除原始附件预览（含大图/灯箱），编辑态由新的附件列表接管
-        const originalAttachmentBlocks = Array.from(container.querySelectorAll('.flex.gap-2.flex-wrap.mb-2'));
+        // 匹配新版附件容器类名 .ido-message__attachments
+        const originalAttachmentBlocks = Array.from(container.querySelectorAll('.ido-message__attachments, .flex.gap-2.flex-wrap.mb-2'));
         originalAttachmentBlocks.forEach(block => block.remove());
 
         // 创建 textarea
@@ -283,23 +284,22 @@
             }
             
             store.updateMessage(conv.id, messageId, updateData);
-            store.truncateFromMessage(conv.id, messageId);
 
-            // 同步UI
-            if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
-                window.IdoFront.conversationActions.syncUI();
-            }
-
-            // 重新生成
+            // 用户消息：截断后续消息并重新发送生成响应
+            // AI 消息：只保存修改，不截断，不重新生成
             if (targetMsg.role === 'user') {
+                store.truncateFromMessage(conv.id, messageId);
+                
+                // 同步UI
+                if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
+                    window.IdoFront.conversationActions.syncUI();
+                }
+                
                 await window.IdoFront.messageActions.send(newContent, editingAttachments.length > 0 ? editingAttachments : null);
             } else {
-                const msgIndex = conv.messages.findIndex(m => m.id === messageId);
-                if (msgIndex > 0) {
-                    const prevMsg = conv.messages[msgIndex - 1];
-                    if (prevMsg && prevMsg.role === 'user') {
-                        await generateResponse(conv, prevMsg.id);
-                    }
+                // AI 消息只需同步 UI 显示更新后的内容
+                if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
+                    window.IdoFront.conversationActions.syncUI();
                 }
             }
         };
@@ -326,7 +326,8 @@
             const confirmBtn = document.createElement('button');
             confirmBtn.className = 'material-symbols-outlined text-[14px]';
             confirmBtn.textContent = 'done_all';
-            confirmBtn.title = '确认并重新生成';
+            // 用户消息会重新生成，AI 消息只保存
+            confirmBtn.title = targetMsg.role === 'user' ? '确认并重新生成' : '确认保存';
             confirmBtn.style.color = '#10b981'; // 绿色
             confirmBtn.onclick = saveEdit;
             actions.appendChild(confirmBtn);

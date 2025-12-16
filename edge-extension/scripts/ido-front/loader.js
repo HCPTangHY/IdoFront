@@ -106,10 +106,37 @@
     }
     
     /**
+     * 等待 Framework 加载完成
+     */
+    function waitForFramework() {
+        return new Promise((resolve) => {
+            // 如果 Framework 已经存在，直接 resolve
+            if (typeof Framework !== 'undefined' && Framework) {
+                resolve();
+                return;
+            }
+            
+            // 如果有 FrameworkReady Promise，等待它
+            if (window.FrameworkReady && typeof window.FrameworkReady.then === 'function') {
+                window.FrameworkReady.then(resolve);
+                return;
+            }
+            
+            // 否则监听 FrameworkLoaded 事件
+            document.addEventListener('FrameworkLoaded', () => resolve(), { once: true });
+        });
+    }
+
+    /**
      * 主加载流程
      */
     async function startLoading() {
         try {
+            // 0. 等待 Framework 加载完成
+            console.log('IdoFront: 等待 Framework...');
+            await waitForFramework();
+            console.log('IdoFront: Framework 已就绪');
+            
             // 1. 先加载库文件
             console.log('IdoFront: 加载依赖库...');
             await loadScriptsSequentially(libScripts, LIB_PATH);
