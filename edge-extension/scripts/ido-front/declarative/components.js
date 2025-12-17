@@ -71,14 +71,14 @@ const DeclarativeComponents = (function() {
             case 'checkbox':
                 const toggleWrapper = document.createElement('label');
                 toggleWrapper.className = 'ido-form-switch';
-                input = document.createElement('input');
-                input.type = 'checkbox';
-                input.className = 'ido-form-switch__input';
-                input.checked = !!value;
+                const checkboxInput = document.createElement('input');
+                checkboxInput.type = 'checkbox';
+                checkboxInput.className = 'ido-form-switch__input';
+                checkboxInput.checked = !!value;
                 const slider = document.createElement('div');
                 slider.className = 'ido-form-switch__slider';
-                input.addEventListener('change', () => onChange(input.checked));
-                toggleWrapper.appendChild(input);
+                checkboxInput.addEventListener('change', () => onChange(checkboxInput.checked));
+                toggleWrapper.appendChild(checkboxInput);
                 toggleWrapper.appendChild(slider);
                 wrapper.appendChild(toggleWrapper);
                 input = null;

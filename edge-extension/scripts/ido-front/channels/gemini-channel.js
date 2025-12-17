@@ -31,10 +31,10 @@
     const BUDGET_PRESETS = [
         { value: -1, label: '自动', description: '动态思考，模型自行决定' },
         { value: 0, label: '关闭', description: '关闭思考功能' },
-        { value: 1024, label: '低', description: '1024 tokens' },
-        { value: 8192, label: '中', description: '8192 tokens' },
-        { value: 24576, label: '高', description: '24576 tokens' },
-        { value: 32768, label: '最高', description: '32768 tokens' }
+        { value: 1024, label: '最小', description: '1024 tokens' },
+        { value: 4096, label: '低', description: '4096 tokens' },
+        { value: 16384, label: '中', description: '16384 tokens' },
+        { value: 32768, label: '高', description: '32768 tokens' }
     ];
 
     // thinkingLevel 选项（用于等级模式）- 四档：minimal/low/medium/high
@@ -197,6 +197,37 @@
         }
     }
 
+    /**
+     * 获取会话的 Gemini 代码执行配置
+     * @param {Object} conv - 会话对象
+     * @returns {boolean} 是否启用代码执行
+     */
+    function getCodeExecutionConfig(conv) {
+        if (!conv) return false;
+        const geminiMeta = conv.metadata?.gemini || {};
+        return !!geminiMeta.codeExecution;
+    }
+
+    /**
+     * 设置会话的 Gemini 代码执行开关
+     * @param {Object} store - Store 实例
+     * @param {string} convId - 会话 ID
+     * @param {boolean} enabled - 是否启用
+     */
+    function setCodeExecution(store, convId, enabled) {
+        if (!store || !convId) return;
+        const conv = store.state.conversations.find(c => c.id === convId);
+        if (!conv) return;
+        
+        if (!conv.metadata) conv.metadata = {};
+        if (!conv.metadata.gemini) conv.metadata.gemini = {};
+        conv.metadata.gemini.codeExecution = enabled;
+        
+        if (typeof store.persist === 'function') {
+            store.persist();
+        }
+    }
+
      // Helper: Convert Gemini parts to displayable content, reasoning, attachments and thoughtSignature
     function partsToContent(parts) {
         if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null, thoughtSignature: null };
@@ -216,8 +247,34 @@
                     content += part.text;
                 }
             }
-            if (part.inlineData) {
-                const { mimeType, data } = part.inlineData;
+            // Handle executable code from code execution tool
+            // Support both camelCase (JS SDK) and snake_case (REST API) formats
+            const executableCode = part.executableCode || part.executable_code;
+            if (executableCode) {
+                const lang = (executableCode.language || 'PYTHON').toLowerCase();
+                const code = executableCode.code || '';
+                content += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+            }
+            // Handle code execution result
+            // Support both camelCase (JS SDK) and snake_case (REST API) formats
+            const codeExecutionResult = part.codeExecutionResult || part.code_execution_result;
+            if (codeExecutionResult) {
+                const outcome = codeExecutionResult.outcome || '';
+                const output = codeExecutionResult.output || '';
+                if (outcome === 'OUTCOME_OK' || outcome === '' || outcome === 'OUTCOME_UNSPECIFIED') {
+                    if (output && output.trim()) {
+                        content += `\n**执行结果:**\n\`\`\`\n${output}\n\`\`\`\n`;
+                    }
+                } else {
+                    content += `\n**执行错误 (${outcome}):**\n\`\`\`\n${output}\n\`\`\`\n`;
+                }
+            }
+            // Handle inline data (images from code execution or other sources)
+            // Support both camelCase (JS SDK) and snake_case (REST API) formats
+            const inlineData = part.inlineData || part.inline_data;
+            if (inlineData) {
+                const mimeType = inlineData.mimeType || inlineData.mime_type;
+                const data = inlineData.data;
                 
                 // 将 Gemini 的 inlineData 转为浏览器可直接使用的 data URL，交给 DOM <img> 渲染，
                 // 避免把超长 Base64 串拼进 Markdown 再交给 marked 解析，降低性能开销。
@@ -232,18 +289,23 @@
                         approximateSize = undefined;
                     }
                     
+                    // 判断是否为代码执行生成的图表
+                    const isCodeExecOutput = mimeType.startsWith('image/');
+                    
                     attachments.push({
                         dataUrl: dataUrl,
                         type: mimeType,
-                        name: `Gemini Image ${imageIndex++}`,
+                        name: isCodeExecOutput ? `图表 ${imageIndex++}` : `Gemini Image ${imageIndex++}`,
                         size: approximateSize,
-                        source: 'gemini'
+                        source: 'gemini-code-execution'
                     });
                 }
             }
             // 提取 thoughtSignature（per-part 级别，但对于简单文本对话通常只有一个）
-            if (part.thoughtSignature) {
-                thoughtSignature = part.thoughtSignature;
+            // Support both camelCase and snake_case
+            const partThoughtSignature = part.thoughtSignature || part.thought_signature;
+            if (partThoughtSignature) {
+                thoughtSignature = partThoughtSignature;
             }
         }
         
@@ -467,6 +529,11 @@
             
             if (Object.keys(generationConfig).length > 0) {
                 body.generationConfig = generationConfig;
+            }
+
+            // Tools Config - 代码执行
+            if (geminiMeta.codeExecution) {
+                body.tools = [{ codeExecution: {} }];
             }
 
             // Apply params override - 使用深度合并，避免覆盖嵌套对象
@@ -836,216 +903,16 @@
          * 显示数值预算底部弹窗（用于匹配 budgetModelPattern 的模型）
          * 使用 Framework.showBottomSheet
          */
-        function showBudgetBottomSheet(conv, channelConfig) {
-            const store = getStore();
-            if (!store) return;
-            
-            showBottomSheet((sheetContainer) => {
-                // Header
-                const header = document.createElement('div');
-                header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
-                
-                const title = document.createElement('h3');
-                title.className = 'text-lg font-semibold text-gray-800';
-                title.textContent = '思考预算';
-                
-                const closeBtn = document.createElement('button');
-                closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
-                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
-                closeBtn.onclick = () => hideBottomSheet();
-                
-                header.appendChild(title);
-                header.appendChild(closeBtn);
-                
-                // Body
-                const body = document.createElement('div');
-                body.className = 'flex-1 overflow-y-auto px-6 py-4';
-                
-                const thinkingCfg = getThinkingConfig(conv);
-                let currentBudget = thinkingCfg.budget;
-                
-                // 说明文字
-                const description = document.createElement('div');
-                description.className = 'text-sm text-gray-600 mb-4';
-                description.textContent = '设置模型思考时使用的 token 预算。较高的预算会让模型进行更深入的思考，但响应速度会变慢。';
-                body.appendChild(description);
-
-                // 预设按钮组
-                const presetsWrapper = document.createElement('div');
-                presetsWrapper.className = 'grid grid-cols-3 gap-3 mb-6';
-
-                const presetButtons = [];
-                BUDGET_PRESETS.forEach(preset => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'px-3 py-2.5 text-sm rounded-lg border transition-all transform hover:-translate-y-0.5 duration-200';
-                    
-                    const labelDiv = document.createElement('div');
-                    labelDiv.className = 'font-medium';
-                    labelDiv.textContent = preset.label;
-                    
-                    const descDiv = document.createElement('div');
-                    descDiv.className = 'text-[10px] mt-0.5 opacity-70';
-                    descDiv.textContent = preset.description;
-                    
-                    btn.appendChild(labelDiv);
-                    btn.appendChild(descDiv);
-                    
-                    const updateBtnStyle = () => {
-                        presetButtons.forEach(b => {
-                            b.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                            b.classList.add('bg-white', 'text-gray-700', 'border-gray-200', 'hover:border-blue-400', 'hover:shadow-sm');
-                        });
-                        if (currentBudget === preset.value) {
-                            btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200', 'hover:border-blue-400', 'hover:shadow-sm');
-                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                        }
-                    };
-                    
-                    btn.onclick = () => {
-                        currentBudget = preset.value;
-                        setThinkingBudget(store, conv.id, currentBudget);
-                        updateBtnStyle();
-                        updateSlider();
-                        updateCustomInput();
-                        updateThinkingControls(); // 更新工具栏按钮
-                    };
-                    
-                    presetButtons.push(btn);
-                    presetsWrapper.appendChild(btn);
-                });
-                body.appendChild(presetsWrapper);
-
-                // 滑槽调节区域
-                const sliderSection = document.createElement('div');
-                sliderSection.className = 'mb-6';
-                
-                const sliderTitle = document.createElement('div');
-                sliderTitle.className = 'text-sm font-medium text-gray-700 mb-2';
-                sliderTitle.textContent = '自定义数值';
-                sliderSection.appendChild(sliderTitle);
-
-                const sliderWrapper = document.createElement('div');
-                sliderWrapper.className = 'space-y-2';
-
-                const sliderLabel = document.createElement('div');
-                sliderLabel.className = 'flex justify-between text-xs text-gray-500';
-                sliderLabel.innerHTML = '<span>128</span><span>32768</span>';
-                sliderWrapper.appendChild(sliderLabel);
-
-                const slider = document.createElement('input');
-                slider.type = 'range';
-                slider.min = '128';
-                slider.max = '32768';
-                slider.step = '128';
-                slider.className = 'w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600';
-                
-                const updateSlider = () => {
-                    if (currentBudget <= 0) {
-                        slider.value = '128';
-                        slider.disabled = true;
-                        slider.classList.add('opacity-50');
-                    } else {
-                        slider.value = String(Math.max(128, Math.min(32768, currentBudget)));
-                        slider.disabled = false;
-                        slider.classList.remove('opacity-50');
-                    }
-                };
-
-                // oninput: 只更新 UI，不保存到 store（避免卡顿）
-                slider.oninput = () => {
-                    currentBudget = parseInt(slider.value, 10);
-                    updateCustomInput();
-                    // 更新预设按钮高亮
-                    presetButtons.forEach((btn, idx) => {
-                        const preset = BUDGET_PRESETS[idx];
-                        btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                        btn.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
-                        if (currentBudget === preset.value) {
-                            btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
-                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                        }
-                    });
-                };
-                
-                // onchange: 拖动结束时才保存到 store
-                slider.onchange = () => {
-                    currentBudget = parseInt(slider.value, 10);
-                    setThinkingBudget(store, conv.id, currentBudget);
-                    updateThinkingControls(); // 更新工具栏按钮
-                };
-
-                sliderWrapper.appendChild(slider);
-                sliderSection.appendChild(sliderWrapper);
-                body.appendChild(sliderSection);
-
-                // 自定义输入
-                const customSection = document.createElement('div');
-                customSection.className = 'flex items-center gap-3';
-
-                const customLabel = document.createElement('span');
-                customLabel.className = 'text-sm text-gray-600';
-                customLabel.textContent = '精确值:';
-
-                const customInput = document.createElement('input');
-                customInput.type = 'number';
-                customInput.min = '-1';
-                customInput.max = '32768';
-                customInput.className = 'flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500';
-                customInput.placeholder = '-1 表示自动';
-                
-                const updateCustomInput = () => {
-                    customInput.value = currentBudget === -1 ? '' : String(currentBudget);
-                };
-
-                customInput.onchange = () => {
-                    const val = parseInt(customInput.value, 10);
-                    if (isNaN(val) || customInput.value === '') {
-                        currentBudget = -1;
-                    } else {
-                        currentBudget = Math.max(-1, Math.min(32768, val));
-                    }
-                    setThinkingBudget(store, conv.id, currentBudget);
-                    updateSlider();
-                    // 更新预设按钮
-                    presetButtons.forEach((btn, idx) => {
-                        const preset = BUDGET_PRESETS[idx];
-                        btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                        btn.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
-                        if (currentBudget === preset.value) {
-                            btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
-                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                        }
-                    });
-                    updateThinkingControls(); // 更新工具栏按钮
-                };
-
-                customSection.appendChild(customLabel);
-                customSection.appendChild(customInput);
-                body.appendChild(customSection);
-
-                // 初始化状态
-                updateSlider();
-                updateCustomInput();
-                presetButtons.forEach((btn, idx) => {
-                    const preset = BUDGET_PRESETS[idx];
-                    if (currentBudget === preset.value) {
-                        btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
-                        btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                    }
-                });
-                
-                sheetContainer.appendChild(header);
-                sheetContainer.appendChild(body);
-            });
-        }
-
         /**
-         * 显示等级选择底部弹窗 (Gemini 3)
+         * 显示统一的思考设置底部弹窗
+         * 自动适配 Budget 模式 (Gemini 2.5) 和 Level 模式 (Gemini 3)
          */
-        function showLevelBottomSheet(conv, channelConfig) {
+        function showThinkingBottomSheet(conv, channelConfig) {
             const store = getStore();
             if (!store) return;
+            
+            const model = conv.selectedModel;
+            const isBudgetMode = useBudgetMode(model, channelConfig);
             
             showBottomSheet((sheetContainer) => {
                 // Header
@@ -1054,7 +921,7 @@
                 
                 const title = document.createElement('h3');
                 title.className = 'text-lg font-semibold text-gray-800';
-                title.textContent = '思考等级';
+                title.textContent = isBudgetMode ? '思考预算设置' : '思考等级设置';
                 
                 const closeBtn = document.createElement('button');
                 closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
@@ -1064,69 +931,159 @@
                 header.appendChild(title);
                 header.appendChild(closeBtn);
                 
-                // Body
+                // Body (可滚动区域)
                 const body = document.createElement('div');
-                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-3';
+                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-4';
+                
+                // Footer (固定在底部)
+                const footer = document.createElement('div');
+                footer.className = 'px-6 py-4 border-t border-gray-100 bg-gray-50 flex-shrink-0 hidden';
                 
                 const thinkingCfg = getThinkingConfig(conv);
-                const currentLevel = thinkingCfg.level;
 
-                LEVEL_OPTIONS.forEach(opt => {
-                    const item = document.createElement('div');
-                    const isActive = opt.value === currentLevel;
+                if (isBudgetMode) {
+                    // ========== Budget 模式 UI ==========
+                    let currentBudget = thinkingCfg.budget;
+                    footer.classList.remove('hidden');
                     
-                    item.className = `p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 ${
-                        isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
-                    }`;
-                    
-                    // 左侧能量条视觉
-                    const visual = document.createElement('div');
-                    visual.className = 'flex gap-0.5 items-end h-6 w-8';
-                    for(let i=1; i<=4; i++) {
-                        const bar = document.createElement('div');
-                        bar.className = 'w-1.5 rounded-t-sm transition-all';
-                        bar.style.height = `${(i/4)*100}%`;
-                        bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
-                        visual.appendChild(bar);
-                    }
-                    
-                    const info = document.createElement('div');
-                    info.className = 'flex-1';
-                    
-                    const label = document.createElement('div');
-                    label.className = `font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
-                    label.textContent = opt.label;
-                    
-                    const desc = document.createElement('div');
-                    desc.className = 'text-xs text-gray-500 mt-0.5';
-                    desc.textContent = opt.description;
-                    
-                    info.appendChild(label);
-                    info.appendChild(desc);
-                    
-                    if (isActive) {
-                        const check = document.createElement('span');
-                        check.className = 'material-symbols-outlined text-blue-500';
-                        check.textContent = 'check_circle';
+                    // 1. 预设列表（采用卡片样式）
+                    const budgetOptions = [
+                        { value: 0, label: '关闭', description: '关闭思考功能', bars: 0, icon: 'block' },
+                        { value: 1024, label: '最小', description: '1024 tokens - 基础思考', bars: 1 },
+                        { value: 4096, label: '低', description: '4096 tokens - 轻度思考', bars: 2 },
+                        { value: 16384, label: '中', description: '16384 tokens - 适中思考', bars: 3 },
+                        { value: 32768, label: '高', description: '32768 tokens - 深度思考', bars: 4 },
+                        { value: -1, label: '自动', description: '由模型动态决定思考深度', bars: 0, icon: 'magic_button' }
+                    ];
+
+                    budgetOptions.forEach(opt => {
+                        const item = document.createElement('div');
+                        const isActive = currentBudget === opt.value;
+                        
+                        item.className = `p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 mb-2 ${
+                            isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
+                        }`;
+                        
+                        const visual = document.createElement('div');
+                        visual.className = 'flex gap-0.5 items-end h-5 w-8 flex-shrink-0';
+                        if (opt.icon) {
+                            visual.innerHTML = `<span class="material-symbols-outlined text-gray-400 text-[20px]">${opt.icon}</span>`;
+                        } else {
+                            for(let i=1; i<=4; i++) {
+                                const bar = document.createElement('div');
+                                bar.className = 'w-1.5 rounded-t-sm transition-all';
+                                bar.style.height = `${(i/4)*100}%`;
+                                bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
+                                visual.appendChild(bar);
+                            }
+                        }
+                        
+                        const info = document.createElement('div');
+                        info.className = 'flex-1';
+                        const label = document.createElement('div');
+                        label.className = `text-sm font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
+                        label.textContent = opt.label;
+                        const desc = document.createElement('div');
+                        desc.className = 'text-[10px] text-gray-500';
+                        desc.textContent = opt.description;
+                        info.appendChild(label);
+                        info.appendChild(desc);
+                        
                         item.appendChild(visual);
                         item.appendChild(info);
-                        item.appendChild(check);
-                    } else {
-                        item.appendChild(visual);
-                        item.appendChild(info);
-                    }
+                        if (isActive) {
+                            const check = document.createElement('span');
+                            check.className = 'material-symbols-outlined text-blue-500 text-[20px]';
+                            check.textContent = 'check_circle';
+                            item.appendChild(check);
+                        }
+                        
+                        item.onclick = () => {
+                            setThinkingBudget(store, conv.id, opt.value);
+                            hideBottomSheet();
+                            updateThinkingControls();
+                        };
+                        body.appendChild(item);
+                    });
+
+                    // 2. 自定义滑块 (移至 Footer)
+                    footer.innerHTML = '<div class="text-xs font-medium text-gray-500 mb-3">自定义 Token 预算</div>';
                     
-                    item.onclick = () => {
-                        setThinkingLevel(store, conv.id, opt.value);
-                        hideBottomSheet();
+                    const slider = document.createElement('input');
+                    slider.type = 'range';
+                    slider.min = '0';
+                    slider.max = '32768';
+                    slider.step = '128';
+                    slider.value = currentBudget > 0 ? currentBudget : 16384;
+                    slider.className = 'w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600';
+                    
+                    const sliderVal = document.createElement('div');
+                    sliderVal.className = 'text-center text-blue-600 font-mono font-bold mt-2';
+                    sliderVal.textContent = currentBudget > 0 ? currentBudget : '---';
+
+                    slider.oninput = () => {
+                        sliderVal.textContent = slider.value;
+                    };
+                    slider.onchange = () => {
+                        setThinkingBudget(store, conv.id, parseInt(slider.value));
                         updateThinkingControls();
                     };
-                    
-                    body.appendChild(item);
-                });
+
+                    footer.appendChild(slider);
+                    footer.appendChild(sliderVal);
+
+                } else {
+                    // ========== Level 模式 UI ==========
+                    LEVEL_OPTIONS.forEach(opt => {
+                        const item = document.createElement('div');
+                        const isActive = opt.value === thinkingCfg.level;
+                        
+                        item.className = `p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 ${
+                            isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
+                        }`;
+                        
+                        const visual = document.createElement('div');
+                        visual.className = 'flex gap-0.5 items-end h-6 w-8 flex-shrink-0';
+                        for(let i=1; i<=4; i++) {
+                            const bar = document.createElement('div');
+                            bar.className = 'w-1.5 rounded-t-sm transition-all';
+                            bar.style.height = `${(i/4)*100}%`;
+                            bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
+                            visual.appendChild(bar);
+                        }
+                        
+                        const info = document.createElement('div');
+                        info.className = 'flex-1';
+                        const label = document.createElement('div');
+                        label.className = `font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
+                        label.textContent = opt.label;
+                        const desc = document.createElement('div');
+                        desc.className = 'text-xs text-gray-500 mt-0.5';
+                        desc.textContent = opt.description;
+                        info.appendChild(label);
+                        info.appendChild(desc);
+                        
+                        item.appendChild(visual);
+                        item.appendChild(info);
+                        if (isActive) {
+                            const check = document.createElement('span');
+                            check.className = 'material-symbols-outlined text-blue-500';
+                            check.textContent = 'check_circle';
+                            item.appendChild(check);
+                        }
+                        
+                        item.onclick = () => {
+                            setThinkingLevel(store, conv.id, opt.value);
+                            hideBottomSheet();
+                            updateThinkingControls();
+                        };
+                        body.appendChild(item);
+                    });
+                }
                 
                 sheetContainer.appendChild(header);
                 sheetContainer.appendChild(body);
+                sheetContainer.appendChild(footer);
             });
         }
 
@@ -1142,6 +1099,79 @@
          * 对于 Budget 模式：显示一个按钮，点击打开 BottomSheet
          * 对于 Level 模式：显示三个并排按钮（自动/低/高）
          */
+        /**
+         * 显示工具设置底部弹窗 (Tools)
+         */
+        function showToolsBottomSheet(conv) {
+            const store = getStore();
+            if (!store) return;
+            
+            showBottomSheet((sheetContainer) => {
+                // Header
+                const header = document.createElement('div');
+                header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+                
+                const title = document.createElement('h3');
+                title.className = 'text-lg font-semibold text-gray-800';
+                title.textContent = '工具设置';
+                
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
+                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
+                closeBtn.onclick = () => hideBottomSheet();
+                
+                header.appendChild(title);
+                header.appendChild(closeBtn);
+                
+                // Body
+                const body = document.createElement('div');
+                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-6';
+                
+                // 代码执行开关
+                const codeExecItem = document.createElement('div');
+                codeExecItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
+                
+                const info = document.createElement('div');
+                info.className = 'flex-1 pr-4';
+                const label = document.createElement('div');
+                label.className = 'font-bold text-gray-800';
+                label.textContent = '代码执行 (Code Execution)';
+                const desc = document.createElement('div');
+                desc.className = 'text-xs text-gray-500 mt-1';
+                desc.textContent = '允许模型生成并运行 Python 代码以解决复杂问题。';
+                info.appendChild(label);
+                info.appendChild(desc);
+                
+                const isEnabled = getCodeExecutionConfig(conv);
+                
+                // 使用 DeclarativeComponents 的开关样式
+                const switchLabel = document.createElement('label');
+                switchLabel.className = 'ido-form-switch';
+                const switchInput = document.createElement('input');
+                switchInput.type = 'checkbox';
+                switchInput.className = 'ido-form-switch__input';
+                switchInput.checked = isEnabled;
+                const slider = document.createElement('div');
+                slider.className = 'ido-form-switch__slider';
+                
+                switchInput.onchange = () => {
+                    setCodeExecution(store, conv.id, switchInput.checked);
+                    updateThinkingControls();
+                };
+                
+                switchLabel.appendChild(switchInput);
+                switchLabel.appendChild(slider);
+                
+                codeExecItem.appendChild(info);
+                codeExecItem.appendChild(switchLabel);
+                
+                body.appendChild(codeExecItem);
+                
+                sheetContainer.appendChild(header);
+                sheetContainer.appendChild(body);
+            });
+        }
+
         function updateThinkingControls() {
             const wrapper = getThinkingWrapper();
             if (!wrapper) {
@@ -1176,8 +1206,11 @@
                 return;
             }
             
-            // 检查模型是否支持思考功能
-            if (!supportsThinking(model, channelConfig)) {
+            // 检查模型是否支持思考功能或代码执行
+            const hasThinking = supportsThinking(model, channelConfig);
+            const hasTools = true; // Gemini 渠道通常都支持 tools
+            
+            if (!hasThinking && !hasTools) {
                 wrapper.style.display = 'none';
                 return;
             }
@@ -1186,12 +1219,39 @@
             wrapper.style.display = 'flex';
 
             const thinkingCfg = getThinkingConfig(conv);
+            const isCodeExecEnabled = getCodeExecutionConfig(conv);
             
             // 获取容器内的元素
             const budgetBtnEl = wrapper.querySelector('[data-gemini-budget-btn]');
             const levelGroupEl = wrapper.querySelector('[data-gemini-level-group]');
+            const toolsBtnEl = wrapper.querySelector('[data-gemini-tools-btn]');
+            const toolsBadgeEl = wrapper.querySelector('[data-gemini-tools-badge]');
             
-            if (useBudgetMode(model, channelConfig)) {
+            // 更新 Tools 按钮状态
+            if (toolsBtnEl) {
+                toolsBtnEl.style.display = 'inline-flex';
+                if (toolsBadgeEl) {
+                    toolsBadgeEl.style.display = isCodeExecEnabled ? 'block' : 'none';
+                }
+            }
+
+            // 更新思考控件
+            if (!hasThinking) {
+                if (budgetBtnEl) budgetBtnEl.style.display = 'none';
+                if (levelGroupEl) levelGroupEl.style.display = 'none';
+                // 隐藏分隔线
+                const divider = wrapper.querySelector('.ido-divider--vertical') || wrapper.querySelector('.bg-gray-200');
+                if (divider) divider.style.display = 'none';
+                const thinkingLabel = wrapper.querySelector('span.text-gray-400');
+                if (thinkingLabel) thinkingLabel.style.display = 'none';
+            } else {
+                // 恢复显示
+                const divider = wrapper.querySelector('.ido-divider--vertical') || wrapper.querySelector('.bg-gray-200');
+                if (divider) divider.style.display = 'block';
+                const thinkingLabel = wrapper.querySelector('span.text-gray-400');
+                if (thinkingLabel) thinkingLabel.style.display = 'block';
+
+                if (useBudgetMode(model, channelConfig)) {
                 // Budget 模式：显示单个按钮，隐藏三按钮组
                 if (budgetBtnEl) {
                     budgetBtnEl.style.display = 'inline-flex';
@@ -1213,6 +1273,7 @@
                 if (levelGroupEl) {
                     levelGroupEl.style.display = 'none';
                 }
+            }
             }
         }
 
@@ -1268,6 +1329,39 @@
             wrapper.className = 'flex items-center gap-2';
             wrapper.style.display = 'none'; // 初始隐藏，由 updateThinkingControls 控制
 
+            // ===== Tools 按钮 =====
+            const toolsBtn = document.createElement('button');
+            toolsBtn.type = 'button';
+            toolsBtn.className = 'relative px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors flex items-center gap-1';
+            toolsBtn.setAttribute('data-gemini-tools-btn', 'true');
+            
+            const toolsIcon = document.createElement('span');
+            toolsIcon.className = 'material-symbols-outlined text-[14px]';
+            toolsIcon.textContent = 'build';
+            
+            const toolsText = document.createElement('span');
+            toolsText.textContent = 'tools';
+            
+            const toolsBadge = document.createElement('div');
+            toolsBadge.className = 'absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full border border-white';
+            toolsBadge.setAttribute('data-gemini-tools-badge', 'true');
+            toolsBadge.style.display = 'none';
+            
+            toolsBtn.appendChild(toolsIcon);
+            toolsBtn.appendChild(toolsText);
+            toolsBtn.appendChild(toolsBadge);
+            
+            toolsBtn.onclick = (e) => {
+                e.stopPropagation();
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return;
+                const conv = store.getActiveConversation();
+                if (!conv) return;
+                showToolsBottomSheet(conv);
+            };
+            
+            wrapper.appendChild(toolsBtn);
+
             // 分隔线
             const divider = document.createElement('div');
             divider.className = 'h-5 w-px bg-gray-200';
@@ -1300,13 +1394,7 @@
                 if (!conv) return;
 
                 const channelConfig = getChannelConfig(store, conv);
-                const model = conv.selectedModel;
-
-                if (useBudgetMode(model, channelConfig)) {
-                    showBudgetBottomSheet(conv, channelConfig);
-                } else if (useLevelMode(model, channelConfig)) {
-                    showLevelBottomSheet(conv, channelConfig);
-                }
+                showThinkingBottomSheet(conv, channelConfig);
             };
             
             controlGroup.appendChild(budgetBtn);
@@ -1500,6 +1588,8 @@
     window.IdoFront.geminiChannel.saveGlobalThinkingRules = saveGlobalThinkingRules;
     window.IdoFront.geminiChannel.setThinkingBudget = setThinkingBudget;
     window.IdoFront.geminiChannel.setThinkingLevel = setThinkingLevel;
+    window.IdoFront.geminiChannel.getCodeExecutionConfig = getCodeExecutionConfig;
+    window.IdoFront.geminiChannel.setCodeExecution = setCodeExecution;
     window.IdoFront.geminiChannel.BUDGET_PRESETS = BUDGET_PRESETS;
     window.IdoFront.geminiChannel.LEVEL_OPTIONS = LEVEL_OPTIONS;
     window.IdoFront.geminiChannel.DEFAULT_THINKING_RULES = DEFAULT_THINKING_RULES;
