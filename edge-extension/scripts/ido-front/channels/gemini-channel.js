@@ -37,11 +37,12 @@
         { value: 32768, label: '最高', description: '32768 tokens' }
     ];
 
-    // thinkingLevel 选项（用于等级模式）- N/L/H 三档
+    // thinkingLevel 选项（用于等级模式）- 四档：minimal/low/medium/high
     const LEVEL_OPTIONS = [
-        { value: 'none', label: 'N', description: '无 (None) - 不使用思考' },
-        { value: 'low', label: 'L', description: '低 (Low) - 较少思考' },
-        { value: 'high', label: 'H', description: '高 (High) - 深度思考' }
+        { value: 'minimal', label: '最小', description: '基础响应，不进行额外思考', color: '#94a3b8', bars: 1 },
+        { value: 'low', label: '低', description: '轻度思考，平衡速度与质量', color: '#60a5fa', bars: 2 },
+        { value: 'medium', label: '中', description: '适中思考，处理复杂逻辑', color: '#3b82f6', bars: 3 },
+        { value: 'high', label: '高', description: '深度思考，追求最佳结果', color: '#2563eb', bars: 4 }
     ];
 
     /**
@@ -148,11 +149,11 @@
      * @returns {Object} 思考配置
      */
     function getThinkingConfig(conv) {
-        if (!conv) return { budget: -1, level: 'none' };
+        if (!conv) return { budget: -1, level: 'low' };
         const geminiMeta = conv.metadata?.gemini || {};
         return {
             budget: geminiMeta.thinkingBudget !== undefined ? geminiMeta.thinkingBudget : -1,
-            level: geminiMeta.thinkingLevel || 'none'
+            level: geminiMeta.thinkingLevel || 'low'
         };
     }
 
@@ -452,8 +453,8 @@
                 // 启用思考摘要
                 thinkingConfig.includeThoughts = true;
             } else if (useLevelMode(model, config)) {
-                // 等级模式：使用 thinkingLevel
-                const level = geminiMeta.thinkingLevel || 'none';
+                // 等级模式：使用 thinkingLevel（四档：minimal/low/medium/high）
+                const level = geminiMeta.thinkingLevel || 'low';
                 thinkingConfig.thinkingLevel = level;
                 // 始终启用思考摘要（思维链）
                 thinkingConfig.includeThoughts = true;
@@ -846,7 +847,7 @@
                 
                 const title = document.createElement('h3');
                 title.className = 'text-lg font-semibold text-gray-800';
-                title.textContent = '思考预算 (thinkingBudget)';
+                title.textContent = '思考预算';
                 
                 const closeBtn = document.createElement('button');
                 closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
@@ -1040,6 +1041,96 @@
         }
 
         /**
+         * 显示等级选择底部弹窗 (Gemini 3)
+         */
+        function showLevelBottomSheet(conv, channelConfig) {
+            const store = getStore();
+            if (!store) return;
+            
+            showBottomSheet((sheetContainer) => {
+                // Header
+                const header = document.createElement('div');
+                header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+                
+                const title = document.createElement('h3');
+                title.className = 'text-lg font-semibold text-gray-800';
+                title.textContent = '思考等级';
+                
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
+                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
+                closeBtn.onclick = () => hideBottomSheet();
+                
+                header.appendChild(title);
+                header.appendChild(closeBtn);
+                
+                // Body
+                const body = document.createElement('div');
+                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-3';
+                
+                const thinkingCfg = getThinkingConfig(conv);
+                const currentLevel = thinkingCfg.level;
+
+                LEVEL_OPTIONS.forEach(opt => {
+                    const item = document.createElement('div');
+                    const isActive = opt.value === currentLevel;
+                    
+                    item.className = `p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 ${
+                        isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
+                    }`;
+                    
+                    // 左侧能量条视觉
+                    const visual = document.createElement('div');
+                    visual.className = 'flex gap-0.5 items-end h-6 w-8';
+                    for(let i=1; i<=4; i++) {
+                        const bar = document.createElement('div');
+                        bar.className = 'w-1.5 rounded-t-sm transition-all';
+                        bar.style.height = `${(i/4)*100}%`;
+                        bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
+                        visual.appendChild(bar);
+                    }
+                    
+                    const info = document.createElement('div');
+                    info.className = 'flex-1';
+                    
+                    const label = document.createElement('div');
+                    label.className = `font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
+                    label.textContent = opt.label;
+                    
+                    const desc = document.createElement('div');
+                    desc.className = 'text-xs text-gray-500 mt-0.5';
+                    desc.textContent = opt.description;
+                    
+                    info.appendChild(label);
+                    info.appendChild(desc);
+                    
+                    if (isActive) {
+                        const check = document.createElement('span');
+                        check.className = 'material-symbols-outlined text-blue-500';
+                        check.textContent = 'check_circle';
+                        item.appendChild(visual);
+                        item.appendChild(info);
+                        item.appendChild(check);
+                    } else {
+                        item.appendChild(visual);
+                        item.appendChild(info);
+                    }
+                    
+                    item.onclick = () => {
+                        setThinkingLevel(store, conv.id, opt.value);
+                        hideBottomSheet();
+                        updateThinkingControls();
+                    };
+                    
+                    body.appendChild(item);
+                });
+                
+                sheetContainer.appendChild(header);
+                sheetContainer.appendChild(body);
+            });
+        }
+
+        /**
          * 获取思考控件的 wrapper 元素（每次从 DOM 中查询，避免引用失效）
          */
         function getThinkingWrapper() {
@@ -1112,26 +1203,15 @@
                     levelGroupEl.style.display = 'none';
                 }
             } else if (useLevelMode(model, channelConfig)) {
-                // Level 模式：隐藏按钮，显示三按钮组
+                // Level 模式：显示单个按钮，点击打开 BottomSheet
                 if (budgetBtnEl) {
-                    budgetBtnEl.style.display = 'none';
+                    budgetBtnEl.style.display = 'inline-flex';
+                    const level = thinkingCfg.level;
+                    const opt = LEVEL_OPTIONS.find(o => o.value === level) || LEVEL_OPTIONS[1];
+                    budgetBtnEl.textContent = opt.label;
                 }
                 if (levelGroupEl) {
-                    levelGroupEl.style.display = 'flex';
-                    
-                    // 更新按钮状态
-                    const currentLevel = thinkingCfg.level;
-                    ['none', 'low', 'high'].forEach(key => {
-                        const btn = levelState.buttons[key];
-                        if (!btn) return;
-                        btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
-                        btn.classList.remove('bg-gray-50', 'text-gray-500', 'border-gray-200');
-                        if (key === currentLevel) {
-                            btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600');
-                        } else {
-                            btn.classList.add('bg-gray-50', 'text-gray-500', 'border-gray-200');
-                        }
-                    });
+                    levelGroupEl.style.display = 'none';
                 }
             }
         }
@@ -1220,49 +1300,51 @@
                 if (!conv) return;
 
                 const channelConfig = getChannelConfig(store, conv);
-                showBudgetBottomSheet(conv, channelConfig);
+                const model = conv.selectedModel;
+
+                if (useBudgetMode(model, channelConfig)) {
+                    showBudgetBottomSheet(conv, channelConfig);
+                } else if (useLevelMode(model, channelConfig)) {
+                    showLevelBottomSheet(conv, channelConfig);
+                }
             };
             
             controlGroup.appendChild(budgetBtn);
 
-            // ===== Level 模式的三按钮组（类似 GPT 的 L/M/H）=====
+            // ===== Level 模式的四按钮组（minimal/low/medium/high）=====
             const levelGroup = document.createElement('div');
-            levelGroup.className = 'flex items-center gap-0.5';
+            levelGroup.className = 'flex items-center gap-px bg-gray-100 rounded p-px';
             levelGroup.setAttribute('data-gemini-level-group', 'true');
             levelGroup.style.display = 'none'; // 初始隐藏
 
-            const createLevelBtn = (key, text, title) => {
+            const createLevelBtn = (opt) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors';
-                btn.textContent = text;
-                btn.title = title;
+                btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors font-medium';
+                btn.textContent = opt.label;
+                btn.title = `思考等级：${opt.description}`;
                 btn.onclick = () => {
                     const store = getStore();
                     if (!store || !store.getActiveConversation) return;
                     const conv = store.getActiveConversation();
                     if (!conv) return;
 
-                    setThinkingLevel(store, conv.id, key);
+                    setThinkingLevel(store, conv.id, opt.value);
                     updateThinkingControls();
                 };
                 return btn;
             };
 
-            const noneBtn = createLevelBtn('none', 'N', '思考等级：无 (None) - 不使用思考');
-            const lowBtn = createLevelBtn('low', 'L', '思考等级：低 (Low)');
-            const highBtn = createLevelBtn('high', 'H', '思考等级：高 (High)');
-
-            levelGroup.appendChild(noneBtn);
-            levelGroup.appendChild(lowBtn);
-            levelGroup.appendChild(highBtn);
+            // 根据 LEVEL_OPTIONS 动态创建按钮
+            const buttonRefs = {};
+            LEVEL_OPTIONS.forEach(opt => {
+                const btn = createLevelBtn(opt);
+                buttonRefs[opt.value] = btn;
+                levelGroup.appendChild(btn);
+            });
 
             // 缓存按钮引用
-            levelState.buttons = {
-                none: noneBtn,
-                low: lowBtn,
-                high: highBtn
-            };
+            levelState.buttons = buttonRefs;
 
             controlGroup.appendChild(levelGroup);
             wrapper.appendChild(controlGroup);

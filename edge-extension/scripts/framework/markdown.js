@@ -56,17 +56,14 @@ const FrameworkMarkdown = (function() {
     function isValidLatexContent(content) {
         if (!content || content.trim().length === 0) return false;
 
-        const chineseRatio = (content.match(/[\u4e00-\u9fa5]/g) || []).length / content.length;
-        if (chineseRatio > 0.5) return false;
+        // 如果包含太多中文，通常不是公式
+        const chineseMatch = content.match(/[\u4e00-\u9fa5]/g);
+        const chineseRatio = chineseMatch ? chineseMatch.length / content.length : 0;
+        if (chineseRatio > 0.4) return false;
 
-        const hasLatexCommand = /\\[a-zA-Z]+/.test(content);
-        const hasMathSymbol = /[+\-*/=<>^_{}\\|]/.test(content);
-        const hasGreekLetter = /\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega)/i.test(content);
-        const hasNumber = /\d/.test(content);
-        const hasFraction = /\\frac|\\dfrac/.test(content);
-        const hasSuperSub = /[\^_]/.test(content);
-
-        return hasLatexCommand || hasFraction || hasGreekLetter || (hasMathSymbol && hasNumber) || hasSuperSub;
+        // 只要不是纯空格，且通过了中文比例检查，就允许 KaTeX 尝试渲染
+        // KaTeX 渲染失败会安全地返回原文本，所以我们可以放宽限制
+        return true;
     }
 
     /**
@@ -91,7 +88,11 @@ const FrameworkMarkdown = (function() {
         });
 
         // 行内公式 $...$
-        text = text.replace(/(?<![a-zA-Z\u4e00-\u9fa5])\$([^\$\n]+?)\$(?![a-zA-Z\u4e00-\u9fa5])/g, (match, formula) => {
+        // 改进正则：
+        // 1. 前面不能是字母、数字或反斜杠（防止匹配 $10 和 $20）
+        // 2. $ 后面不能紧跟空格，且结束的 $ 前面不能是空格（标准 Markdown 数学语法）
+        // 3. 后面不能是字母或数字
+        text = text.replace(/(?<![\\a-zA-Z0-9])\$([^\s\$](?:[^\$]*[^\s\$])?)\$(?![a-zA-Z0-9])/g, (match, formula) => {
             if (!isValidLatexContent(formula)) return match;
             try {
                 return katex.renderToString(formula.trim(), {
