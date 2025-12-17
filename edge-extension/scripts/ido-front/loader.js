@@ -29,7 +29,9 @@
         
         // 2. 混合格式插件支持（声明式渲染 + Comlink 通信）
         'hybrid-plugin-parser.js',      // YAML/JS 混合格式解析器
-        'declarative-ui-renderer.js',   // 声明式 UI 渲染器（MD3 组件）
+        'declarative/components.js',    // 声明式组件定义（MD3 组件）
+        'declarative/ui-manager.js',    // 声明式 UI 管理器
+        'declarative-ui-renderer.js',   // 声明式 UI 渲染器入口
         'comlink-bridge.js',            // Comlink 主线程桥接
         
         // 3. 外部插件加载器（依赖 channel-registry, hybrid-parser, declarative-ui, comlink-bridge）
