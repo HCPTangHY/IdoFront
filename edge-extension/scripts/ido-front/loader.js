@@ -40,6 +40,7 @@
         'channels/openai-responses-channel.js',
         'channels/gemini-channel.js',
         'channels/gemini-deep-research-channel.js',  // Gemini Deep Research Agent
+        'channels/claude-channel.js',  // Anthropic Claude
         'service.js',
         
         // 2. Actions 模块（依赖基础模块）
