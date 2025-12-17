@@ -261,31 +261,42 @@
             const base64 = await blobToBase64(blob);
             const fileName = url.split('/').pop() || 'IdoFront.apk';
 
-            // 保存到下载目录
+            // 保存到下载目录（使用 External 目录以便其他应用可以访问）
             const result = await Filesystem.writeFile({
-                path: fileName,
+                path: 'Download/' + fileName,
                 data: base64,
-                directory: Directory.Documents,
+                directory: Directory.ExternalStorage,
                 recursive: true
             });
 
             console.log('[IdoFront.updater] APK 已保存:', result.uri);
 
             // 尝试打开 APK 进行安装
-            // 需要 @nicholasnelson/capacitor-file-opener 或类似插件
+            // 使用 @capacitor-community/file-opener 插件
             const FileOpener = window.Capacitor?.Plugins?.FileOpener;
             
-            if (FileOpener) {
-                await FileOpener.open({
-                    filePath: result.uri,
-                    contentType: 'application/vnd.android.package-archive'
-                });
-                return { success: true };
+            if (FileOpener && FileOpener.open) {
+                try {
+                    await FileOpener.open({
+                        filePath: result.uri,
+                        contentType: 'application/vnd.android.package-archive',
+                        openWithDefault: true
+                    });
+                    return { success: true, message: '正在打开安装程序...' };
+                } catch (openError) {
+                    console.warn('[IdoFront.updater] 打开 APK 失败:', openError);
+                    // 如果打开失败，仍然返回成功但提示手动安装
+                    return {
+                        success: true,
+                        message: `APK 已保存到下载目录\n请从文件管理器打开安装`,
+                        filePath: result.uri
+                    };
+                }
             } else {
                 // 没有 FileOpener 插件，提示用户手动安装
                 return {
                     success: true,
-                    message: `APK 已保存到: ${result.uri}\n请从文件管理器打开安装`,
+                    message: `APK 已保存到下载目录\n请从文件管理器打开安装`,
                     filePath: result.uri
                 };
             }

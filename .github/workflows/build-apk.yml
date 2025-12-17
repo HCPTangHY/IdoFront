@@ -81,6 +81,37 @@ jobs:
       - name: 同步资源
         run: npx cap sync android
       
+      - name: 配置 Android 权限（自动更新需要）
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          
+          # 添加安装APK权限和存储权限（在 </manifest> 前插入）
+          if ! grep -q "REQUEST_INSTALL_PACKAGES" "$MANIFEST"; then
+            sed -i 's|</manifest>|    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n</manifest>|' "$MANIFEST"
+            echo "✅ 已添加安装和存储权限"
+          fi
+          
+          # 添加 FileProvider 配置（用于共享APK文件给安装程序）
+          if ! grep -q "FileProvider" "$MANIFEST"; then
+            sed -i 's|</application>|        <provider\n            android:name="androidx.core.content.FileProvider"\n            android:authorities="${applicationId}.fileprovider"\n            android:exported="false"\n            android:grantUriPermissions="true">\n            <meta-data\n                android:name="android.support.FILE_PROVIDER_PATHS"\n                android:resource="@xml/file_paths" />\n        </provider>\n    </application>|' "$MANIFEST"
+            echo "✅ 已添加 FileProvider 配置"
+          fi
+          
+          # 创建 file_paths.xml
+          mkdir -p android/app/src/main/res/xml
+          cat > android/app/src/main/res/xml/file_paths.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-path name="external_files" path="." />
+              <external-files-path name="external_files_path" path="." />
+              <cache-path name="cache" path="." />
+              <files-path name="files" path="." />
+          </paths>
+          EOF
+          echo "✅ 已创建 file_paths.xml"
+          
+          echo "📄 AndroidManifest.xml 权限配置完成"
+      
       - name: 设置 Gradle 权限
         run: chmod +x android/gradlew
       
