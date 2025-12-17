@@ -145,27 +145,53 @@
         return publicApi;
     }
 
-    // 自动初始化或等待手动初始化
-    if (document.readyState === 'loading') {
+    /**
+     * 检查所有模块是否已经同步加载
+     * 在 web 打包版本中，所有模块会被同步合并到一个文件，此时应同步创建 Framework
+     */
+    function areAllModulesLoaded() {
+        return (
+            typeof FrameworkEvents !== 'undefined' &&
+            typeof FrameworkStorage !== 'undefined' &&
+            typeof FrameworkLayout !== 'undefined' &&
+            typeof FrameworkGesture !== 'undefined' &&
+            typeof FrameworkPlugins !== 'undefined' &&
+            typeof FrameworkMarkdown !== 'undefined' &&
+            typeof FrameworkMessages !== 'undefined' &&
+            typeof FrameworkUIHelpers !== 'undefined' &&
+            typeof FrameworkCore !== 'undefined'
+        );
+    }
+
+    /**
+     * 同步创建并暴露 Framework
+     */
+    function createAndExposeFramework() {
+        const Framework = createFramework();
+        
+        // 暴露到全局
+        if (typeof globalThis !== 'undefined') {
+            globalThis.Framework = Framework;
+        }
+        window.Framework = Framework;
+        
+        return Framework;
+    }
+
+    // 自动初始化：优先同步创建（适用于 web 打包），否则等待模块加载
+    if (areAllModulesLoaded()) {
+        // 所有模块已同步加载（web 打包模式），直接创建 Framework
+        createAndExposeFramework();
+    } else if (document.readyState === 'loading') {
+        // DOM 尚未就绪，等待 DOMContentLoaded
         document.addEventListener('DOMContentLoaded', async () => {
             await waitForModules();
-            const Framework = createFramework();
-            
-            // 暴露到全局
-            if (typeof globalThis !== 'undefined') {
-                globalThis.Framework = Framework;
-            }
-            window.Framework = Framework;
+            createAndExposeFramework();
         });
     } else {
+        // DOM 已就绪但模块尚未加载完成，轮询等待
         waitForModules().then(() => {
-            const Framework = createFramework();
-            
-            // 暴露到全局
-            if (typeof globalThis !== 'undefined') {
-                globalThis.Framework = Framework;
-            }
-            window.Framework = Framework;
+            createAndExposeFramework();
         });
     }
 })();
