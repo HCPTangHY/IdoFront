@@ -821,6 +821,18 @@ const FrameworkMessages = (function() {
         if (stats && lastMsgId) {
             updateMessageStats(lastMsgId, stats);
         }
+
+        // 确保附件被渲染（修复流式更新期间附件可能未被渲染的问题）
+        const lastMsgForAttachments = state.messages[state.messages.length - 1];
+        if (lastMsgForAttachments && lastMsgForAttachments.attachments && lastMsgForAttachments.attachments.length > 0) {
+            const existingWrapper = container.querySelector('.ido-message__attachment-wrapper');
+            if (!existingWrapper) {
+                const attachmentsContainer = createAttachmentsContainer(lastMsgForAttachments.attachments);
+                if (attachmentsContainer) {
+                    container.appendChild(attachmentsContainer);
+                }
+            }
+        }
     }
 
     /**
