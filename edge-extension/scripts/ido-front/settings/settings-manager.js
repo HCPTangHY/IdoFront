@@ -234,14 +234,14 @@
             }
         });
 
-        // 5. 关于（占位）
+        // 5. 关于
         window.IdoFront.settingsManager.registerTab({
             id: 'about',
             icon: 'info',
             label: '关于',
             order: 50,
-            render: (container) => {
-                container.innerHTML = '<div class="text-gray-400 text-center mt-10">暂未开放</div>';
+            render: (container, ctx, st) => {
+                renderAboutTab(container, ctx, st);
             }
         });
     }
@@ -342,6 +342,206 @@
         
         card.appendChild(body);
         return card;
+    }
+    
+    /**
+     * 渲染"关于"标签页内容
+     */
+    function renderAboutTab(container, ctx, st) {
+        container.innerHTML = '';
+        
+        const wrapper = document.createElement('div');
+        wrapper.className = 'space-y-3 max-w-md mx-auto';
+        
+        // Logo 和应用名称（紧凑版）
+        const header = document.createElement('div');
+        header.className = 'text-center py-3';
+        header.innerHTML = `
+            <img src="icons/icon-256.png" alt="IdoFront" class="w-12 h-12 mx-auto mb-2 rounded-xl shadow">
+            <h1 class="text-lg font-bold text-gray-800">IdoFront</h1>
+            <p class="text-xs text-gray-500">模块化的大模型聊天前端</p>
+        `;
+        wrapper.appendChild(header);
+        
+        // 获取平台信息
+        const config = window.IdoFront?.updater?.config;
+        let platformName = '浏览器扩展';
+        if (config?.platform) {
+            if (config.platform.isElectron) {
+                platformName = 'Windows 桌面版';
+            } else if (config.platform.isAndroid) {
+                platformName = 'Android 应用';
+            }
+        }
+        
+        // 版本信息卡片（紧凑版）
+        const versionCard = document.createElement('div');
+        versionCard.className = 'ido-card p-3';
+        versionCard.innerHTML = `
+            <div class="flex items-center justify-between text-xs">
+                <div>
+                    <div class="text-gray-500">当前版本</div>
+                    <div id="about-version-display" class="text-sm font-semibold text-gray-800">加载中...</div>
+                </div>
+                <div class="text-right">
+                    <div class="text-gray-500">运行平台</div>
+                    <div class="text-sm font-medium text-gray-700">${platformName}</div>
+                </div>
+            </div>
+        `;
+        wrapper.appendChild(versionCard);
+        
+        // 异步获取版本号并更新显示
+        const updaterService = window.IdoFront?.updater?.service;
+        if (updaterService && typeof updaterService.getCurrentVersion === 'function') {
+            updaterService.getCurrentVersion().then(version => {
+                const versionEl = document.getElementById('about-version-display');
+                if (versionEl) {
+                    versionEl.textContent = 'v' + version;
+                }
+            }).catch(e => {
+                console.warn('[About] 获取版本号失败:', e);
+                const versionEl = document.getElementById('about-version-display');
+                if (versionEl) {
+                    versionEl.textContent = 'v1.0.0';
+                }
+            });
+        } else {
+            // 无更新服务，尝试从 manifest 获取
+            setTimeout(() => {
+                const versionEl = document.getElementById('about-version-display');
+                if (versionEl) {
+                    let version = '1.0.0';
+                    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest) {
+                        try {
+                            version = chrome.runtime.getManifest().version;
+                        } catch (e) {}
+                    }
+                    versionEl.textContent = 'v' + version;
+                }
+            }, 0);
+        }
+        
+        // 检查更新按钮（紧凑版）
+        const updateSection = document.createElement('div');
+        updateSection.className = 'ido-card p-3';
+        
+        const updateBtn = document.createElement('button');
+        updateBtn.className = 'w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors';
+        updateBtn.innerHTML = `
+            <span class="material-symbols-outlined text-[16px]">sync</span>
+            <span>检查更新</span>
+        `;
+        
+        const updateStatus = document.createElement('div');
+        updateStatus.className = 'text-center text-xs text-gray-500 mt-2 hidden';
+        
+        updateBtn.onclick = async () => {
+            updateBtn.disabled = true;
+            updateBtn.innerHTML = `
+                <span class="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                <span>检查中...</span>
+            `;
+            updateBtn.className = 'w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-400 text-white rounded-lg text-sm font-medium cursor-not-allowed';
+            
+            try {
+                if (updaterService && typeof updaterService.checkForUpdate === 'function') {
+                    const result = await updaterService.checkForUpdate({ silent: false });
+                    
+                    if (result.hasUpdate) {
+                        // 有更新，显示更新对话框
+                        const updaterUI = window.IdoFront?.updater?.ui;
+                        if (updaterUI && typeof updaterUI.createUpdateDialog === 'function') {
+                            updaterUI.createUpdateDialog(result);
+                        }
+                        updateStatus.textContent = `发现新版本 v${result.latestVersion}`;
+                        updateStatus.className = 'text-center text-sm text-green-600 mt-3';
+                    } else {
+                        updateStatus.textContent = '已是最新版本';
+                        updateStatus.className = 'text-center text-xs text-gray-500 mt-2';
+                    }
+                } else {
+                    updateStatus.textContent = '更新服务不可用';
+                    updateStatus.className = 'text-center text-xs text-red-500 mt-2';
+                }
+            } catch (error) {
+                console.error('[About] 检查更新失败:', error);
+                updateStatus.textContent = '检查更新失败: ' + (error.message || '网络错误');
+                updateStatus.className = 'text-center text-xs text-red-500 mt-2';
+            } finally {
+                updateBtn.disabled = false;
+                updateBtn.innerHTML = `
+                    <span class="material-symbols-outlined text-[16px]">sync</span>
+                    <span>检查更新</span>
+                `;
+                updateBtn.className = 'w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors';
+            }
+        };
+        
+        updateSection.appendChild(updateBtn);
+        updateSection.appendChild(updateStatus);
+        wrapper.appendChild(updateSection);
+        
+        // 项目信息（紧凑版）
+        const infoCard = document.createElement('div');
+        infoCard.className = 'ido-card p-3 space-y-1';
+        
+        const githubConfig = config?.github || { owner: 'HCPTangHY', repo: 'IdoFront' };
+        const repoUrl = `https://github.com/${githubConfig.owner}/${githubConfig.repo}`;
+        
+        const linkItemClass = 'flex items-center gap-2 p-1.5 -mx-1.5 hover:bg-gray-50 rounded transition-colors group';
+        const linkTitleClass = 'text-xs font-medium text-gray-800 group-hover:text-blue-600 transition-colors';
+        const linkIconClass = 'material-symbols-outlined text-[14px] text-gray-400 group-hover:text-blue-500 transition-colors';
+        
+        infoCard.innerHTML = `
+            <div class="text-xs font-medium text-gray-700 mb-1">项目链接</div>
+            <a href="${repoUrl}" target="_blank" rel="noopener noreferrer" class="${linkItemClass}">
+                <div class="w-6 h-6 bg-gray-900 rounded flex items-center justify-center flex-shrink-0">
+                    <span class="material-symbols-outlined text-white text-[14px]">code</span>
+                </div>
+                <span class="${linkTitleClass} flex-1">GitHub 仓库</span>
+                <span class="${linkIconClass}">open_in_new</span>
+            </a>
+            <a href="${repoUrl}/releases" target="_blank" rel="noopener noreferrer" class="${linkItemClass}">
+                <div class="w-6 h-6 bg-green-500 rounded flex items-center justify-center flex-shrink-0">
+                    <span class="material-symbols-outlined text-white text-[14px]">package_2</span>
+                </div>
+                <span class="${linkTitleClass} flex-1">版本发布</span>
+                <span class="${linkIconClass}">open_in_new</span>
+            </a>
+            <a href="${repoUrl}/issues" target="_blank" rel="noopener noreferrer" class="${linkItemClass}">
+                <div class="w-6 h-6 bg-orange-500 rounded flex items-center justify-center flex-shrink-0">
+                    <span class="material-symbols-outlined text-white text-[14px]">bug_report</span>
+                </div>
+                <span class="${linkTitleClass} flex-1">问题反馈</span>
+                <span class="${linkIconClass}">open_in_new</span>
+            </a>
+        `;
+        wrapper.appendChild(infoCard);
+        
+        // 技术栈和特性（紧凑版）
+        const featuresCard = document.createElement('div');
+        featuresCard.className = 'ido-card p-3';
+        featuresCard.innerHTML = `
+            <div class="text-xs font-medium text-gray-700 mb-2">特性</div>
+            <div class="flex flex-wrap gap-1">
+                <span class="px-1.5 py-0.5 text-[10px] bg-blue-50 text-blue-600 rounded">插件系统</span>
+                <span class="px-1.5 py-0.5 text-[10px] bg-purple-50 text-purple-600 rounded">多渠道</span>
+                <span class="px-1.5 py-0.5 text-[10px] bg-green-50 text-green-600 rounded">流式输出</span>
+                <span class="px-1.5 py-0.5 text-[10px] bg-orange-50 text-orange-600 rounded">思考链</span>
+                <span class="px-1.5 py-0.5 text-[10px] bg-pink-50 text-pink-600 rounded">面具</span>
+                <span class="px-1.5 py-0.5 text-[10px] bg-cyan-50 text-cyan-600 rounded">跨平台</span>
+            </div>
+        `;
+        wrapper.appendChild(featuresCard);
+        
+        // 版权信息（紧凑版）
+        const footer = document.createElement('div');
+        footer.className = 'text-center text-[10px] text-gray-400 pt-2';
+        footer.innerHTML = `© ${new Date().getFullYear()} IdoFront · MIT`;
+        wrapper.appendChild(footer);
+        
+        container.appendChild(wrapper);
     }
 
     /**
