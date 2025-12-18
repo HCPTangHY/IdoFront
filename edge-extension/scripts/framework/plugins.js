@@ -13,6 +13,7 @@ const FrameworkPlugins = (function() {
         INPUT_TOP: 'slot-input-top',
         INPUT_ACTIONS_LEFT: 'slot-input-actions-left',
         INPUT_ACTIONS_RIGHT: 'slot-input-actions-right',
+        INPUT_ACTIONS_TOOLS: 'slot-input-actions-tools',
         MESSAGE_FOOTER: 'message-footer',
         MESSAGE_MORE_ACTIONS: 'message-more-actions',
         SETTINGS_GENERAL: 'slot-settings-general'
@@ -407,6 +408,7 @@ const FrameworkPlugins = (function() {
         });
 
         el.classList.toggle('hidden', el.childNodes.length === 0);
+
     }
 
     /**

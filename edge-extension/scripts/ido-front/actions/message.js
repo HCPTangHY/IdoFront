@@ -275,31 +275,66 @@
                 return;
             }
 
-            // 更新消息内容
-            const updateData = { content: newContent };
-            if (editingAttachments.length > 0) {
-                updateData.attachments = editingAttachments;
-            } else {
-                updateData.attachments = null;
-            }
-            
-            store.updateMessage(conv.id, messageId, updateData);
-
-            // 用户消息：截断后续消息并重新发送生成响应
+            // 用户消息：创建分支而非截断
             // AI 消息：只保存修改，不截断，不重新生成
             if (targetMsg.role === 'user') {
-                store.truncateFromMessage(conv.id, messageId);
+                // 找到被编辑消息的父消息 ID
+                const parentId = targetMsg.parentId !== undefined ? targetMsg.parentId : null;
+                
+                // 创建新的用户消息作为分支
+                const now = Date.now();
+                const newUserMessage = {
+                    id: utils.createId('msg_u'),
+                    role: 'user',
+                    content: newContent,
+                    createdAt: now,
+                    timestamp: new Date(now).toISOString(),
+                    plugin: null
+                };
+                
+                if (editingAttachments.length > 0) {
+                    newUserMessage.attachments = editingAttachments;
+                }
+                
+                // 使用 createBranch 创建分支（会自动设置 parentId 并切换到新分支）
+                store.createBranch(conv.id, parentId, newUserMessage);
                 
                 // 同步UI
                 if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
                     window.IdoFront.conversationActions.syncUI();
                 }
                 
-                await window.IdoFront.messageActions.send(newContent, editingAttachments.length > 0 ? editingAttachments : null);
+                // 生成新的响应
+                await generateResponse(conv, newUserMessage.id);
             } else {
-                // AI 消息只需同步 UI 显示更新后的内容
+                // AI 消息：如果内容或附件有变化，则创建分支
+                const isContentChanged = newContent !== originalContent;
+                const isAttachmentsChanged = JSON.stringify(editingAttachments) !== JSON.stringify(originalAttachments);
+
+                if (isContentChanged || isAttachmentsChanged) {
+                    // 找到被编辑消息的父消息 ID
+                    const parentId = targetMsg.parentId !== undefined ? targetMsg.parentId : null;
+                    
+                    // 创建新的 AI 消息作为分支
+                    const now = Date.now();
+                    const newAssistantMessage = {
+                        ...targetMsg, // 继承模型名、渠道名等元数据
+                        id: utils.createId('msg_b'),
+                        role: 'assistant',
+                        content: newContent,
+                        createdAt: now,
+                        timestamp: new Date(now).toISOString(),
+                        attachments: editingAttachments.length > 0 ? editingAttachments : null
+                    };
+                    
+                    // 使用 createBranch 创建分支
+                    store.createBranch(conv.id, parentId, newAssistantMessage);
+                }
+                
+                // 同步 UI（如果没变也会刷新掉编辑态）
                 if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
-                    window.IdoFront.conversationActions.syncUI();
+                    // 传入当前消息 ID 以便 syncUI 尝试保持视觉焦点
+                    window.IdoFront.conversationActions.syncUI({ focusMessageId: isContentChanged || isAttachmentsChanged ? undefined : messageId });
                 }
             }
         };
@@ -403,8 +438,12 @@
     }
 
     /**
-     * 重试/重新生成
+     * 重试/重新生成（分支模式）
      * @param {string} messageId - 触发重试的消息ID
+     *
+     * 分支逻辑：
+     * - 如果是 AI 消息：在同一个父节点下创建新的 AI 响应分支
+     * - 如果是用户消息：重新生成该用户消息的 AI 响应（作为新分支）
      */
     window.IdoFront.messageActions.retry = async function(messageId) {
         const conv = store.getActiveConversation();
@@ -422,55 +461,44 @@
             Promise.resolve().then(() => store.persist());
         }
 
-        let truncateTargetId = null;
+        // 分支模式：不再截断，而是创建新分支
+        let relatedUserMessageId = null;
+        let parentIdForNewBranch = null;
 
-        // 确定截断点
         if (targetMsg.role === 'user') {
-            truncateTargetId = messageId;
+            // 用户消息重试：重新生成该用户消息的 AI 响应
+            // 新的 AI 响应将作为该用户消息的子节点（可能已有其他 AI 响应作为兄弟）
+            relatedUserMessageId = messageId;
+            parentIdForNewBranch = messageId;
         } else if (targetMsg.role === 'assistant') {
-            const index = conv.messages.indexOf(targetMsg);
-            if (index > 0) {
-                const prevMsg = conv.messages[index - 1];
-                if (prevMsg) {
-                    truncateTargetId = prevMsg.id;
-                }
+            // AI 消息重试：在同一个父节点（用户消息）下创建新的 AI 响应
+            // 找到触发这个 AI 响应的用户消息（即父消息）
+            const parentId = targetMsg.parentId;
+            if (parentId) {
+                relatedUserMessageId = parentId;
+                parentIdForNewBranch = parentId;
+            } else {
+                // 异常情况：AI 消息没有父消息
+                console.warn('AI message has no parent, cannot retry');
+                return;
             }
         }
 
-        if (truncateTargetId) {
-            // 执行截断（内部会调用 persist，但已优化为节流）
-            store.truncateConversation(conv.id, truncateTargetId);
-            
-            // 优化：增量 DOM 更新，避免完整重渲染
-            const chatStream = document.getElementById('chat-stream');
-            if (chatStream) {
-                // 移除目标消息之后的所有节点
-                const targetWrapper = chatStream.querySelector(`[data-message-id="${truncateTargetId}"]`);
-                if (targetWrapper) {
-                    // 清理流式指示器
-                    targetWrapper.querySelectorAll('.message-streaming-indicator').forEach(ind => ind.remove());
-                    // 移除后续所有节点
-                    let cursor = targetWrapper.nextElementSibling;
-                    while (cursor) {
-                        const next = cursor.nextElementSibling;
-                        cursor.remove();
-                        cursor = next;
+        if (relatedUserMessageId && parentIdForNewBranch !== null) {
+            // 在重新生成之前，移除当前分支下显示的 AI 消息的 DOM 节点
+            // 这样 generateResponse 创建的新消息才不会与原消息同时显示
+            const activePath = store.getActivePath(conv.id);
+            const parentMsgIndex = activePath.findIndex(m => m.id === parentIdForNewBranch);
+            if (parentMsgIndex !== -1) {
+                const chatStream = document.getElementById('chat-stream');
+                if (chatStream) {
+                    // 移除 parentIdForNewBranch 之后的所有消息的 DOM 节点
+                    for (let i = parentMsgIndex + 1; i < activePath.length; i++) {
+                        const msgToRemove = activePath[i];
+                        const msgEl = chatStream.querySelector(`[data-message-id="${msgToRemove.id}"]`);
+                        if (msgEl) msgEl.remove();
                     }
-                } else {
-                    // 降级：清空后面的内容
-                    const allMessages = chatStream.querySelectorAll('[data-message-id]');
-                    let foundTarget = false;
-                    allMessages.forEach(el => {
-                        if (foundTarget) {
-                            el.remove();
-                        } else if (el.dataset.messageId === truncateTargetId) {
-                            foundTarget = true;
-                            el.querySelectorAll('.message-streaming-indicator').forEach(ind => ind.remove());
-                        }
-                    });
                 }
-                // 清理所有独立的 loading 气泡
-                chatStream.querySelectorAll('[data-loading-id]').forEach(el => el.remove());
             }
 
             // 异步更新侧边栏，不阻塞主流程
@@ -484,15 +512,19 @@
                 });
             }
             
-            // 重新生成响应
-            await generateResponse(conv, truncateTargetId);
+            // 重新生成响应（generateResponse 会自动基于当前活跃路径构建上下文）
+            // 传入 parentIdForNewBranch 作为新 AI 消息的父节点
+            await generateResponse(conv, relatedUserMessageId, parentIdForNewBranch);
         }
     };
 
     /**
      * 核心响应生成逻辑
+     * @param {Object} conv - 对话对象
+     * @param {string} relatedUserMessageId - 触发生成的用户消息 ID
+     * @param {string} [parentIdForNewBranch] - 可选，新 AI 消息的父节点 ID（用于分支模式）
      */
-    async function generateResponse(conv, relatedUserMessageId) {
+    async function generateResponse(conv, relatedUserMessageId, parentIdForNewBranch) {
         const isActiveConv = () => store.state.activeConversationId === conv.id;
 
         // 记录请求开始时间，用于计算持续时长
@@ -536,7 +568,7 @@
                 context.removeLoadingIndicator(loadingId);
             }
             const errorMsg = '请先在顶部选择渠道和模型';
-            addAssistantMessage(conv.id, errorMsg);
+            addAssistantMessage(conv.id, errorMsg, parentIdForNewBranch);
             store.state.isTyping = false;
             store.persist();
             return;
@@ -550,7 +582,7 @@
                 context.removeLoadingIndicator(loadingId);
             }
             const errorMsg = '所选渠道不存在，请重新选择';
-            addAssistantMessage(conv.id, errorMsg);
+            addAssistantMessage(conv.id, errorMsg, parentIdForNewBranch);
             store.state.isTyping = false;
             store.persist();
             return;
@@ -561,7 +593,7 @@
                 context.removeLoadingIndicator(loadingId);
             }
             const errorMsg = '所选渠道已禁用，请选择其他渠道或在设置中启用该渠道';
-            addAssistantMessage(conv.id, errorMsg);
+            addAssistantMessage(conv.id, errorMsg, parentIdForNewBranch);
             store.state.isTyping = false;
             store.persist();
             return;
@@ -598,8 +630,10 @@
             });
         }
         
-        // 3. Add actual conversation messages
-        conv.messages.forEach(m => {
+        // 3. Add actual conversation messages - 使用活跃路径而非全部消息
+        // 这确保了在分支模式下只发送当前选中路径的消息给 AI
+        const activePath = store.getActivePath(conv.id);
+        activePath.forEach(m => {
             const msg = {
                 role: m.role,
                 content: m.content
@@ -633,7 +667,7 @@
                     });
                 }
                 // 精简实际对话消息：仅对触发本次生成的用户消息保留附件的元信息（去除 dataUrl）
-                conv.messages.forEach(m => {
+                activePath.forEach(m => {
                     const out = { role: m.role, content: m.content };
                     if (m.attachments && Array.isArray(m.attachments)) {
                         if (m.id === relatedUserMessageId) {
@@ -773,12 +807,13 @@
                  
                 if (!assistantMessage) {
                     // 第一次收到内容：创建真实消息（总是写入 Store）
+                    // 传入 parentIdForNewBranch 以支持分支模式
                     assistantMessage = addAssistantMessage(conv.id, {
                         content: fullContent,
                         reasoning: fullReasoning,
                         attachments: currentAttachments,
                         metadata: currentMetadata
-                    });
+                    }, parentIdForNewBranch);
 
                     // 记录当前流式消息的 ID，方便在切换对话后复原 loading 到这条消息上
                     store.state.typingMessageId = assistantMessage.id;
@@ -847,7 +882,7 @@
                     
                     // 如果还没有助手消息，添加一条提示
                     if (!assistantMessage) {
-                        addAssistantMessage(conv.id, '✋ 已停止生成');
+                        addAssistantMessage(conv.id, '✋ 已停止生成', parentIdForNewBranch);
                     }
                     
                     // 重置全局打字状态
@@ -935,7 +970,7 @@
                     attachments,
                     metadata,
                     stats
-                });
+                }, parentIdForNewBranch);
                 fullContent = content;
                 if (reasoning) fullReasoning = reasoning;
             } else {
@@ -971,7 +1006,7 @@
             console.error('Message Send Error:', error);
             
             const errorContent = `请求失败: ${error.message}`;
-            addAssistantMessage(conv.id, errorContent);
+            addAssistantMessage(conv.id, errorContent, parentIdForNewBranch);
 
             if (context && logId && typeof context.completeRequest === 'function') {
                 context.completeRequest(logId, 500, { error: error.message });
@@ -1004,7 +1039,13 @@
         }
     }
 
-    function addAssistantMessage(convId, contentOrObj) {
+    /**
+     * 添加助手消息
+     * @param {string} convId - 对话 ID
+     * @param {string|Object} contentOrObj - 消息内容或包含内容的对象
+     * @param {string} [parentId] - 可选，父消息 ID（用于分支模式）
+     */
+    function addAssistantMessage(convId, contentOrObj, parentId) {
         const now = Date.now();
         let content = contentOrObj;
         let reasoning = null;
@@ -1060,7 +1101,8 @@
             }
         }
         
-        store.addMessageToConversation(convId, msg);
+        // 添加消息到对话，支持指定父消息 ID（用于分支模式）
+        store.addMessageToConversation(convId, msg, parentId);
         // 仅当该对话当前处于激活状态时才立即写入当前聊天流 UI，
         // 否则只更新 Store，待下次 syncUI 时再统一渲染，避免串台。
         if (context && store.state.activeConversationId === convId) {
@@ -1079,6 +1121,24 @@
             // 传递统计信息
             if (stats) {
                 payload.stats = stats;
+            }
+            
+            // 计算分支信息（用于显示分支切换器）
+            if (conv) {
+                const msgParentId = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
+                const siblings = conv.messages.filter(m => {
+                    const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
+                    return pId === msgParentId;
+                }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+                
+                if (siblings.length > 1) {
+                    const currentIndex = siblings.findIndex(s => s.id === msg.id);
+                    payload.branchInfo = {
+                        currentIndex,
+                        total: siblings.length,
+                        siblings: siblings.map(s => s.id)
+                    };
+                }
             }
             
             context.addMessage('ai', payload);

@@ -60,10 +60,59 @@ const FrameworkGesture = (function() {
     }
 
     /**
+     * 检查元素是否可以水平滚动
+     */
+    function isHorizontallyScrollable(element) {
+        if (!element) return false;
+        
+        // 检查元素本身是否可以水平滚动
+        const hasHorizontalScroll = element.scrollWidth > element.clientWidth;
+        const style = window.getComputedStyle(element);
+        const overflowX = style.overflowX;
+        const canScroll = overflowX === 'auto' || overflowX === 'scroll';
+        
+        return hasHorizontalScroll && canScroll;
+    }
+
+    /**
+     * 检查触摸目标是否在可水平滚动的元素内
+     */
+    function isInScrollableElement(target) {
+        let element = target;
+        
+        while (element && element !== document.body) {
+            // 检查是否是代码块相关元素
+            const tagName = element.tagName?.toLowerCase();
+            if (tagName === 'pre' || tagName === 'code') {
+                // 检查 pre 或其父元素是否可滚动
+                const preElement = tagName === 'pre' ? element : element.closest('pre');
+                if (preElement && isHorizontallyScrollable(preElement)) {
+                    return true;
+                }
+            }
+            
+            // 检查通用可水平滚动元素
+            if (isHorizontallyScrollable(element)) {
+                return true;
+            }
+            
+            element = element.parentElement;
+        }
+        
+        return false;
+    }
+
+    /**
      * 处理触摸开始
      */
     function handleTouchStart(e) {
         if (window.innerWidth >= SWIPE_CONFIG.MOBILE_BREAKPOINT) return;
+
+        // 检查是否在可水平滚动的元素内（如代码块）
+        if (isInScrollableElement(e.target)) {
+            swipeState.swipeTarget = null;
+            return;
+        }
 
         const touch = e.touches[0];
         swipeState.startX = touch.clientX;

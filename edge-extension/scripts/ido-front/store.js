@@ -1,6 +1,13 @@
 /**
  * IdoFront Store
  * Manages state and persistence
+ *
+ * 消息分支（Branching）数据结构说明：
+ * - 每条消息有 parentId 字段，指向其父消息（第一条消息 parentId 为 null）
+ * - 同一个 parentId 下的多条消息构成"兄弟节点"，即分支
+ * - conversation.activeBranchMap 记录每个分支点选中的消息 ID
+ *   格式: { [parentId]: selectedChildId }
+ * - getActivePath() 方法根据 activeBranchMap 计算当前活跃路径
  */
 (function() {
     window.IdoFront = window.IdoFront || {};
@@ -153,6 +160,15 @@
                     conv.personaId = defaultPersonaId;
                     updated = true;
                 }
+                
+                // 迁移消息到树形结构（兼容旧版本数据）
+                if (conv.messages && conv.messages.length > 0) {
+                    const needsTreeMigration = conv.messages.some(m => m.parentId === undefined);
+                    if (needsTreeMigration) {
+                        this.migrateMessagesToTree(conv.id);
+                        updated = true;
+                    }
+                }
             });
             
             // Ensure activePersonaId is set if missing
@@ -191,13 +207,12 @@
             this.persist();
         },
 
-        persist() {
-            // 轻量节流 + 日志裁剪，避免频繁 JSON 序列化和 IDB 写入导致卡顿
-            const now = Date.now();
-    
-            // 构建快照，裁剪日志长度以降低序列化成本
+        /**
+         * 构建持久化快照（内部方法，避免重复代码）
+         */
+        _buildSnapshot() {
             const MAX_LOGS = 200;
-            const snapshot = {
+            return {
                 personas: this.state.personas,
                 activePersonaId: this.state.activePersonaId,
                 conversations: this.state.conversations,
@@ -206,45 +221,51 @@
                 channels: this.state.channels,
                 pluginStates: this.state.pluginStates
             };
-    
-            // 合并并延后保存
-            this._pendingSnapshot = snapshot;
-    
-            const doSave = (snap) => {
-                // 使用 IndexedDB 异步保存，失败则回退 localStorage
-                if (window.IdoFront.idbStorage) {
-                    window.IdoFront.idbStorage.save(snap).catch(error => {
-                        console.error('IndexedDB 保存失败:', error);
-                        try {
-                            localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
-                        } catch (e) {
-                            console.error('localStorage 保存也失败:', e);
-                        }
-                    });
-                } else {
+        },
+
+        /**
+         * 执行保存操作（内部方法）
+         */
+        _doSave(snap) {
+            if (window.IdoFront.idbStorage) {
+                window.IdoFront.idbStorage.save(snap).catch(error => {
+                    console.error('IndexedDB 保存失败:', error);
                     try {
                         localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
                     } catch (e) {
-                        console.error('Storage save error:', e);
+                        console.error('localStorage 保存也失败:', e);
                     }
+                });
+            } else {
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
+                } catch (e) {
+                    console.error('Storage save error:', e);
                 }
-            };
-    
-            // 节流：250ms 内的重复持久化合并到一次保存
+            }
+        },
+
+        /**
+         * 静默持久化：只保存数据，不广播事件
+         * 用于分支切换等场景，调用者会自行处理 UI 更新，避免重复刷新
+         */
+        persistSilent() {
+            const now = Date.now();
+            const snapshot = this._buildSnapshot();
+            this._pendingSnapshot = snapshot;
+
             const THROTTLE_MS = 250;
             if (now - this._lastPersistAt < THROTTLE_MS) {
                 if (!this._persistTimer) {
                     this._persistTimer = setTimeout(() => {
                         this._persistTimer = null;
                         this._lastPersistAt = Date.now();
-                        // 关键修复：保存当前快照的引用，然后只有当 _pendingSnapshot 仍然是这个引用时才清空
                         const snapToSave = this._pendingSnapshot;
                         if (this._pendingSnapshot === snapToSave) {
                             this._pendingSnapshot = null;
                         }
-                        // 防御性检查：确保不会保存 null
                         if (snapToSave) {
-                            doSave(snapToSave);
+                            this._doSave(snapToSave);
                         }
                     }, THROTTLE_MS);
                 }
@@ -252,9 +273,40 @@
                 this._lastPersistAt = now;
                 const snapToSave = this._pendingSnapshot;
                 this._pendingSnapshot = null;
-                // 防御性检查：确保不会保存 null
                 if (snapToSave) {
-                    doSave(snapToSave);
+                    this._doSave(snapToSave);
+                }
+            }
+            // 不触发事件
+        },
+
+        persist() {
+            // 轻量节流 + 日志裁剪，避免频繁 JSON 序列化和 IDB 写入导致卡顿
+            const now = Date.now();
+            const snapshot = this._buildSnapshot();
+            this._pendingSnapshot = snapshot;
+
+            const THROTTLE_MS = 250;
+            if (now - this._lastPersistAt < THROTTLE_MS) {
+                if (!this._persistTimer) {
+                    this._persistTimer = setTimeout(() => {
+                        this._persistTimer = null;
+                        this._lastPersistAt = Date.now();
+                        const snapToSave = this._pendingSnapshot;
+                        if (this._pendingSnapshot === snapToSave) {
+                            this._pendingSnapshot = null;
+                        }
+                        if (snapToSave) {
+                            this._doSave(snapToSave);
+                        }
+                    }, THROTTLE_MS);
+                }
+            } else {
+                this._lastPersistAt = now;
+                const snapToSave = this._pendingSnapshot;
+                this._pendingSnapshot = null;
+                if (snapToSave) {
+                    this._doSave(snapToSave);
                 }
             }
     
@@ -361,6 +413,16 @@
             return this.state.personas[0] || null;
         },
 
+        /**
+         * 获取当前活跃对话使用的渠道配置
+         * @returns {Object|null} 渠道配置对象
+         */
+        getActiveChannel() {
+            const conv = this.getActiveConversation();
+            if (!conv || !conv.selectedChannelId) return null;
+            return this.state.channels.find(c => c.id === conv.selectedChannelId) || null;
+        },
+
         setActivePersona(id) {
             const persona = this.state.personas.find(p => p.id === id);
             if (persona) {
@@ -439,11 +501,45 @@
             return active;
         },
         
-        addMessageToConversation(convId, message) {
+        /**
+         * 添加消息到对话（支持分支）
+         * @param {string} convId - 对话 ID
+         * @param {Object} message - 消息对象
+         * @param {string} [parentId] - 父消息 ID（可选，不传则自动设为当前路径最后一条消息）
+         */
+        addMessageToConversation(convId, message, parentId) {
              const conv = this.state.conversations.find(c => c.id === convId);
              if (conv) {
+                 // 初始化 activeBranchMap
+                 if (!conv.activeBranchMap) {
+                     conv.activeBranchMap = {};
+                 }
+                 
+                 // 确定父消息 ID
+                 if (parentId === undefined) {
+                     // 未指定父消息时，自动设为当前活跃路径的最后一条消息
+                     const activePath = this.getActivePath(convId);
+                     if (activePath.length > 0) {
+                         parentId = activePath[activePath.length - 1].id;
+                     } else {
+                         parentId = null; // 第一条消息
+                     }
+                 }
+                 
+                 // 设置消息的 parentId
+                 message.parentId = parentId;
+                 
                  conv.messages.push(message);
                  conv.updatedAt = Date.now();
+                 
+                 // 更新 activeBranchMap：将新消息设为其父节点的选中分支
+                 if (parentId !== null) {
+                     conv.activeBranchMap[parentId] = message.id;
+                 } else {
+                     // 根消息的特殊处理：使用 'root' 作为虚拟父节点
+                     conv.activeBranchMap['root'] = message.id;
+                 }
+                 
                  // Auto-title
                  if(message.role === 'user') {
                      conv.title = window.IdoFront.utils.deriveTitleFromConversation(conv) || conv.title;
@@ -475,13 +571,87 @@
             return false;
         },
 
+        /**
+         * 删除消息（支持分支）
+         * 删除指定消息及其所有后代消息，并更新 activeBranchMap
+         * @param {string} convId - 对话 ID
+         * @param {string} msgId - 要删除的消息 ID
+         */
         deleteMessage(convId, msgId) {
             const conv = this.state.conversations.find(c => c.id === convId);
-            if (conv) {
-                conv.messages = conv.messages.filter(m => m.id !== msgId);
-                conv.updatedAt = Date.now();
-                this.persist();
+            if (!conv) return;
+            
+            const targetMsg = conv.messages.find(m => m.id === msgId);
+            if (!targetMsg) return;
+            
+            // 在删除前，获取被删除消息在兄弟中的索引
+            const parentKey = targetMsg.parentId === null || targetMsg.parentId === undefined ? 'root' : targetMsg.parentId;
+            const siblingsBeforeDelete = conv.messages.filter(m => {
+                const pId = m.parentId === null || m.parentId === undefined ? 'root' : m.parentId;
+                return pId === parentKey;
+            }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            const originalIndex = siblingsBeforeDelete.findIndex(m => m.id === msgId);
+            
+            // 收集要删除的所有消息 ID（包括目标消息及其所有后代）
+            const toDelete = new Set();
+            const queue = [msgId];
+            
+            while (queue.length > 0) {
+                const currentId = queue.shift();
+                toDelete.add(currentId);
+                
+                // 找到所有以当前消息为父节点的子消息
+                conv.messages.forEach(m => {
+                    if (m.parentId === currentId && !toDelete.has(m.id)) {
+                        queue.push(m.id);
+                    }
+                });
             }
+            
+            // 删除消息
+            conv.messages = conv.messages.filter(m => !toDelete.has(m.id));
+            
+            // 清理 activeBranchMap 中引用被删除消息的条目
+            if (conv.activeBranchMap) {
+                // 1. 删除指向被删除消息的分支选择
+                for (const parentKey in conv.activeBranchMap) {
+                    if (toDelete.has(conv.activeBranchMap[parentKey])) {
+                        delete conv.activeBranchMap[parentKey];
+                    }
+                }
+                
+                // 2. 删除以被删除消息为键的条目（因为父节点已不存在）
+                for (const deletedId of toDelete) {
+                    delete conv.activeBranchMap[deletedId];
+                }
+                
+                // 3. 对于目标消息的父节点，如果还有其他兄弟，选择相邻的（优先后一个，否则前一个）
+                const parentKey = targetMsg.parentId === null || targetMsg.parentId === undefined ? 'root' : targetMsg.parentId;
+                
+                // 需要获取删除前的兄弟顺序来确定应该选择哪个
+                // 但消息已经被删除了，所以我们需要在删除前记录原始索引
+                // 由于我们在前面已经过滤了消息，这里只能基于剩余兄弟选择
+                const siblings = conv.messages.filter(m => {
+                    const pId = m.parentId === null || m.parentId === undefined ? 'root' : m.parentId;
+                    return pId === parentKey;
+                }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+                
+                if (siblings.length > 0) {
+                    // 由于被删除消息的原始索引已无法获取，使用删除前记录的索引
+                    // originalIndex 在函数开头已计算
+                    // 优先选择原索引位置的消息（即后一个顺延），如果不存在则选择前一个
+                    let newIndex = originalIndex;
+                    if (newIndex >= siblings.length) {
+                        newIndex = siblings.length - 1;
+                    }
+                    conv.activeBranchMap[parentKey] = siblings[newIndex].id;
+                } else {
+                    delete conv.activeBranchMap[parentKey];
+                }
+            }
+            
+            conv.updatedAt = Date.now();
+            this.persist();
         },
 
         truncateConversation(convId, msgId) {
@@ -510,6 +680,213 @@
                 }
             }
             return false;
+        },
+
+        // ==================== 分支管理方法 ====================
+
+        /**
+         * 获取对话的活跃路径（从根到当前选中的叶子节点）
+         * @param {string} convId - 对话 ID
+         * @returns {Array} 按顺序排列的消息数组
+         */
+        getActivePath(convId) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv || !conv.messages || conv.messages.length === 0) {
+                return [];
+            }
+            
+            // 确保 activeBranchMap 存在
+            if (!conv.activeBranchMap) {
+                conv.activeBranchMap = {};
+            }
+            
+            // 构建父子关系映射
+            const childrenMap = {}; // parentId -> [children]
+            conv.messages.forEach(msg => {
+                const pId = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
+                if (!childrenMap[pId]) {
+                    childrenMap[pId] = [];
+                }
+                childrenMap[pId].push(msg);
+            });
+            
+            // 从根开始遍历
+            const path = [];
+            let currentParentId = 'root';
+            
+            while (childrenMap[currentParentId] && childrenMap[currentParentId].length > 0) {
+                const children = childrenMap[currentParentId];
+                let selectedChild = null;
+                
+                // 查找 activeBranchMap 中选中的子节点
+                const selectedId = conv.activeBranchMap[currentParentId];
+                if (selectedId) {
+                    selectedChild = children.find(c => c.id === selectedId);
+                }
+                
+                // 如果没有选中或选中的不存在，默认选择第一个（按创建时间排序）
+                if (!selectedChild) {
+                    // 按 createdAt 排序，选择最早的
+                    children.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+                    selectedChild = children[0];
+                    // 更新 activeBranchMap
+                    conv.activeBranchMap[currentParentId] = selectedChild.id;
+                }
+                
+                path.push(selectedChild);
+                currentParentId = selectedChild.id;
+            }
+            
+            return path;
+        },
+
+        /**
+         * 获取某条消息的所有兄弟节点（包括自己）
+         * @param {string} convId - 对话 ID
+         * @param {string} msgId - 消息 ID
+         * @returns {Object} { siblings: Array, currentIndex: number, total: number }
+         */
+        getSiblings(convId, msgId) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv) {
+                return { siblings: [], currentIndex: -1, total: 0 };
+            }
+            
+            const targetMsg = conv.messages.find(m => m.id === msgId);
+            if (!targetMsg) {
+                return { siblings: [], currentIndex: -1, total: 0 };
+            }
+            
+            const parentId = targetMsg.parentId === undefined || targetMsg.parentId === null ? 'root' : targetMsg.parentId;
+            
+            // 找到所有具有相同 parentId 的消息
+            const siblings = conv.messages.filter(m => {
+                const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
+                return pId === parentId;
+            });
+            
+            // 按创建时间排序
+            siblings.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            
+            const currentIndex = siblings.findIndex(s => s.id === msgId);
+            
+            return {
+                siblings,
+                currentIndex,
+                total: siblings.length
+            };
+        },
+
+        /**
+         * 切换到指定分支
+         * @param {string} convId - 对话 ID
+         * @param {string} msgId - 要切换到的消息 ID
+         * @returns {boolean} 是否成功切换
+         */
+        /**
+         * 切换到指定分支
+         * @param {string} convId - 对话 ID
+         * @param {string} msgId - 要切换到的消息 ID
+         * @param {Object} [options] - 选项
+         * @param {boolean} [options.silent=false] - 是否静默模式（不触发事件广播，由调用者负责 UI 更新）
+         * @returns {boolean} 是否成功切换
+         */
+        switchBranch(convId, msgId, options) {
+            options = options || {};
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv) return false;
+            
+            const targetMsg = conv.messages.find(m => m.id === msgId);
+            if (!targetMsg) return false;
+            
+            if (!conv.activeBranchMap) {
+                conv.activeBranchMap = {};
+            }
+            
+            const parentId = targetMsg.parentId === undefined || targetMsg.parentId === null ? 'root' : targetMsg.parentId;
+            
+            // 更新选中的分支
+            conv.activeBranchMap[parentId] = msgId;
+            
+            // 静默模式：只保存，不广播事件（调用者会自行处理 UI 更新）
+            if (options.silent) {
+                this.persistSilent();
+            } else {
+                this.persist();
+            }
+            return true;
+        },
+
+        /**
+         * 在指定位置创建分支（用于编辑重试）
+         * 创建一条新消息作为指定父消息的另一个子节点
+         * @param {string} convId - 对话 ID
+         * @param {string} parentMsgId - 父消息 ID（新消息将作为其子节点）
+         * @param {Object} newMessage - 新消息对象（不含 parentId，会自动设置）
+         * @returns {Object|null} 创建的消息对象
+         */
+        createBranch(convId, parentMsgId, newMessage) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv) return null;
+            
+            if (!conv.activeBranchMap) {
+                conv.activeBranchMap = {};
+            }
+            
+            // 设置父消息 ID
+            newMessage.parentId = parentMsgId;
+            
+            // 添加到消息列表
+            conv.messages.push(newMessage);
+            conv.updatedAt = Date.now();
+            
+            // 自动切换到新分支
+            const parentKey = parentMsgId === null ? 'root' : parentMsgId;
+            conv.activeBranchMap[parentKey] = newMessage.id;
+            
+            // Auto-title
+            if (newMessage.role === 'user') {
+                conv.title = window.IdoFront.utils.deriveTitleFromConversation(conv) || conv.title;
+            }
+            
+            this.persist();
+            return newMessage;
+        },
+
+        /**
+         * 迁移旧数据：为没有 parentId 的消息添加 parentId
+         * 按照原有顺序建立线性的父子关系
+         */
+        migrateMessagesToTree(convId) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv || !conv.messages) return;
+            
+            // 检查是否需要迁移（如果有任何消息没有 parentId 字段）
+            const needsMigration = conv.messages.some(m => m.parentId === undefined);
+            if (!needsMigration) return;
+            
+            // 按 createdAt 排序
+            const sortedMessages = [...conv.messages].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            
+            // 初始化 activeBranchMap
+            if (!conv.activeBranchMap) {
+                conv.activeBranchMap = {};
+            }
+            
+            // 为每条消息设置 parentId
+            sortedMessages.forEach((msg, index) => {
+                if (msg.parentId === undefined) {
+                    if (index === 0) {
+                        msg.parentId = null;
+                        conv.activeBranchMap['root'] = msg.id;
+                    } else {
+                        msg.parentId = sortedMessages[index - 1].id;
+                        conv.activeBranchMap[msg.parentId] = msg.id;
+                    }
+                }
+            });
+            
+            this.persist();
         },
 
         deleteConversation(id) {

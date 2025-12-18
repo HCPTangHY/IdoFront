@@ -209,12 +209,60 @@
     }
 
     /**
+     * 获取会话的 Gemini Google Search 配置
+     * @param {Object} conv - 会话对象
+     * @returns {boolean} 是否启用 Google Search
+     */
+    function getGoogleSearchConfig(conv) {
+        if (!conv) return false;
+        const geminiMeta = conv.metadata?.gemini || {};
+        return !!geminiMeta.googleSearch;
+    }
+
+    /**
+     * 设置会话的 Gemini Google Search 开关
+     * @param {Object} store - Store 实例
+     * @param {string} convId - 会话 ID
+     * @param {boolean} enabled - 是否启用
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.silent=false] - 是否静默模式（不触发事件广播）
+     */
+    function setGoogleSearch(store, convId, enabled, options) {
+        if (!store || !convId) return;
+        const conv = store.state.conversations.find(c => c.id === convId);
+        if (!conv) return;
+        
+        if (!conv.metadata) conv.metadata = {};
+        if (!conv.metadata.gemini) conv.metadata.gemini = {};
+        conv.metadata.gemini.googleSearch = enabled;
+        
+        // 使用静默持久化避免触发全局 UI 更新
+        if (options && options.silent) {
+            if (typeof store.persistSilent === 'function') {
+                store.persistSilent();
+            }
+        } else {
+            if (typeof store.persist === 'function') {
+                store.persist();
+            }
+        }
+    }
+
+    /**
      * 设置会话的 Gemini 代码执行开关
      * @param {Object} store - Store 实例
      * @param {string} convId - 会话 ID
      * @param {boolean} enabled - 是否启用
      */
-    function setCodeExecution(store, convId, enabled) {
+    /**
+     * 设置会话的 Gemini 代码执行开关
+     * @param {Object} store - Store 实例
+     * @param {string} convId - 会话 ID
+     * @param {boolean} enabled - 是否启用
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.silent=false] - 是否静默模式（不触发事件广播）
+     */
+    function setCodeExecution(store, convId, enabled, options) {
         if (!store || !convId) return;
         const conv = store.state.conversations.find(c => c.id === convId);
         if (!conv) return;
@@ -223,9 +271,90 @@
         if (!conv.metadata.gemini) conv.metadata.gemini = {};
         conv.metadata.gemini.codeExecution = enabled;
         
-        if (typeof store.persist === 'function') {
-            store.persist();
+        // 使用静默持久化避免触发全局 UI 更新
+        if (options && options.silent) {
+            if (typeof store.persistSilent === 'function') {
+                store.persistSilent();
+            }
+        } else {
+            if (typeof store.persist === 'function') {
+                store.persist();
+            }
         }
+    }
+
+    /**
+     * 处理 Grounding Metadata，生成引用链接
+     * @param {Object} groundingMetadata - Gemini API 返回的 grounding 元数据
+     * @param {string} content - 原始内容
+     * @returns {Object} 处理后的内容和引用信息
+     */
+    function processGroundingMetadata(groundingMetadata, content) {
+        if (!groundingMetadata) {
+            return { content, citations: null, searchQueries: null };
+        }
+        
+        const chunks = groundingMetadata.groundingChunks || [];
+        const supports = groundingMetadata.groundingSupports || [];
+        const searchQueries = groundingMetadata.webSearchQueries || [];
+        
+        // 如果没有引用支持，直接返回原内容
+        if (!supports.length || !chunks.length) {
+            return { content, citations: null, searchQueries };
+        }
+        
+        // 按 endIndex 降序排序，从后往前插入避免索引偏移
+        const sortedSupports = [...supports].sort((a, b) => {
+            const aEnd = a.segment?.endIndex ?? 0;
+            const bEnd = b.segment?.endIndex ?? 0;
+            return bEnd - aEnd;
+        });
+        
+        let processedContent = content;
+        const usedCitations = new Set();
+        
+        for (const support of sortedSupports) {
+            const endIndex = support.segment?.endIndex;
+            if (endIndex === undefined || !support.groundingChunkIndices?.length) {
+                continue;
+            }
+            
+            // 构建引用链接
+            const citationLinks = support.groundingChunkIndices
+                .map(i => {
+                    if (i < chunks.length) {
+                        const chunk = chunks[i];
+                        const uri = chunk.web?.uri;
+                        const title = chunk.web?.title || `来源 ${i + 1}`;
+                        if (uri) {
+                            usedCitations.add(i);
+                            return `[${i + 1}](${uri} "${title}")`;
+                        }
+                    }
+                    return null;
+                })
+                .filter(Boolean);
+            
+            if (citationLinks.length > 0) {
+                const citationString = ' ' + citationLinks.join(' ');
+                processedContent = processedContent.slice(0, endIndex) + citationString + processedContent.slice(endIndex);
+            }
+        }
+        
+        // 提取引用列表
+        const citations = chunks
+            .filter((_, i) => usedCitations.has(i))
+            .map((chunk, i) => ({
+                index: i + 1,
+                uri: chunk.web?.uri,
+                title: chunk.web?.title
+            }));
+        
+        return {
+            content: processedContent,
+            citations: citations.length > 0 ? citations : null,
+            searchQueries
+        };
     }
 
      // Helper: Convert Gemini parts to displayable content, reasoning, attachments and thoughtSignature
@@ -531,9 +660,16 @@
                 body.generationConfig = generationConfig;
             }
 
-            // Tools Config - 代码执行
+            // Tools Config - 代码执行和 Google Search
+            const tools = [];
             if (geminiMeta.codeExecution) {
-                body.tools = [{ codeExecution: {} }];
+                tools.push({ codeExecution: {} });
+            }
+            if (geminiMeta.googleSearch) {
+                tools.push({ google_search: {} });
+            }
+            if (tools.length > 0) {
+                body.tools = tools;
             }
 
             // Apply params override - 使用深度合并，避免覆盖嵌套对象
@@ -587,6 +723,7 @@
                     let lastThoughtSignature = null;
                     let lastFinishReason = null;
                     let streamUsageMetadata = null; // 流式响应中的 usage 信息
+                    let lastGroundingMetadata = null; // 流式响应中的 grounding 信息
 
                     try {
                         while (true) {
@@ -613,6 +750,11 @@
                                         // 提取 usageMetadata（Gemini API 的 usage 信息）
                                         if (json.usageMetadata) {
                                             streamUsageMetadata = json.usageMetadata;
+                                        }
+                                        
+                                        // 提取 groundingMetadata
+                                        if (candidate?.groundingMetadata) {
+                                            lastGroundingMetadata = candidate.groundingMetadata;
                                         }
                                         
                                         // 检测 finishReason - Gemini 的流式结束标志
@@ -676,6 +818,16 @@
 
                     let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
                     
+                    // 处理 Grounding Metadata，添加引用
+                    let citations = null;
+                    let searchQueries = null;
+                    if (lastGroundingMetadata) {
+                        const groundingResult = processGroundingMetadata(lastGroundingMetadata, content);
+                        content = groundingResult.content;
+                        citations = groundingResult.citations;
+                        searchQueries = groundingResult.searchQueries;
+                    }
+                    
                     // 处理非正常结束的情况，添加警告提示
                     const finishWarning = getFinishReasonWarning(lastFinishReason);
                     if (finishWarning) {
@@ -691,7 +843,9 @@
                                 attachments: attachments,
                                 metadata: {
                                     gemini: {
-                                        thoughtSignature: extractedSignature || lastThoughtSignature
+                                        thoughtSignature: extractedSignature || lastThoughtSignature,
+                                        citations: citations,
+                                        searchQueries: searchQueries
                                     }
                                 }
                             },
@@ -718,7 +872,18 @@
                     const thoughtSignature = candidate?.thoughtSignature;
                     const finishReason = candidate?.finishReason;
                     const usageMetadata = data.usageMetadata;
+                    const groundingMetadata = candidate?.groundingMetadata;
                     let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(parts);
+                    
+                    // 处理 Grounding Metadata，添加引用
+                    let citations = null;
+                    let searchQueries = null;
+                    if (groundingMetadata) {
+                        const groundingResult = processGroundingMetadata(groundingMetadata, content);
+                        content = groundingResult.content;
+                        citations = groundingResult.citations;
+                        searchQueries = groundingResult.searchQueries;
+                    }
                     
                     // 处理非正常结束的情况，添加警告提示
                     const finishWarning = getFinishReasonWarning(finishReason);
@@ -735,7 +900,9 @@
                                 attachments: attachments,
                                 metadata: {
                                     gemini: {
-                                        thoughtSignature: extractedSignature || thoughtSignature
+                                        thoughtSignature: extractedSignature || thoughtSignature,
+                                        citations: citations,
+                                        searchQueries: searchQueries
                                     }
                                 }
                             },
@@ -1219,38 +1386,16 @@
             wrapper.style.display = 'flex';
 
             const thinkingCfg = getThinkingConfig(conv);
-            const isCodeExecEnabled = getCodeExecutionConfig(conv);
             
             // 获取容器内的元素
             const budgetBtnEl = wrapper.querySelector('[data-gemini-budget-btn]');
             const levelGroupEl = wrapper.querySelector('[data-gemini-level-group]');
-            const toolsBtnEl = wrapper.querySelector('[data-gemini-tools-btn]');
-            const toolsBadgeEl = wrapper.querySelector('[data-gemini-tools-badge]');
-            
-            // 更新 Tools 按钮状态
-            if (toolsBtnEl) {
-                toolsBtnEl.style.display = 'inline-flex';
-                if (toolsBadgeEl) {
-                    toolsBadgeEl.style.display = isCodeExecEnabled ? 'block' : 'none';
-                }
-            }
 
             // 更新思考控件
             if (!hasThinking) {
                 if (budgetBtnEl) budgetBtnEl.style.display = 'none';
                 if (levelGroupEl) levelGroupEl.style.display = 'none';
-                // 隐藏分隔线
-                const divider = wrapper.querySelector('.ido-divider--vertical') || wrapper.querySelector('.bg-gray-200');
-                if (divider) divider.style.display = 'none';
-                const thinkingLabel = wrapper.querySelector('span.text-gray-400');
-                if (thinkingLabel) thinkingLabel.style.display = 'none';
             } else {
-                // 恢复显示
-                const divider = wrapper.querySelector('.ido-divider--vertical') || wrapper.querySelector('.bg-gray-200');
-                if (divider) divider.style.display = 'block';
-                const thinkingLabel = wrapper.querySelector('span.text-gray-400');
-                if (thinkingLabel) thinkingLabel.style.display = 'block';
-
                 if (useBudgetMode(model, channelConfig)) {
                 // Budget 模式：显示单个按钮，隐藏三按钮组
                 if (budgetBtnEl) {
@@ -1328,44 +1473,7 @@
             wrapper.id = WRAPPER_ID;
             wrapper.className = 'flex items-center gap-2';
             wrapper.style.display = 'none'; // 初始隐藏，由 updateThinkingControls 控制
-
-            // ===== Tools 按钮 =====
-            const toolsBtn = document.createElement('button');
-            toolsBtn.type = 'button';
-            toolsBtn.className = 'relative px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors flex items-center gap-1';
-            toolsBtn.setAttribute('data-gemini-tools-btn', 'true');
-            
-            const toolsIcon = document.createElement('span');
-            toolsIcon.className = 'material-symbols-outlined text-[14px]';
-            toolsIcon.textContent = 'build';
-            
-            const toolsText = document.createElement('span');
-            toolsText.textContent = 'tools';
-            
-            const toolsBadge = document.createElement('div');
-            toolsBadge.className = 'absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full border border-white';
-            toolsBadge.setAttribute('data-gemini-tools-badge', 'true');
-            toolsBadge.style.display = 'none';
-            
-            toolsBtn.appendChild(toolsIcon);
-            toolsBtn.appendChild(toolsText);
-            toolsBtn.appendChild(toolsBadge);
-            
-            toolsBtn.onclick = (e) => {
-                e.stopPropagation();
-                const store = getStore();
-                if (!store || !store.getActiveConversation) return;
-                const conv = store.getActiveConversation();
-                if (!conv) return;
-                showToolsBottomSheet(conv);
-            };
-            
-            wrapper.appendChild(toolsBtn);
-
-            // 分隔线
-            const divider = document.createElement('div');
-            divider.className = 'h-5 w-px bg-gray-200';
-            wrapper.appendChild(divider);
+            wrapper.style.order = '1'; // 核心渠道参数，排在左侧
 
             // 思考控件组
             const controlGroup = document.createElement('div');
@@ -1466,8 +1574,150 @@
         }
     }
     
+    /**
+     * 注册 Gemini Tools 到工具按钮插槽
+     * 使用 shouldShow 来判断是否在 Gemini 渠道下显示
+     * 使用 getState/setState 模式，直接在工具面板中显示开关
+     *
+     * 注意：inputTools API 使用队列机制，即使在 API 完全就绪前调用 register 也是安全的
+     */
+    function registerGeminiInputTools() {
+        // 代码执行工具
+        window.IdoFront.inputTools.register({
+            id: 'gemini-code-execution',
+            icon: 'code',
+            label: '代码执行',
+            description: '允许模型执行 Python 代码',
+            shouldShow: (ctx) => {
+                // 仅在 Gemini 渠道时显示
+                if (!ctx.activeChannel) return false;
+                return ctx.activeChannel.type === 'gemini';
+            },
+            getState: () => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return false;
+                const conv = store.getActiveConversation();
+                return getCodeExecutionConfig(conv);
+            },
+            setState: (enabled) => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return;
+                const conv = store.getActiveConversation();
+                if (!conv) return;
+                // 使用静默模式，避免触发全局 UI 更新导致卡顿
+                setCodeExecution(store, conv.id, enabled, { silent: true });
+            }
+        });
+        
+        // Google Search 工具
+        window.IdoFront.inputTools.register({
+            id: 'gemini-google-search',
+            icon: 'travel_explore',
+            label: 'Google 搜索',
+            description: '使用 Google 搜索增强回答的准确性',
+            shouldShow: (ctx) => {
+                // 仅在 Gemini 渠道时显示
+                if (!ctx.activeChannel) return false;
+                return ctx.activeChannel.type === 'gemini';
+            },
+            getState: () => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return false;
+                const conv = store.getActiveConversation();
+                return getGoogleSearchConfig(conv);
+            },
+            setState: (enabled) => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return;
+                const conv = store.getActiveConversation();
+                if (!conv) return;
+                // 使用静默模式，避免触发全局 UI 更新导致卡顿
+                setGoogleSearch(store, conv.id, enabled, { silent: true });
+            }
+        });
+    }
+    
+    /**
+     * 通过 Framework API 显示工具设置底部弹窗
+     */
+    function showToolsBottomSheetViaFramework(conv) {
+        const store = getStore();
+        if (!store) return;
+        
+        Framework.showBottomSheet((sheetContainer) => {
+            // Header
+            const header = document.createElement('div');
+            header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+            
+            const title = document.createElement('h3');
+            title.className = 'text-lg font-semibold text-gray-800';
+            title.textContent = 'Gemini 工具设置';
+            
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
+            closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
+            closeBtn.onclick = () => Framework.hideBottomSheet();
+            
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+            
+            // Body
+            const body = document.createElement('div');
+            body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-6';
+            
+            // 代码执行开关
+            const codeExecItem = document.createElement('div');
+            codeExecItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
+            
+            const info = document.createElement('div');
+            info.className = 'flex-1 pr-4';
+            const label = document.createElement('div');
+            label.className = 'font-bold text-gray-800';
+            label.textContent = '代码执行 (Code Execution)';
+            const desc = document.createElement('div');
+            desc.className = 'text-xs text-gray-500 mt-1';
+            desc.textContent = '允许模型生成并运行 Python 代码以解决复杂问题，如数据分析、数学计算、图表绘制等。';
+            info.appendChild(label);
+            info.appendChild(desc);
+            
+            const isEnabled = getCodeExecutionConfig(conv);
+            
+            // 使用 DeclarativeComponents 的开关样式
+            const switchLabel = document.createElement('label');
+            switchLabel.className = 'ido-form-switch';
+            const switchInput = document.createElement('input');
+            switchInput.type = 'checkbox';
+            switchInput.className = 'ido-form-switch__input';
+            switchInput.checked = isEnabled;
+            const slider = document.createElement('div');
+            slider.className = 'ido-form-switch__slider';
+            
+            switchInput.onchange = () => {
+                setCodeExecution(store, conv.id, switchInput.checked);
+                // 刷新工具按钮状态
+                if (window.IdoFront.inputTools && window.IdoFront.inputTools.refresh) {
+                    window.IdoFront.inputTools.refresh();
+                }
+            };
+            
+            switchLabel.appendChild(switchInput);
+            switchLabel.appendChild(slider);
+            
+            codeExecItem.appendChild(info);
+            codeExecItem.appendChild(switchLabel);
+            
+            body.appendChild(codeExecItem);
+            
+            sheetContainer.appendChild(header);
+            sheetContainer.appendChild(body);
+        });
+    }
+
     // 自动注册 UI 插件
     registerThinkingBudgetPlugin();
+    
+    // 注册 Gemini 工具（使用队列机制，无需延迟）
+    registerGeminiInputTools();
 
     // ========== 通用设置分区注册 ==========
     
@@ -1590,6 +1840,9 @@
     window.IdoFront.geminiChannel.setThinkingLevel = setThinkingLevel;
     window.IdoFront.geminiChannel.getCodeExecutionConfig = getCodeExecutionConfig;
     window.IdoFront.geminiChannel.setCodeExecution = setCodeExecution;
+    window.IdoFront.geminiChannel.getGoogleSearchConfig = getGoogleSearchConfig;
+    window.IdoFront.geminiChannel.setGoogleSearch = setGoogleSearch;
+    window.IdoFront.geminiChannel.processGroundingMetadata = processGroundingMetadata;
     window.IdoFront.geminiChannel.BUDGET_PRESETS = BUDGET_PRESETS;
     window.IdoFront.geminiChannel.LEVEL_OPTIONS = LEVEL_OPTIONS;
     window.IdoFront.geminiChannel.DEFAULT_THINKING_RULES = DEFAULT_THINKING_RULES;

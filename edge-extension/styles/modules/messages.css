@@ -32,7 +32,7 @@
 
 /* 角色标签 */
 .ido-message__role {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 0.25rem;
     font-size: 0.75rem;
@@ -45,6 +45,20 @@
 .ido-message__role-icon {
     font-size: 0.875rem;
     line-height: 1;
+}
+
+/* 消息时间 */
+.ido-message__time {
+    margin-left: auto;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    color: var(--ido-color-text-tertiary);
+    transition: opacity var(--ido-transition-fast);
+}
+
+/* 只有当存在分支切换器时，悬停才隐藏时间让位 */
+.ido-message:hover:has(.ido-branch-switcher) .ido-message__time {
+    opacity: 0;
 }
 
 /* 内容容器 */
@@ -80,11 +94,36 @@
    智能操作栏 (Action Bar)
    ======================================== */
 
-.ido-message__actions {
+/* 消息控制区容器 */
+.ido-message__controls {
     position: absolute;
-    top: 0;
+    top: -17px;
     right: var(--ido-spacing-lg);
-    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center; /* 恢复居中对齐，保持各自宽度 */
+    gap: 0;
+    z-index: 10;
+    opacity: 0;
+    transition: opacity var(--ido-transition-base);
+    pointer-events: none;
+}
+
+.ido-message:hover .ido-message__controls {
+    opacity: 1;
+}
+
+.ido-message--editing .ido-message__controls {
+    opacity: 1;
+}
+
+.ido-message__controls > * {
+    pointer-events: auto;
+}
+
+.ido-message__actions {
+    position: relative;
+    z-index: 2; /* 确保在上方 */
     display: flex;
     align-items: center;
     gap: var(--ido-spacing-xs);
@@ -93,18 +132,6 @@
     border: 1px solid var(--card-border);
     border-radius: var(--ido-radius-full);
     box-shadow: var(--ido-shadow-sm);
-    opacity: 0;
-    transition: opacity var(--ido-transition-base);
-    z-index: 10;
-}
-
-.ido-message:hover .ido-message__actions {
-    opacity: 1;
-}
-
-/* 编辑模式下常驻显示 */
-.ido-message--editing .ido-message__actions {
-    opacity: 1;
 }
 
 /* 操作按钮 */
@@ -188,11 +215,18 @@
     transition: all var(--ido-transition-fast);
 }
 
+/* popover 可见时 */
 .ido-message__popover--visible {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
 }
+
+/* 当 popover 打开时，临时提升整个 actions 的堆叠层级，确保不被分支切换器遮挡 */
+.ido-message__actions:has(.ido-message__popover--visible) {
+    z-index: 10;
+}
+
 
 .ido-message__popover button {
     display: flex;
@@ -764,5 +798,102 @@
     
     .ido-stats__item .material-symbols-outlined {
         font-size: 0.75rem;
+    }
+}
+
+/* ========================================
+   分支切换器 (Branch Switcher)
+   ======================================== */
+
+.ido-branch-switcher {
+    position: relative;
+    z-index: 3; /* 比 Action Bar (z-index: 2) 高，确保不被遮挡 */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    
+    /* 稍微向上重叠，保持紧凑感但不过分 */
+    margin-top: -4px;
+    padding: 4px 8px 2px 8px;
+    
+    background-color: var(--action-btn-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 0 0 12px 12px; /* 底部圆角 */
+    border-top: none; /* 移除顶部边框，实现视觉融合 */
+    
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05); /* 轻微阴影 */
+    font-size: 11px;
+    color: var(--ido-color-text-secondary);
+    user-select: none;
+    transition: all var(--ido-transition-fast);
+}
+
+.ido-branch-switcher:hover {
+    background-color: var(--action-btn-hover);
+}
+
+.ido-branch-switcher__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    color: var(--ido-color-text-secondary);
+    cursor: pointer;
+    transition: all var(--ido-transition-fast);
+}
+
+.ido-branch-switcher__btn .material-symbols-outlined {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.ido-branch-switcher__btn:hover:not(:disabled) {
+    background-color: var(--action-btn-hover);
+    color: var(--ido-color-primary);
+}
+
+.ido-branch-switcher__btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+}
+
+.ido-branch-switcher__btn .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.ido-branch-switcher__counter {
+    min-width: 20px;
+    text-align: center;
+    font-weight: 600;
+    font-family: var(--ido-font-mono, monospace);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.9;
+}
+
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .ido-branch-switcher {
+        padding: 2px 4px;
+    }
+    
+    .ido-branch-switcher__btn {
+        width: 16px;
+        height: 16px;
+    }
+    
+    .ido-branch-switcher__btn .material-symbols-outlined {
+        font-size: 12px;
+    }
+    
+    .ido-branch-switcher__counter {
+        min-width: 20px;
+        font-size: 10px;
     }
 }

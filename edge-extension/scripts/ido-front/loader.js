@@ -34,20 +34,15 @@
         'declarative-ui-renderer.js',   // 声明式 UI 渲染器入口
         'comlink-bridge.js',            // Comlink 主线程桥接
         
-        // 3. 外部插件加载器（依赖 channel-registry, hybrid-parser, declarative-ui, comlink-bridge）
+        // 3. 外部插件加载器
         'plugin-loader.js',
-        'channels/openai-channel.js',
-        'channels/openai-responses-channel.js',
-        'channels/gemini-channel.js',
-        'channels/gemini-deep-research-channel.js',  // Gemini Deep Research Agent
-        'channels/claude-channel.js',  // Anthropic Claude
         'service.js',
         
-        // 2. Actions 模块（依赖基础模块）
+        // 4. Actions 模块（依赖基础模块）
         'actions/conversation.js',
         'actions/message.js',
         
-        // 3. Plugins 模块（依赖基础模块和 Actions）
+        // 5. Plugins 模块（依赖基础模块和 Actions）
         'plugins/model-selector.js',
         'plugins/network-log-panel.js',
         'plugins/file-upload.js',
@@ -55,7 +50,14 @@
         'plugins/image-gallery/core.js',
         'plugins/image-gallery/view.js',
         'plugins/image-gallery.js',
-        'plugins/core-plugins.js',
+        'plugins/core-plugins.js',  // 必须在渠道之前加载，提供 inputTools API
+        
+        // 6. Channels（依赖 channel-registry 和 core-plugins 的 inputTools API）
+        'channels/openai-channel.js',
+        'channels/openai-responses-channel.js',
+        'channels/gemini-channel.js',
+        'channels/gemini-deep-research-channel.js',  // Gemini Deep Research Agent
+        'channels/claude-channel.js',  // Anthropic Claude
         // Builtin theme toggle (light / dark / system)
         'plugins/theme-toggle.js',
         

@@ -131,23 +131,92 @@
 
     /**
      * 同步 UI（将 Store 中的消息渲染到界面）
+     * 使用活跃路径（getActivePath）而非全部消息，以支持分支功能
+     * @param {Object} [options] - 可选配置
+     * @param {string} [options.focusMessageId] - 渲染后尝试滚动到的消息 ID（用于分支切换时保持位置）
+     * @param {boolean} [options.incrementalFromParent] - 增量更新模式：只更新 focusMessageId 之后的消息
      */
-    function syncUI() {
+    function syncUI(options) {
+        options = options || {};
         if (!context) return;
         
         const active = store.getActiveConversation();
         if (active) {
-            if (context.clearMessages) context.clearMessages();
+            const chatStream = document.getElementById('chat-stream');
+            
+            // 使用活跃路径而非全部消息，以支持分支功能
+            const activePath = store.getActivePath(active.id);
+            
+            // 性能优化：一次性构建 childrenMap，避免 getSiblings 对每条消息重复遍历 O(N²) -> O(N)
+            const childrenMap = {};
+            active.messages.forEach(m => {
+                const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
+                if (!childrenMap[pId]) childrenMap[pId] = [];
+                childrenMap[pId].push(m);
+            });
+            // 预排序所有分支
+            for (const key in childrenMap) {
+                childrenMap[key].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            }
+            
+            // 增量更新模式：只删除并重建 focusMessageId 之后的消息
+            let startIndex = 0;
+            let scrollAnchor = null;
+            let anchorOffsetTop = 0;
+            let preserveScrollTop = null;
+            
+            if (options.focusMessageId && options.incrementalFromParent && chatStream) {
+                const anchorEl = chatStream.querySelector(`[data-message-id="${options.focusMessageId}"]`);
+                if (anchorEl) {
+                    scrollAnchor = options.focusMessageId;
+                    anchorOffsetTop = anchorEl.getBoundingClientRect().top - chatStream.getBoundingClientRect().top;
+                    
+                    // 找到锚点消息在 activePath 中的位置
+                    const anchorIndex = activePath.findIndex(m => m.id === options.focusMessageId);
+                    if (anchorIndex !== -1) {
+                        startIndex = anchorIndex + 1; // 从锚点的下一条开始更新
+                        
+                        // 删除锚点之后的所有 DOM 节点
+                        let sibling = anchorEl.nextElementSibling;
+                        while (sibling) {
+                            const next = sibling.nextElementSibling;
+                            sibling.remove();
+                            sibling = next;
+                        }
+                        
+                        // 更新锚点消息的分支切换器（它的分支信息可能已改变）
+                        updateMessageBranchSwitcher(anchorEl, activePath[anchorIndex], childrenMap);
+                    }
+                } else {
+                    preserveScrollTop = chatStream.scrollTop;
+                }
+            } else if (options.focusMessageId && chatStream) {
+                const anchorEl = chatStream.querySelector(`[data-message-id="${options.focusMessageId}"]`);
+                if (anchorEl) {
+                    scrollAnchor = options.focusMessageId;
+                    anchorOffsetTop = anchorEl.getBoundingClientRect().top - chatStream.getBoundingClientRect().top;
+                } else {
+                    preserveScrollTop = chatStream.scrollTop;
+                }
+            } else if (options.preserveScroll && chatStream) {
+                preserveScrollTop = chatStream.scrollTop;
+            }
+            
+            // 如果不是增量更新，清空所有消息
+            if (startIndex === 0) {
+                if (context.clearMessages) context.clearMessages();
+            }
             
             // 使用 DocumentFragment 批量渲染，减少 DOM 重排
             const fragment = document.createDocumentFragment();
-            const chatStream = document.getElementById('chat-stream');
             
-            active.messages.forEach((msg, idx) => {
+            for (let idx = startIndex; idx < activePath.length; idx++) {
+                const msg = activePath[idx];
                 const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
                 const payload = {
                     content: msg.content,
-                    id: msg.id
+                    id: msg.id,
+                    createdAt: msg.createdAt  // 传递消息时间
                 };
                 
                 // 添加 reasoning（如果存在）
@@ -179,19 +248,47 @@
                     }
                 }
                 
+                // 添加分支信息（使用预构建的 childrenMap，O(1) 查找）
+                const parentKey = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
+                const siblings = childrenMap[parentKey] || [];
+                if (siblings.length > 1) {
+                    const currentIndex = siblings.findIndex(s => s.id === msg.id);
+                    payload.branchInfo = {
+                        currentIndex,
+                        total: siblings.length,
+                        siblings: siblings.map(s => s.id)
+                    };
+                }
+                
                 // 批量渲染：所有消息都不触发滚动，使用 fragment 作为目标容器
                 context.addMessage(uiRole, payload, {
                     noScroll: true,
                     targetContainer: fragment,
                     isHistorical: true  // 标记为历史消息，避免启动计时器
                 });
-            });
+            }
             
             // 一次性插入所有消息到 DOM
             if (chatStream && fragment.childNodes.length > 0) {
                 chatStream.appendChild(fragment);
-                // 滚动到底部
-                chatStream.scrollTop = chatStream.scrollHeight;
+            }
+            
+            // 恢复滚动位置
+            if (chatStream) {
+                if (scrollAnchor) {
+                    const anchorEl = chatStream.querySelector(`[data-message-id="${scrollAnchor}"]`);
+                    if (anchorEl) {
+                        const newOffsetTop = anchorEl.getBoundingClientRect().top - chatStream.getBoundingClientRect().top;
+                        chatStream.scrollTop += (newOffsetTop - anchorOffsetTop);
+                    } else if (preserveScrollTop !== null) {
+                        chatStream.scrollTop = preserveScrollTop;
+                    }
+                } else if (preserveScrollTop !== null) {
+                    chatStream.scrollTop = preserveScrollTop;
+                } else if (startIndex === 0) {
+                    // 完全重建时滚动到底部
+                    chatStream.scrollTop = chatStream.scrollHeight;
+                }
             }
             
             // 同步时也更新header
@@ -326,6 +423,54 @@
             item.appendChild(deleteBtn);
             listContainer.appendChild(item);
         });
+    }
+
+    /**
+     * 更新消息的分支切换器（用于增量更新时更新锚点消息）
+     */
+    function updateMessageBranchSwitcher(msgEl, msg, childrenMap) {
+        if (!msgEl || !msg) return;
+        
+        const parentKey = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
+        const siblings = childrenMap[parentKey] || [];
+        
+        // 查找现有的 controls 容器
+        const controls = msgEl.querySelector('.ido-message__controls');
+        if (!controls) return;
+        
+        // 查找现有的分支切换器
+        const existingSwitcher = controls.querySelector('.ido-branch-switcher');
+        
+        if (siblings.length > 1) {
+            const currentIndex = siblings.findIndex(s => s.id === msg.id);
+            const branchInfo = {
+                currentIndex,
+                total: siblings.length,
+                siblings: siblings.map(s => s.id)
+            };
+            
+            if (existingSwitcher) {
+                // 更新现有切换器的状态
+                const counter = existingSwitcher.querySelector('.ido-branch-switcher__counter');
+                if (counter) {
+                    counter.textContent = `${currentIndex + 1}/${siblings.length}`;
+                }
+                const prevBtn = existingSwitcher.querySelector('.ido-branch-switcher__btn:first-child');
+                const nextBtn = existingSwitcher.querySelector('.ido-branch-switcher__btn:last-child');
+                if (prevBtn) prevBtn.disabled = currentIndex === 0;
+                if (nextBtn) nextBtn.disabled = currentIndex === siblings.length - 1;
+            } else {
+                // 创建新的切换器（使用 FrameworkMessages 模块）
+                const FrameworkMessages = window.FrameworkMessages || (typeof globalThis !== 'undefined' && globalThis.FrameworkMessages);
+                if (FrameworkMessages && FrameworkMessages.createBranchSwitcher) {
+                    const newSwitcher = FrameworkMessages.createBranchSwitcher(msg.id, branchInfo);
+                    controls.appendChild(newSwitcher);
+                }
+            }
+        } else if (existingSwitcher) {
+            // 不再需要切换器
+            existingSwitcher.remove();
+        }
     }
 
     /**

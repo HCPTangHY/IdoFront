@@ -17,8 +17,8 @@
         context = frameworkInstance;
         store = storeInstance;
         
-        // 添加上传按钮到输入区域
-        addUploadButton();
+        // 使用插件系统注册上传按钮
+        registerUploadButton();
         
         // 添加预览容器
         addPreviewContainer();
@@ -30,12 +30,25 @@
     };
 
     /**
-     * 添加上传按钮
+     * 注册上传按钮到插件系统
      */
-    function addUploadButton() {
-        const leftActions = document.getElementById('slot-input-actions-left');
-        if (!leftActions) return;
-
+    function registerUploadButton() {
+        if (!context || !context.registerUIComponent) {
+            // 回退到直接添加
+            addUploadButtonDirect();
+            return;
+        }
+        
+        // 使用插件系统注册按钮，避免被 refreshSlot 清除
+        context.registerUIComponent(context.SLOTS.INPUT_ACTIONS_LEFT, 'core-file-upload', () => {
+            return createUploadButton();
+        });
+    }
+    
+    /**
+     * 创建上传按钮元素
+     */
+    function createUploadButton() {
         const uploadBtn = window.IdoUI.createIconButton({
             icon: 'attach_file',
             title: '上传文件或图片',
@@ -55,8 +68,16 @@
                 fileInput.click();
             }
         });
-
-        leftActions.appendChild(uploadBtn);
+        return uploadBtn;
+    }
+    
+    /**
+     * 直接添加上传按钮（回退方案）
+     */
+    function addUploadButtonDirect() {
+        const leftActions = document.getElementById('slot-input-actions-left');
+        if (!leftActions) return;
+        leftActions.appendChild(createUploadButton());
     }
 
     /**

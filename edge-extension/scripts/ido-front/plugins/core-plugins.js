@@ -77,6 +77,7 @@
         registerModelSelector();
         registerHeaderActions();
         registerMessageActions();
+        registerInputTools();
         
         // 恢复插件状态
         restorePluginStates();
@@ -430,7 +431,9 @@
         const registerUI = context.registerUIComponent || context.registerPlugin;
         registerUI(context.SLOTS.INPUT_TOP, 'core-chat-toggles', () => {
             const container = document.createElement('div');
+            container.id = 'stream-toggle-container'; // 添加 ID 方便定位
             container.className = 'flex items-center gap-3';
+            container.style.order = '10'; // 使用 order 控制顺序，确保在核心参数之后
 
             // ---- 流式开关 - iOS风格Toggle Switch ----
             const streamToggleWrapper = document.createElement('div');
@@ -503,38 +506,48 @@
         // 优先使用 registerUIBundle（纯 UI 组件），回退到 registerPluginBundle
         const registerBundle = context.registerUIBundle || context.registerPluginBundle;
         
+        // 定义 MESSAGE_MORE_ACTIONS 的组件
+        const moreActionsComponents = [
+            {
+                id: 'copy',
+                enabled: true,
+                render: (msg) => {
+                    const copyItem = document.createElement('button');
+                    copyItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">content_copy</span><span>复制</span>';
+                    copyItem.onclick = () => {
+                        const text = msg.text || msg.content;
+                        navigator.clipboard.writeText(text);
+                    };
+                    return copyItem;
+                }
+            },
+            {
+                id: 'delete',
+                enabled: true,
+                render: (msg) => {
+                    const deleteItem = document.createElement('button');
+                    deleteItem.className = 'danger';
+                    deleteItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span><span>删除</span>';
+                    deleteItem.onclick = () => {
+                        if (conversationActions && conversationActions.deleteMessage) {
+                            conversationActions.deleteMessage(msg.id);
+                        }
+                    };
+                    return deleteItem;
+                }
+            }
+        ];
+        
+        // 手动添加到 moreActionsRegistry
+        moreActionsComponents.forEach(comp => {
+            moreActionsRegistry.push(comp);
+        });
+        
         // 使用 registerUIBundle 统一注册消息操作相关的所有 UI（无需 meta）
         registerBundle('core-message-actions', {
             slots: {
                 // 同一个 slot 注册多个组件：复制和删除按钮
-                [context.SLOTS.MESSAGE_MORE_ACTIONS]: [
-                    {
-                        id: 'copy',
-                        render: (msg) => {
-                            const copyItem = document.createElement('button');
-                            copyItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">content_copy</span><span>复制</span>';
-                            copyItem.onclick = () => {
-                                const text = msg.text || msg.content;
-                                navigator.clipboard.writeText(text);
-                            };
-                            return copyItem;
-                        }
-                    },
-                    {
-                        id: 'delete',
-                        render: (msg) => {
-                            const deleteItem = document.createElement('button');
-                            deleteItem.className = 'danger';
-                            deleteItem.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span><span>删除</span>';
-                            deleteItem.onclick = () => {
-                                if (conversationActions && conversationActions.deleteMessage) {
-                                    conversationActions.deleteMessage(msg.id);
-                                }
-                            };
-                            return deleteItem;
-                        }
-                    }
-                ],
+                [context.SLOTS.MESSAGE_MORE_ACTIONS]: moreActionsComponents,
                 // 主操作栏
                 [context.SLOTS.MESSAGE_FOOTER]: (msg) => {
                     const container = document.createElement('div');
@@ -616,6 +629,287 @@
             }
         });
     }
+
+    /**
+     * 7. 输入框工具按钮（插槽）
+     *
+     * 工具注册格式：
+     * {
+     *   id: string,           // 工具唯一标识
+     *   icon: string,         // Material icon 名称
+     *   label: string,        // 工具显示名称
+     *   description?: string, // 工具描述（可选）
+     *   shouldShow?: (context) => boolean,  // 动态判断是否显示（可选）
+     *   onClick: () => void   // 点击回调
+     * }
+     */
+    
+    // 工具注册表
+    const inputToolsRegistry = [];
+    // 待处理的注册请求队列（在 API 就绪前调用的注册）
+    const pendingToolRegistrations = [];
+    
+    function registerInputTools() {
+        // 获取当前可见的工具列表
+        const getVisibleTools = () => {
+            const toolContext = {
+                store: store,
+                activeChannel: store.getActiveChannel ? store.getActiveChannel() : null,
+                activeConversation: store.getActiveConversation ? store.getActiveConversation() : null,
+                activePersona: store.getActivePersona ? store.getActivePersona() : null
+            };
+            
+            return inputToolsRegistry.filter(tool => {
+                if (typeof tool.shouldShow === 'function') {
+                    try {
+                        return tool.shouldShow(toolContext);
+                    } catch (e) {
+                        console.error(`[InputTools] shouldShow error for ${tool.id}:`, e);
+                        return false;
+                    }
+                }
+                return true; // 默认显示
+            });
+        };
+
+        // 更新触发按钮的可见性
+        const updateToolsTriggerVisibility = () => {
+            const triggerBtn = document.getElementById('core-input-tools-trigger');
+            if (triggerBtn) {
+                const visibleTools = getVisibleTools();
+                triggerBtn.classList.toggle('hidden', visibleTools.length === 0);
+            }
+        };
+
+        // 注册触发按钮到左侧操作区
+        context.registerUIComponent(context.SLOTS.INPUT_ACTIONS_LEFT, 'core-input-tools-trigger', () => {
+            const btn = context.ui.createIconButton({
+                icon: 'construction',
+                title: '工具',
+                className: 'text-gray-600 hover:text-blue-600 hidden', // 默认隐藏
+                iconClassName: 'material-symbols-outlined text-[18px]',
+                id: 'core-input-tools-trigger',
+                onClick: () => {
+                    showInputToolsSheet();
+                }
+            });
+            
+            // 延迟检查
+            setTimeout(updateToolsTriggerVisibility, 100);
+            return btn;
+        });
+
+        // 监听状态变化，动态更新工具按钮可见性
+        if (store.events && typeof store.events.on === 'function') {
+            store.events.on('updated', updateToolsTriggerVisibility);
+            store.events.on('channel:changed', updateToolsTriggerVisibility);
+            store.events.on('conversation:switched', updateToolsTriggerVisibility);
+        }
+
+        const showInputToolsSheet = () => {
+            context.showBottomSheet((sheetContainer) => {
+                // Header
+                const header = document.createElement('div');
+                header.className = "px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white";
+                
+                const title = document.createElement('h3');
+                title.className = "text-lg font-semibold text-gray-800";
+                title.textContent = "工具";
+                
+                const closeBtn = document.createElement('button');
+                closeBtn.className = "text-gray-400 hover:text-gray-600 transition-colors";
+                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
+                closeBtn.onclick = () => context.hideBottomSheet();
+                
+                header.appendChild(title);
+                header.appendChild(closeBtn);
+                
+                // Body - 直接显示工具开关列表
+                const body = document.createElement('div');
+                body.className = "flex-1 overflow-y-auto px-6 py-4 space-y-3";
+                
+                // 获取当前可见的工具
+                const visibleTools = getVisibleTools();
+                
+                if (visibleTools.length > 0) {
+                    visibleTools.forEach(tool => {
+                        // 如果工具有 render 函数，使用它；否则使用默认的开关样式
+                        if (typeof tool.render === 'function') {
+                            const customEl = tool.render(body, context);
+                            if (customEl) body.appendChild(customEl);
+                        } else {
+                            // 默认开关样式
+                            const toolItem = document.createElement('div');
+                            toolItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
+                            
+                            const info = document.createElement('div');
+                            info.className = 'flex items-center gap-3 flex-1';
+                            
+                            // 图标
+                            const iconEl = document.createElement('span');
+                            iconEl.className = 'material-symbols-outlined text-[24px] text-gray-600';
+                            iconEl.textContent = tool.icon || 'build';
+                            
+                            const textGroup = document.createElement('div');
+                            textGroup.className = 'flex-1';
+                            
+                            const labelEl = document.createElement('div');
+                            labelEl.className = 'font-medium text-gray-800';
+                            labelEl.textContent = tool.label || tool.id;
+                            
+                            if (tool.description) {
+                                const descEl = document.createElement('div');
+                                descEl.className = 'text-xs text-gray-500 mt-0.5';
+                                descEl.textContent = tool.description;
+                                textGroup.appendChild(labelEl);
+                                textGroup.appendChild(descEl);
+                            } else {
+                                textGroup.appendChild(labelEl);
+                            }
+                            
+                            info.appendChild(iconEl);
+                            info.appendChild(textGroup);
+                            
+                            // 开关（如果工具提供 getState/setState）
+                            if (typeof tool.getState === 'function' && typeof tool.setState === 'function') {
+                                const switchLabel = document.createElement('label');
+                                switchLabel.className = 'ido-form-switch';
+                                const switchInput = document.createElement('input');
+                                switchInput.type = 'checkbox';
+                                switchInput.className = 'ido-form-switch__input';
+                                switchInput.checked = tool.getState();
+                                const slider = document.createElement('div');
+                                slider.className = 'ido-form-switch__slider';
+                                
+                                switchInput.onchange = () => {
+                                    tool.setState(switchInput.checked);
+                                };
+                                
+                                switchLabel.appendChild(switchInput);
+                                switchLabel.appendChild(slider);
+                                
+                                toolItem.appendChild(info);
+                                toolItem.appendChild(switchLabel);
+                            } else if (typeof tool.onClick === 'function') {
+                                // 没有开关，但有点击事件
+                                toolItem.className += ' cursor-pointer hover:bg-gray-100';
+                                toolItem.onclick = () => {
+                                    context.hideBottomSheet();
+                                    tool.onClick();
+                                };
+                                toolItem.appendChild(info);
+                                
+                                const arrow = document.createElement('span');
+                                arrow.className = 'material-symbols-outlined text-gray-400';
+                                arrow.textContent = 'chevron_right';
+                                toolItem.appendChild(arrow);
+                            } else {
+                                toolItem.appendChild(info);
+                            }
+                            
+                            body.appendChild(toolItem);
+                        }
+                    });
+                } else {
+                    const emptyContent = document.createElement('div');
+                    emptyContent.className = "text-center text-gray-500 py-10";
+                    emptyContent.textContent = "暂无可用工具";
+                    body.appendChild(emptyContent);
+                }
+                
+                sheetContainer.appendChild(header);
+                sheetContainer.appendChild(body);
+            });
+        };
+
+        // 内部注册函数
+        const doRegister = (toolDef) => {
+            if (!toolDef || !toolDef.id) {
+                console.warn('[InputTools] register() requires toolDef.id');
+                return false;
+            }
+            
+            // 检查是否已存在
+            const existingIndex = inputToolsRegistry.findIndex(t => t.id === toolDef.id);
+            if (existingIndex >= 0) {
+                inputToolsRegistry[existingIndex] = toolDef;
+            } else {
+                inputToolsRegistry.push(toolDef);
+            }
+            
+            // 更新按钮可见性
+            updateToolsTriggerVisibility();
+            return true;
+        };
+
+        // 暴露工具注册 API
+        window.IdoFront.inputTools = {
+            /**
+             * 注册一个输入工具
+             * @param {Object} toolDef - 工具定义
+             * @param {string} toolDef.id - 工具唯一标识
+             * @param {string} toolDef.icon - Material icon 名称
+             * @param {string} toolDef.label - 工具显示名称
+             * @param {string} [toolDef.description] - 工具描述
+             * @param {function} [toolDef.shouldShow] - 动态判断是否显示 (context) => boolean
+             * @param {function} toolDef.onClick - 点击回调
+             */
+            register: doRegister,
+            
+            /**
+             * 注销一个输入工具
+             * @param {string} id - 工具 ID
+             */
+            unregister: (id) => {
+                const index = inputToolsRegistry.findIndex(t => t.id === id);
+                if (index >= 0) {
+                    inputToolsRegistry.splice(index, 1);
+                    updateToolsTriggerVisibility();
+                    return true;
+                }
+                return false;
+            },
+            
+            /**
+             * 获取所有已注册的工具
+             */
+            getAll: () => [...inputToolsRegistry],
+            
+            /**
+             * 获取当前可见的工具
+             */
+            getVisible: getVisibleTools,
+            
+            /**
+             * 手动刷新工具按钮可见性
+             */
+            refresh: updateToolsTriggerVisibility
+        };
+        
+        // 处理在 API 就绪前排队的注册请求
+        while (pendingToolRegistrations.length > 0) {
+            const toolDef = pendingToolRegistrations.shift();
+            doRegister(toolDef);
+        }
+        
+        // 触发就绪事件
+        if (typeof document !== 'undefined') {
+            document.dispatchEvent(new CustomEvent('IdoFrontInputToolsReady'));
+        }
+    }
+    
+    // 提供一个早期可用的注册入口（在 corePlugins.init 之前也能调用）
+    // 如果 API 已就绪，直接注册；否则加入队列
+    window.IdoFront.inputTools = window.IdoFront.inputTools || {
+        register: (toolDef) => {
+            pendingToolRegistrations.push(toolDef);
+            return true;
+        },
+        unregister: () => false,
+        getAll: () => [],
+        getVisible: () => [],
+        refresh: () => {}
+    };
     
     /**
      * 获取 MESSAGE_MORE_ACTIONS 插槽的插件

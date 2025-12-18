@@ -15,12 +15,14 @@
         icon,
         title,
         className = '',
+        id = '',
         variant = 'ghost', // 'primary', 'secondary', 'ghost', 'danger'
         size = 'md', // 'sm', 'md', 'lg'
         iconClassName = 'material-symbols-outlined text-[18px]',
         onClick
     } = {}) {
         const btn = document.createElement('button');
+        if (id) btn.id = id;
         if (label) {
             // 有标签的按钮使用 ido-btn
             btn.className = `ido-btn ido-btn--${variant} ido-btn--${size}`;

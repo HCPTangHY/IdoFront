@@ -673,6 +673,7 @@
             wrapper.id = REASONING_WRAPPER_ID;
             wrapper.className = 'flex items-center gap-2';
             wrapper.style.display = 'none';
+            wrapper.style.order = '1'; // 核心渠道参数，排在左侧
             
             const divider = document.createElement('div');
             divider.className = 'h-5 w-px bg-gray-200';
@@ -727,12 +728,12 @@
                 return window.IdoFront.geminiChannel.BUDGET_PRESETS;
             }
             return [
-                { value: -1, label: '自动', description: '动态思考，模型自行决定' },
-                { value: 0, label: '关闭', description: '关闭思考功能' },
-                { value: 1024, label: '低', description: '1024 tokens' },
-                { value: 8192, label: '中', description: '8192 tokens' },
-                { value: 24576, label: '高', description: '24576 tokens' },
-                { value: 32768, label: '最高', description: '32768 tokens' }
+                { value: -1, label: '自动', description: '动态思考，模型自行决定', bars: 0, icon: 'magic_button' },
+                { value: 0, label: '关闭', description: '关闭思考功能', bars: 0, icon: 'block' },
+                { value: 1024, label: '最小', description: '1024 tokens', bars: 1 },
+                { value: 4096, label: '低', description: '4096 tokens', bars: 2 },
+                { value: 16384, label: '中', description: '16384 tokens', bars: 3 },
+                { value: 32768, label: '高', description: '32768 tokens', bars: 4 }
             ];
         }
         
@@ -773,58 +774,60 @@
                 header.appendChild(closeBtn);
                 
                 const body = document.createElement('div');
-                body.className = 'flex-1 overflow-y-auto px-6 py-4';
+                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-4';
                 
                 const thinkingCfg = getGeminiThinkingConfig();
                 let currentBudget = thinkingCfg.budget;
                 
-                const description = document.createElement('div');
-                description.className = 'text-sm text-gray-600 mb-4';
-                description.textContent = '通过 OpenAI 兼容接口调用 Gemini 时的思考预算配置。';
-                body.appendChild(description);
-
-                const presetsWrapper = document.createElement('div');
-                presetsWrapper.className = 'grid grid-cols-3 gap-3 mb-6';
-
-                const presetButtons = [];
-                BUDGET_PRESETS.forEach(preset => {
-                    const btn = document.createElement('button');
-                    btn.type = 'button';
-                    btn.className = 'px-3 py-2.5 text-sm rounded-lg border transition-all transform hover:-translate-y-0.5 duration-200';
+                BUDGET_PRESETS.forEach(opt => {
+                    const item = document.createElement('div');
+                    const isActive = currentBudget === opt.value;
                     
-                    const labelDiv = document.createElement('div');
-                    labelDiv.className = 'font-medium';
-                    labelDiv.textContent = preset.label;
+                    item.className = `p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 mb-2 ${
+                        isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
+                    }`;
                     
-                    const descDiv = document.createElement('div');
-                    descDiv.className = 'text-[10px] mt-0.5 opacity-70';
-                    descDiv.textContent = preset.description;
-                    
-                    btn.appendChild(labelDiv);
-                    btn.appendChild(descDiv);
-                    
-                    btn.onclick = () => {
-                        currentBudget = preset.value;
-                        setThinkingBudget(store, conv.id, currentBudget);
-                        presetButtons.forEach(b => {
-                            b.classList.remove('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                            b.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
-                        });
-                        btn.classList.remove('bg-white', 'text-gray-700', 'border-gray-200');
-                        btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
-                        updateGeminiThinkingControls();
-                    };
-                    
-                    if (currentBudget === preset.value) {
-                        btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600', 'shadow-md');
+                    const visual = document.createElement('div');
+                    visual.className = 'flex gap-0.5 items-end h-5 w-8 flex-shrink-0';
+                    if (opt.icon) {
+                        visual.innerHTML = `<span class="material-symbols-outlined text-gray-400 text-[20px]">${opt.icon}</span>`;
                     } else {
-                        btn.classList.add('bg-white', 'text-gray-700', 'border-gray-200');
+                        for(let i=1; i<=4; i++) {
+                            const bar = document.createElement('div');
+                            bar.className = 'w-1.5 rounded-t-sm transition-all';
+                            bar.style.height = `${(i/4)*100}%`;
+                            bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
+                            visual.appendChild(bar);
+                        }
                     }
                     
-                    presetButtons.push(btn);
-                    presetsWrapper.appendChild(btn);
+                    const info = document.createElement('div');
+                    info.className = 'flex-1';
+                    const label = document.createElement('div');
+                    label.className = `text-sm font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
+                    label.textContent = opt.label;
+                    const desc = document.createElement('div');
+                    desc.className = 'text-[10px] text-gray-500';
+                    desc.textContent = opt.description;
+                    info.appendChild(label);
+                    info.appendChild(desc);
+                    
+                    item.appendChild(visual);
+                    item.appendChild(info);
+                    if (isActive) {
+                        const check = document.createElement('span');
+                        check.className = 'material-symbols-outlined text-blue-500 text-[20px]';
+                        check.textContent = 'check_circle';
+                        item.appendChild(check);
+                    }
+                    
+                    item.onclick = () => {
+                        setThinkingBudget(store, conv.id, opt.value);
+                        hideBottomSheet();
+                        updateGeminiThinkingControls();
+                    };
+                    body.appendChild(item);
                 });
-                body.appendChild(presetsWrapper);
                 
                 sheetContainer.appendChild(header);
                 sheetContainer.appendChild(body);
@@ -885,7 +888,7 @@
                 if (levelGroupEl) {
                     levelGroupEl.style.display = 'flex';
                     const currentLevel = thinkingCfg.level;
-                    ['none', 'low', 'high'].forEach(key => {
+                    ['minimal', 'low', 'medium', 'high'].forEach(key => {
                         const btn = levelState.buttons[key];
                         if (!btn) return;
                         btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600');
@@ -905,6 +908,7 @@
             wrapper.id = GEMINI_WRAPPER_ID;
             wrapper.className = 'flex items-center gap-2';
             wrapper.style.display = 'none';
+            wrapper.style.order = '1'; // 核心渠道参数，排在左侧
             
             const divider = document.createElement('div');
             divider.className = 'h-5 w-px bg-gray-200';
@@ -958,15 +962,17 @@
                 return btn;
             };
             
-            const noneBtn = createLevelBtn('none', 'N', '思考等级：无 (None)');
+            const minimalBtn = createLevelBtn('minimal', 'Min', '思考等级：最小 (Minimal)');
             const lowBtn = createLevelBtn('low', 'L', '思考等级：低 (Low)');
+            const mediumBtn = createLevelBtn('medium', 'M', '思考等级：中 (Medium)');
             const highBtn = createLevelBtn('high', 'H', '思考等级：高 (High)');
             
-            levelGroup.appendChild(noneBtn);
+            levelGroup.appendChild(minimalBtn);
             levelGroup.appendChild(lowBtn);
+            levelGroup.appendChild(mediumBtn);
             levelGroup.appendChild(highBtn);
             
-            levelState.buttons = { none: noneBtn, low: lowBtn, high: highBtn };
+            levelState.buttons = { minimal: minimalBtn, low: lowBtn, medium: mediumBtn, high: highBtn };
             
             controlGroup.appendChild(levelGroup);
             wrapper.appendChild(controlGroup);

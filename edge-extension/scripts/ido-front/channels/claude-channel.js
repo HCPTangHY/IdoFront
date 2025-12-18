@@ -782,6 +782,7 @@
                         wrapper.id = WRAPPER_ID;
                         wrapper.className = 'flex items-center gap-2';
                         wrapper.style.display = 'none';
+                        wrapper.style.order = '1'; // 核心渠道参数，排在左侧
 
                         // Divider
                         const divider = document.createElement('div');

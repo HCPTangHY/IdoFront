@@ -279,7 +279,9 @@
             const api = frameworkApi || Framework;
 
             const container = document.createElement('div');
-            container.className = 'w-full flex items-center justify-between gap-2';
+            container.className = 'flex items-center gap-2'; // 移除 w-full 和 justify-between，让容器自适应内容宽度
+            container.style.order = '90'; // 辅助工具，排在右侧
+            container.style.marginLeft = 'auto'; // 利用 auto margin 推向右侧
 
             // 左侧：视图开关
             const leftGroup = document.createElement('div');

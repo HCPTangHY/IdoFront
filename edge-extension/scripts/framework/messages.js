@@ -175,6 +175,32 @@ const FrameworkMessages = (function() {
     }
 
     /**
+     * 格式化消息时间
+     */
+    function formatMessageTime(timestamp) {
+        if (!timestamp) return '';
+        
+        const date = new Date(timestamp);
+        const now = new Date();
+        const isToday = date.toDateString() === now.toDateString();
+        
+        const timeStr = date.toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        
+        if (isToday) {
+            return timeStr;
+        } else {
+            const dateStr = date.toLocaleDateString('zh-CN', {
+                month: 'numeric',
+                day: 'numeric'
+            });
+            return `${dateStr} ${timeStr}`;
+        }
+    }
+
+    /**
      * 添加消息
      */
     function addMessage(role, textOrObj, options) {
@@ -189,6 +215,8 @@ const FrameworkMessages = (function() {
         let modelName = null;
         let channelName = null;
         let stats = null;
+        let branchInfo = null;
+        let createdAt = null;
 
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
@@ -198,12 +226,14 @@ const FrameworkMessages = (function() {
             modelName = textOrObj.modelName || null;
             channelName = textOrObj.channelName || null;
             stats = textOrObj.stats || null;
+            branchInfo = textOrObj.branchInfo || null;
+            createdAt = textOrObj.createdAt || null;
             if (textOrObj.id) id = textOrObj.id;
         }
 
         const targetContainer = options.targetContainer || ui.chatStream;
 
-        const msg = { role, text, reasoning, id, attachments };
+        const msg = { role, text, reasoning, id, attachments, branchInfo };
         state.messages.push(msg);
 
         const card = document.createElement('div');
@@ -211,17 +241,20 @@ const FrameworkMessages = (function() {
         card.dataset.messageId = id;
         card.dataset.role = role;
 
-        // 角色标签
+        // 角色标签和时间
         const roleLabel = document.createElement('div');
         roleLabel.className = 'ido-message__role';
+        
+        const timeHtml = createdAt ? `<span class="ido-message__time">${formatMessageTime(createdAt)}</span>` : '';
+        
         if (role === 'user') {
-            roleLabel.innerHTML = '<span class="material-symbols-outlined ido-message__role-icon">person</span>User';
+            roleLabel.innerHTML = `<span class="material-symbols-outlined ido-message__role-icon">person</span>User${timeHtml}`;
         } else {
             let aiLabel = 'AI';
             if (modelName && channelName) {
                 aiLabel = `<strong>${modelName} | ${channelName}</strong>`;
             }
-            roleLabel.innerHTML = `<span class="material-symbols-outlined ido-message__role-icon">auto_awesome</span>${aiLabel}`;
+            roleLabel.innerHTML = `<span class="material-symbols-outlined ido-message__role-icon">auto_awesome</span>${aiLabel}${timeHtml}`;
         }
         card.appendChild(roleLabel);
 
@@ -264,17 +297,33 @@ const FrameworkMessages = (function() {
             card.appendChild(statsBar);
         }
 
-        // 操作栏
+        // 消息控制区（包含操作栏和分支切换器）
+        const controls = document.createElement('div');
+        controls.className = 'ido-message__controls';
+
+        // 操作栏 (Action Bar) - 放在第一位
         if (plugins) {
             const actionPlugins = plugins.getDynamicPlugins(plugins.SLOTS.MESSAGE_FOOTER, msg);
             if (actionPlugins.length > 0) {
                 const actions = document.createElement('div');
                 actions.className = 'ido-message__actions';
+                
                 actionPlugins.forEach(p => {
                     if (p) actions.appendChild(p);
                 });
-                card.appendChild(actions);
+                
+                controls.appendChild(actions);
             }
+        }
+
+        // 分支切换器 - 放在第二位
+        if (branchInfo && branchInfo.total > 1) {
+            const switcher = createBranchSwitcher(id, branchInfo);
+            controls.appendChild(switcher);
+        }
+
+        if (controls.hasChildNodes()) {
+            card.appendChild(controls);
         }
 
         targetContainer.appendChild(card);
@@ -385,6 +434,84 @@ const FrameworkMessages = (function() {
         });
 
         return attachmentsContainer;
+    }
+
+    /**
+     * 创建分支切换器
+     * @param {string} messageId - 当前消息 ID
+     * @param {Object} branchInfo - 分支信息 { currentIndex, total, siblings }
+     */
+    function createBranchSwitcher(messageId, branchInfo) {
+        const switcher = document.createElement('div');
+        switcher.className = 'ido-branch-switcher';
+        
+        // 左箭头
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'ido-branch-switcher__btn';
+        prevBtn.innerHTML = '<span class="material-symbols-outlined">chevron_left</span>';
+        prevBtn.disabled = branchInfo.currentIndex === 0;
+        prevBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (branchInfo.currentIndex > 0) {
+                const prevId = branchInfo.siblings[branchInfo.currentIndex - 1];
+                switchToBranch(prevId);
+            }
+        };
+        
+        // 计数器
+        const counter = document.createElement('span');
+        counter.className = 'ido-branch-switcher__counter';
+        counter.textContent = `${branchInfo.currentIndex + 1}/${branchInfo.total}`;
+        
+        // 右箭头
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'ido-branch-switcher__btn';
+        nextBtn.innerHTML = '<span class="material-symbols-outlined">chevron_right</span>';
+        nextBtn.disabled = branchInfo.currentIndex === branchInfo.total - 1;
+        nextBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (branchInfo.currentIndex < branchInfo.total - 1) {
+                const nextId = branchInfo.siblings[branchInfo.currentIndex + 1];
+                switchToBranch(nextId);
+            }
+        };
+        
+        switcher.appendChild(prevBtn);
+        switcher.appendChild(counter);
+        switcher.appendChild(nextBtn);
+        
+        return switcher;
+    }
+
+    /**
+     * 切换到指定分支
+     * @param {string} messageId - 要切换到的消息 ID
+     */
+    function switchToBranch(messageId) {
+        const store = window.IdoFront && window.IdoFront.store;
+        if (!store) return;
+        
+        const conv = store.getActiveConversation();
+        if (!conv) return;
+        
+        // 获取要切换消息的父消息 ID（父消息在切换前后的 DOM 中都存在）
+        const targetMsg = conv.messages.find(m => m.id === messageId);
+        const parentId = targetMsg ? targetMsg.parentId : null;
+        
+        // 切换分支（静默模式：不触发全局事件广播，由下方 syncUI 负责 UI 更新）
+        store.switchBranch(conv.id, messageId, { silent: true });
+        
+        // 重新渲染 UI，使用增量更新模式：只更新 parentId 之后的消息
+        if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
+            if (parentId) {
+                window.IdoFront.conversationActions.syncUI({
+                    focusMessageId: parentId,
+                    incrementalFromParent: true  // 启用增量更新
+                });
+            } else {
+                window.IdoFront.conversationActions.syncUI({ preserveScroll: true });
+            }
+        }
     }
 
     /**
@@ -713,9 +840,11 @@ const FrameworkMessages = (function() {
 
         if (!statsBar) {
             statsBar = createStatsBar(stats);
-            const actions = card.querySelector('.ido-message__actions');
-            if (actions) {
-                card.insertBefore(statsBar, actions);
+            // 查找 controls 容器（包含 actions 和 branchSwitcher），它是 card 的直接子元素
+            const controls = card.querySelector('.ido-message__controls');
+            if (controls) {
+                // 在 controls 之前插入 statsBar
+                card.insertBefore(statsBar, controls);
             } else {
                 card.appendChild(statsBar);
             }
@@ -869,6 +998,8 @@ const FrameworkMessages = (function() {
         getMessages,
         openLightbox,
         createStatsBar,
+        createBranchSwitcher,
+        switchToBranch,
         // 暴露状态供调试
         state
     };

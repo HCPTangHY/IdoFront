@@ -165,10 +165,82 @@ ui:
   SIDEBAR_BOTTOM:     # 侧边栏底部
   HEADER_ACTIONS:     # 聊天头部右侧
   INPUT_TOP:          # 输入框上方工具栏
-  INPUT_ACTIONS_LEFT: # 输入框内左侧
+  INPUT_ACTIONS_LEFT: # 输入框内左侧（附件按钮、工具按钮等）
   INPUT_ACTIONS_RIGHT:# 输入框内右侧
   MESSAGE_FOOTER:     # 消息气泡下方
   SETTINGS_GENERAL:   # 通用设置面板
+```
+
+### 5.2 输入工具 API（Input Tools）
+
+输入工具是一个专用 API，用于在输入框左侧显示工具按钮。当有工具注册时，会自动显示一个工具按钮（🔧），点击后弹出工具面板。
+
+#### 注册工具
+
+```javascript
+window.IdoFront.inputTools.register({
+    id: 'my-tool',                    // 工具唯一标识
+    icon: 'code',                     // Material Symbols 图标名
+    label: '我的工具',                  // 工具显示名称
+    description: '工具描述',            // 可选，显示在工具名称下方
+    shouldShow: (ctx) => {            // 可选，动态判断是否显示
+        // ctx 包含: store, activeChannel, activeConversation, activePersona
+        return ctx.activeChannel?.type === 'my-channel';
+    },
+    // 方式一：开关模式（推荐）
+    getState: () => {                 // 获取当前开关状态
+        // 返回 boolean
+    },
+    setState: (enabled) => {          // 设置开关状态
+        // enabled: boolean
+    },
+    // 方式二：点击模式（二选一）
+    onClick: () => {                  // 点击回调
+        // 执行操作
+    }
+});
+```
+
+#### API 方法
+
+```javascript
+// 注销工具
+window.IdoFront.inputTools.unregister('my-tool');
+
+// 获取所有已注册的工具
+const allTools = window.IdoFront.inputTools.getAll();
+
+// 获取当前可见的工具（根据 shouldShow 过滤）
+const visibleTools = window.IdoFront.inputTools.getVisible();
+
+// 手动刷新工具按钮可见性
+window.IdoFront.inputTools.refresh();
+```
+
+#### 示例：Gemini 代码执行工具
+
+```javascript
+window.IdoFront.inputTools.register({
+    id: 'gemini-code-execution',
+    icon: 'code',
+    label: '代码执行',
+    description: '允许模型执行 Python 代码',
+    shouldShow: (ctx) => ctx.activeChannel?.type === 'gemini',
+    getState: () => {
+        const conv = window.IdoFront.store.getActiveConversation();
+        return conv?.metadata?.gemini?.codeExecution || false;
+    },
+    setState: (enabled) => {
+        const store = window.IdoFront.store;
+        const conv = store.getActiveConversation();
+        if (!conv) return;
+        // 设置代码执行状态
+        if (!conv.metadata) conv.metadata = {};
+        if (!conv.metadata.gemini) conv.metadata.gemini = {};
+        conv.metadata.gemini.codeExecution = enabled;
+        store.persistSilent();  // 静默保存，避免触发全局 UI 更新
+    }
+});
 ```
 
 ### 5.2 内置组件

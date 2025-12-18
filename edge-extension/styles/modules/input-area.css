@@ -1,0 +1,128 @@
+/**
+ * input-area.css - 输入区域样式
+ * 包含：Input Toolbar (原 slot-input-top)、输入框增强、操作按钮布局
+ */
+
+/* ========================================
+   Input Toolbar (The New slot-input-top)
+   设计理念：有序收纳，灵动展示
+   ======================================== */
+
+#slot-input-top {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* 统一间距 */
+    width: 100%;
+    height: 40px; /* 固定高度，确保对齐 */
+    padding: 0 4px;
+    margin-bottom: 8px; /* 与输入框的间距 */
+    
+    /* 灵动滚动：不仅防挤压，还防溢出 */
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    
+    /* 隐藏滚动条但保留功能 (Chrome/Safari/Edge) */
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+    
+    /* 视觉微调 */
+    box-sizing: border-box;
+    /* 加上遮罩让滚动时的边缘淡出（可选，视具体 UI 风格而定，这里先留白） */
+}
+
+/* 隐藏滚动条 (Webkit) */
+#slot-input-top::-webkit-scrollbar {
+    display: none;
+}
+
+/* ========================================
+   Toolbar Items (统一规范)
+   所有直接挂载的子元素都应遵循此规范
+   ======================================== */
+
+#slot-input-top > * {
+    flex-shrink: 0; /* 防止被挤压变形 */
+    display: inline-flex;
+    align-items: center;
+    height: 28px; /* 统一高度，精致小巧 */
+    font-size: 13px; /* 适中的字号 */
+}
+
+/*
+   Order Strategy (插件自管理):
+   各插件通过 element.style.order 自行设置排序，与 DOM 插入顺序解耦。
+   推荐约定：
+   - 0-9: 核心渠道参数 (左侧) - 如 Thinking Budget
+   - 10-89: 通用控件 (中间) - 如 流式开关
+   - 90-99: 辅助工具 (右侧) - 如图片库、联网
+   
+   右侧工具可同时设置 margin-left: auto 将自身及后续元素推向右侧。
+   
+   注意：框架不硬编码插件 ID 的 order，由各插件 JS 代码自行管理。
+*/
+
+/* ========================================
+   Visual Style: Chip / Capsule (胶囊样式)
+   ======================================== */
+
+/* 为某些特定的文字标签添加胶囊样式 */
+#slot-input-top .status-chip {
+    padding: 0 10px;
+    border-radius: 999px;
+    background-color: var(--ido-color-bg-secondary);
+    border: 1px solid var(--ido-color-border);
+    color: var(--ido-color-text-secondary);
+    font-weight: 500;
+    transition: all 0.2s ease;
+    user-select: none;
+    cursor: default;
+}
+
+#slot-input-top .status-chip:hover {
+    background-color: var(--ido-color-bg-hover);
+    border-color: var(--ido-color-border-hover);
+    color: var(--ido-color-text-primary);
+}
+
+/* 可点击的胶囊 */
+#slot-input-top .status-chip.clickable {
+    cursor: pointer;
+}
+
+#slot-input-top .status-chip.clickable:active {
+    transform: scale(0.96);
+}
+
+/* 激活状态 */
+#slot-input-top .status-chip.active {
+    background-color: rgba(59, 130, 246, 0.1); /* Primary Blue tint */
+    border-color: var(--ido-color-primary);
+    color: var(--ido-color-primary);
+}
+
+/* ========================================
+   Action Buttons (Icon Only)
+   ======================================== */
+
+#slot-input-top .icon-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 6px;
+    background-color: transparent;
+    color: var(--ido-color-text-secondary);
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#slot-input-top .icon-btn:hover {
+    background-color: var(--ido-color-bg-hover);
+    color: var(--ido-color-text-primary);
+}
+
+#slot-input-top .icon-btn.active {
+    color: var(--ido-color-primary);
+    background-color: rgba(59, 130, 246, 0.1);
+}
