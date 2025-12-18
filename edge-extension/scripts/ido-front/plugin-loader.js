@@ -37,7 +37,8 @@
             pluginResources.set(pluginId, {
                 channelTypes: new Set(),
                 uiComponents: new Map(),
-                styleElement: null
+                styleElement: null,
+                linkElements: []
             });
         }
         return pluginResources.get(pluginId);
@@ -70,8 +71,31 @@
             bucket.styleElement.remove();
             bucket.styleElement = null;
         }
+        if (bucket.linkElements) {
+            bucket.linkElements.forEach(link => link.remove());
+            bucket.linkElements = [];
+        }
 
         let css = stylesConfig.css;
+        const linkElements = [];
+
+        // 提取并处理 @import 规则 - 将其转换为 <link> 标签
+        const importRegex = /@import\s+url\(['"]?([^'")\s]+)['"]?\)\s*;?/gi;
+        let match;
+        while ((match = importRegex.exec(css)) !== null) {
+            const url = match[1];
+            const linkElement = document.createElement('link');
+            linkElement.rel = 'stylesheet';
+            linkElement.href = url;
+            linkElement.setAttribute('data-plugin', pluginId);
+            linkElement.setAttribute('data-plugin-import', 'true');
+            document.head.appendChild(linkElement);
+            linkElements.push(linkElement);
+            console.info(`[PluginLoader] Injected font link for plugin: ${pluginId} -> ${url}`);
+        }
+        
+        // 从 CSS 中移除 @import 规则（已转换为 <link>）
+        css = css.replace(importRegex, '');
 
         // 如果是 scoped 模式，为所有选择器添加插件 ID 前缀
         if (stylesConfig.scoped) {
@@ -80,10 +104,23 @@
 
         const styleElement = document.createElement('style');
         styleElement.setAttribute('data-plugin', pluginId);
+        styleElement.setAttribute('data-plugin-priority', 'high');
         styleElement.textContent = css;
-        document.head.appendChild(styleElement);
+        
+        // 将样式插入到 <head> 的最后，确保最高优先级
+        // 如果有其他插件样式，插入到它们之后
+        const existingPluginStyles = document.querySelectorAll('style[data-plugin]');
+        if (existingPluginStyles.length > 0) {
+            const lastPluginStyle = existingPluginStyles[existingPluginStyles.length - 1];
+            if (lastPluginStyle !== styleElement) {
+                lastPluginStyle.after(styleElement);
+            }
+        } else {
+            document.head.appendChild(styleElement);
+        }
 
         bucket.styleElement = styleElement;
+        bucket.linkElements = linkElements;
         console.info(`[PluginLoader] Injected CSS for plugin: ${pluginId}`);
     }
 
@@ -133,8 +170,12 @@
         if (bucket?.styleElement) {
             bucket.styleElement.remove();
             bucket.styleElement = null;
-            console.info(`[PluginLoader] Removed CSS for plugin: ${pluginId}`);
         }
+        if (bucket?.linkElements) {
+            bucket.linkElements.forEach(link => link.remove());
+            bucket.linkElements = [];
+        }
+        console.info(`[PluginLoader] Removed CSS for plugin: ${pluginId}`);
     }
 
     /**

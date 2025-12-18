@@ -226,6 +226,25 @@
                 return await mainThreadAPI.updateConversationMetadata(conv.id, { [key]: null });
             },
             
+            // DOM Class API - 用于主题插件操作主页面的 body class
+            addBodyClass(className) {
+                mainThreadAPI.addBodyClass(className);
+            },
+            
+            removeBodyClass(className) {
+                mainThreadAPI.removeBodyClass(className);
+            },
+            
+            toggleBodyClass(className, force) {
+                mainThreadAPI.toggleBodyClass(className, force);
+            },
+            
+            // 设置变更监听
+            onSettingsChange(callback) {
+                const eventName = `plugin-settings:${pluginId}:changed`;
+                return IdoFront.store.events.on(eventName, callback);
+            },
+            
             registerChannel(adapter) {
                 const channelConfig = meta.channel || {};
                 const channelId = channelConfig.type || pluginId;

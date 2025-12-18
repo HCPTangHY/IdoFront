@@ -93,6 +93,39 @@
             }
         },
         
+        // ============================================================
+        // DOM Class API (for theme plugins)
+        // ============================================================
+        
+        addBodyClass(className) {
+            if (typeof className !== 'string' || !className.trim()) return;
+            const sanitizedClass = className.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+            document.documentElement.classList.add(sanitizedClass);
+            document.body.classList.add(sanitizedClass);
+        },
+        
+        removeBodyClass(className) {
+            if (typeof className !== 'string' || !className.trim()) return;
+            const sanitizedClass = className.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+            document.documentElement.classList.remove(sanitizedClass);
+            document.body.classList.remove(sanitizedClass);
+        },
+        
+        toggleBodyClass(className, force) {
+            if (typeof className !== 'string' || !className.trim()) return;
+            const sanitizedClass = className.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+            if (force === true) {
+                document.documentElement.classList.add(sanitizedClass);
+                document.body.classList.add(sanitizedClass);
+            } else if (force === false) {
+                document.documentElement.classList.remove(sanitizedClass);
+                document.body.classList.remove(sanitizedClass);
+            } else {
+                document.documentElement.classList.toggle(sanitizedClass);
+                document.body.classList.toggle(sanitizedClass);
+            }
+        },
+        
         setSendButtonLoading(isLoading) {
             if (window.Framework?.setSendButtonLoading) {
                 window.Framework.setSendButtonLoading(isLoading);

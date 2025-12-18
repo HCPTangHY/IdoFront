@@ -466,6 +466,11 @@ const settings = await Plugin.getSettings();
 
 // 保存设置
 await Plugin.saveSettings({ option1: 'value' });
+
+// 监听设置变化
+Plugin.onSettingsChange((newSettings) => {
+  console.log('设置已更新:', newSettings);
+});
 ```
 
 ### 7.3 会话元数据
@@ -476,6 +481,9 @@ const meta = await Plugin.getConversationMeta();
 
 // 设置会话元数据
 await Plugin.setConversationMeta('myKey', 'myValue');
+
+// 清除会话元数据
+await Plugin.clearConversationMeta('myKey');
 ```
 
 ### 7.4 插件元数据
@@ -484,6 +492,30 @@ await Plugin.setConversationMeta('myKey', 'myValue');
 // 访问插件配置
 const { id, name, version, channel, settings } = Plugin.meta;
 ```
+
+### 7.5 DOM Class 操作（主题插件专用）
+
+> ⚠️ **重要**：插件脚本在沙箱 iframe 中执行，**不能直接操作主页面的 `document`**。
+> 使用 `document.body.classList` 等方法只会影响沙箱的 DOM，主页面不会有任何变化。
+
+主题插件需要使用 Plugin API 提供的专用方法操作主页面的 body class：
+
+```javascript
+// 添加 class 到主页面的 html 和 body 元素
+Plugin.addBodyClass('my-theme');
+
+// 移除 class
+Plugin.removeBodyClass('my-theme');
+
+// 切换 class（可选 force 参数）
+Plugin.toggleBodyClass('my-theme', true);   // 强制添加
+Plugin.toggleBodyClass('my-theme', false);  // 强制移除
+Plugin.toggleBodyClass('my-theme');         // 切换
+```
+
+**安全说明**：
+- 类名会自动清理，只允许字母、数字、下划线和连字符
+- 插件禁用时，请确保在脚本中清理添加的 class
 
 ## 8. 完整示例
 
@@ -545,7 +577,92 @@ ui:
             default: Hello, World!
 ```
 
-### 8.2 UI + Channel 组合（deep-research）
+### 8.2 主题插件（duties-theme）
+
+```yaml
+# duties-theme/plugin.yaml
+id: duties-theme
+version: 1.0.0
+name: Duties 主题
+description: 温暖奶油色调的阅读主题
+author: IdoFront Team
+icon: palette
+
+# 主题样式 - 使用 CSS 类选择器
+styles: |
+  /* 使用主题类选择器确保样式只在主题启用时生效 */
+  body.duties-theme {
+    --ido-color-bg-primary: #f1f0ee;
+    --ido-color-bg-secondary: #e8e7e5;
+    --ido-color-text-primary: #252525;
+  }
+  
+  html.duties-theme body,
+  body.duties-theme {
+    background-color: #f1f0ee !important;
+    font-family: 'Inter', sans-serif !important;
+    color: #252525 !important;
+  }
+  
+  /* 覆盖组件样式 */
+  body.duties-theme .ido-message {
+    border-radius: 0 !important;
+    background: transparent !important;
+  }
+
+# 设置表单
+settings:
+  fields:
+    enabled:
+      type: boolean
+      label: 启用主题
+      default: true
+
+# 声明式 UI（设置面板）
+ui:
+  SETTINGS_GENERAL:
+    - id: duties-style-settings
+      component: settings-form
+      props:
+        title: Duties 主题设置
+        icon: palette
+        order: 50
+        fields:
+          enabled:
+            type: boolean
+            label: 启用主题
+            default: true
+
+# 主题切换脚本
+script: |
+  (async function() {
+    const THEME_CLASS = 'duties-theme';
+    
+    function applyTheme(enabled) {
+      // ⚠️ 必须使用 Plugin.toggleBodyClass，不能直接操作 document
+      Plugin.toggleBodyClass(THEME_CLASS, enabled);
+    }
+    
+    // 初始化
+    const settings = await Plugin.getSettings();
+    applyTheme(settings.enabled !== false);
+    
+    // 监听设置变化
+    Plugin.onSettingsChange((newSettings) => {
+      applyTheme(newSettings.enabled !== false);
+    });
+  })();
+```
+
+**主题插件开发要点**：
+
+1. **使用 CSS 类选择器**：所有主题样式都以 `.my-theme` 或 `body.my-theme` 作为选择器前缀
+2. **使用 Plugin.toggleBodyClass**：在沙箱中无法直接操作主页面 DOM，必须使用 Plugin API
+3. **监听设置变化**：使用 `Plugin.onSettingsChange` 响应用户切换主题
+4. **使用 `!important`**：覆盖框架默认样式和 Tailwind 类
+5. **支持 CSS 变量**：覆盖 `--ido-color-*` 变量实现全局配色
+
+### 8.3 UI + Channel 组合（deep-research）
 
 ```yaml
 # gemini-deep-research/plugin.yaml
@@ -665,6 +782,7 @@ script: |
 
 - **示例插件**：[`examples/external-plugins/`](../examples/external-plugins/)
   - [`hello-panel/plugin.yaml`](../examples/external-plugins/hello-panel/plugin.yaml) - 纯 UI 插件
+  - [`duties-theme/plugin.yaml`](../examples/external-plugins/duties-theme/plugin.yaml) - 主题插件
   - [`skugemini-channel/plugin.yaml`](../examples/external-plugins/skugemini-channel/plugin.yaml) - 纯 Channel 插件
   - [`gemini-deep-research-channel/plugin.yaml`](../examples/external-plugins/gemini-deep-research-channel/plugin.yaml) - UI + Channel 组合
 - **框架源码**：

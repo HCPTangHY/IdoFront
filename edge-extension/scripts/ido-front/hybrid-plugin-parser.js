@@ -474,71 +474,19 @@ IdoFront.declarativeChannel.register('${channelId}', ${JSON.stringify(normalized
 
     /**
      * 生成沙箱执行代码
-     * 包装 JS 脚本并提供 Plugin API
-     * @param {Object} normalizedPlugin 
+     * 直接返回用户脚本，Plugin API 由沙箱的 executePlugin 注入
+     * @param {Object} normalizedPlugin
      * @returns {string}
      */
     function generateSandboxCode(normalizedPlugin) {
-        const pluginMeta = JSON.stringify({
-            id: normalizedPlugin.id,
-            version: normalizedPlugin.version,
-            name: normalizedPlugin.name,
-            settings: normalizedPlugin.settings,
-            channel: normalizedPlugin.channel
-        });
-
-        // 包装脚本，注入 Plugin API
-        return `
-(function() {
-    'use strict';
-
-    // Plugin API（由沙箱提供）
-    const Plugin = {
-        meta: ${pluginMeta},
-        
-        // 获取设置值
-        async getSettings() {
-            return await Framework.storage.getItem('plugin:${normalizedPlugin.id}:settings', ${JSON.stringify(getDefaultSettings(normalizedPlugin.settings))});
-        },
-        
-        // 保存设置值
-        async saveSettings(settings) {
-            return await Framework.storage.setItem('plugin:${normalizedPlugin.id}:settings', settings);
-        },
-        
-        // 获取会话元数据
-        async getConversationMeta() {
-            const conv = await IdoFront.store.getActiveConversation();
-            return conv && conv.metadata ? conv.metadata : {};
-        },
-        
-        // 更新会话元数据
-        async setConversationMeta(key, value) {
-            const conv = await IdoFront.store.getActiveConversation();
-            if (!conv) return;
-            await IdoFront.store.updateConversationMetadata(conv.id, { [key]: value });
-        },
-        
-        // 注册 Channel adapter
-        registerChannel(adapter) {
-            const channelConfig = Plugin.meta.channel || {};
-            const channelId = channelConfig.type || Plugin.meta.id;
-            
-            IdoFront.channelRegistry.registerType(channelId, {
-                adapter,
-                label: channelConfig.label || Plugin.meta.name,
-                version: Plugin.meta.version,
-                defaults: channelConfig.defaults || {},
-                capabilities: channelConfig.capabilities || { streaming: true, vision: false },
-                source: 'plugin:' + Plugin.meta.id
-            });
-        }
-    };
-
-    // 用户脚本
-    ${normalizedPlugin.script || ''}
-})();
-`;
+        // 不再创建 Plugin 对象，直接使用沙箱注入的 Plugin API
+        // Plugin API 由 sandbox-loader.js 的 createPluginAPI 提供，包含完整功能：
+        // - getSettings / saveSettings
+        // - getConversationMeta / setConversationMeta / clearConversationMeta
+        // - addBodyClass / removeBodyClass / toggleBodyClass
+        // - onSettingsChange
+        // - registerChannel
+        return normalizedPlugin.script || '';
     }
 
     /**
