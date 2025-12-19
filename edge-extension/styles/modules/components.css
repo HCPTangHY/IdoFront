@@ -184,7 +184,7 @@
 
 .ido-card--selected {
     border-color: var(--ido-color-primary);
-    background-color: #eff6ff;
+    background-color: var(--ido-color-primary-tint-2);
 }
 
 .ido-card__header {
@@ -310,28 +310,28 @@
 }
 
 .ido-badge--primary {
-    background-color: #dbeafe;
-    color: #1e40af;
+    background-color: var(--ido-color-primary-tint-2);
+    color: var(--ido-color-primary-hover);
 }
 
 .ido-badge--success {
-    background-color: #d1fae5;
-    color: #065f46;
+    background-color: var(--ido-color-success-tint);
+    color: var(--ido-color-success-text);
 }
 
 .ido-badge--warning {
-    background-color: #fef3c7;
-    color: #92400e;
+    background-color: var(--ido-color-warning-tint);
+    color: var(--ido-color-warning-text);
 }
 
 .ido-badge--danger {
-    background-color: #fee2e2;
-    color: #991b1b;
+    background-color: var(--ido-color-danger-tint);
+    color: var(--ido-color-danger-text);
 }
 
 .ido-badge--info {
-    background-color: #cffafe;
-    color: #155e75;
+    background-color: var(--ido-color-info-tint);
+    color: var(--ido-color-info-text);
 }
 
 .ido-badge--secondary {
@@ -361,7 +361,7 @@
 }
 
 .ido-list__item--active {
-    background-color: #eff6ff;
+    background-color: var(--ido-color-primary-tint-2);
     color: var(--ido-color-primary);
     font-weight: 500;
 }
@@ -589,12 +589,12 @@
 
 /* 加载状态 - 变成停止按钮 */
 #btn-send.btn-send--loading {
-    background-color: #ef4444; /* red-500 */
+    background-color: var(--ido-color-danger);
     animation: sendButtonPulse 1.5s ease-in-out infinite;
 }
 
 #btn-send.btn-send--loading:hover {
-    background-color: #dc2626; /* red-600 */
+    background-color: var(--ido-color-danger-hover);
 }
 
 /* 加载时图标旋转动画 */
@@ -633,7 +633,7 @@
 
 @keyframes titleUpdateHighlight {
     0% {
-        background-color: rgba(59, 130, 246, 0.3);
+        background-color: var(--ido-color-primary-tint-2);
         border-radius: var(--ido-radius-sm);
     }
     100% {
@@ -645,7 +645,7 @@
 @media (prefers-reduced-motion: reduce) {
     .ido-title-updated {
         animation: none;
-        background-color: rgba(59, 130, 246, 0.2);
+        background-color: var(--ido-color-primary-tint);
         transition: background-color 0.5s ease-out;
     }
 }

@@ -96,7 +96,7 @@
 
 /* 激活状态 */
 #slot-input-top .status-chip.active {
-    background-color: rgba(59, 130, 246, 0.1); /* Primary Blue tint */
+    background-color: var(--ido-color-primary-tint);
     border-color: var(--ido-color-primary);
     color: var(--ido-color-primary);
 }
@@ -124,5 +124,5 @@
 
 #slot-input-top .icon-btn.active {
     color: var(--ido-color-primary);
-    background-color: rgba(59, 130, 246, 0.1);
+    background-color: var(--ido-color-primary-tint);
 }

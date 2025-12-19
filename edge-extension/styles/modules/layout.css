@@ -48,7 +48,7 @@ body.settings-mode #settings-view {
 }
 
 .resizer:hover, .resizer.active {
-    background-color: #3b82f6; /* Blue-500 */
+    background-color: var(--ido-color-primary);
 }
 
 /* Transitions */

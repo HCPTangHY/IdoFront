@@ -1,0 +1,351 @@
+# Duties Theme Plugin
+# 灵感来源于高端设计工作室风格
+# 特点：温暖奶油色背景、等宽字体、极简主义、无圆角设计
+
+id: duties-theme
+version: 2.0.0
+name: Duties 主题
+description: 温暖奶油色调的阅读主题，灵感来自高端设计工作室风格。等宽字体、极简主义、舒适阅读体验。
+author: IdoFront
+icon: palette
+
+# 自定义样式
+styles: |
+  /* ========================================
+     Duties Theme - 基于新 CSS 变量系统 v2.0
+     ======================================== */
+  
+  /* 导入 Google Fonts - Geist Mono 和 Inter */
+  @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+  
+  /* ========================================
+     CSS 变量覆盖 - 只需在此处定义主题色彩
+     Tailwind 类和组件会自动继承这些变量
+     ======================================== */
+  
+  body.duties-theme {
+    /* --------------------------------
+       颜色系统
+       -------------------------------- */
+    
+    /* 主色调 - 极简设计使用深色作为强调 */
+    --ido-color-primary: #252525;
+    --ido-color-primary-hover: #feaf2c;
+    --ido-color-primary-active: #e89d00;
+    --ido-color-primary-tint: rgba(37, 37, 37, 0.08);
+    --ido-color-primary-tint-2: rgba(37, 37, 37, 0.12);
+    
+    /* 背景色 - 温暖奶油色调 */
+    --ido-color-bg-primary: #f1f0ee;
+    --ido-color-bg-secondary: #e8e7e5;
+    --ido-color-bg-tertiary: #dddcda;
+    --ido-color-bg-hover: #e8e7e5;
+    --ido-color-bg-active: #dddcda;
+    --ido-color-bg-elevated: #f1f0ee;
+    
+    /* 文字色 */
+    --ido-color-text-primary: #252525;
+    --ido-color-text-secondary: #4a4a4a;
+    --ido-color-text-tertiary: #6e6e73;
+    --ido-color-text-disabled: #999999;
+    --ido-color-text-muted: #6e6e73;
+    
+    /* 边框色 - 使用更深的边框作为设计特色 */
+    --ido-color-border: #ccc;
+    --ido-color-border-hover: #252525;
+    --ido-color-border-focus: #252525;
+    --ido-color-border-strong: #252525;
+    
+    /* 链接色 */
+    --ido-color-link: #252525;
+    --ido-color-link-hover: #feaf2c;
+    
+    /* 语义色 - 保持中性色调 */
+    --ido-color-success: #4a7c59;
+    --ido-color-success-hover: #3d6a4b;
+    --ido-color-success-tint: #e8ebe9;
+    --ido-color-success-text: #3d6a4b;
+    --ido-color-warning: #c9973f;
+    --ido-color-warning-hover: #b38636;
+    --ido-color-warning-tint: #f5f0e6;
+    --ido-color-warning-text: #8a6526;
+    --ido-color-danger: #b35555;
+    --ido-color-danger-hover: #9a4646;
+    --ido-color-danger-tint: #f5eaea;
+    --ido-color-danger-text: #7a3232;
+    --ido-color-info: #5a7a8a;
+    --ido-color-info-hover: #4a6a7a;
+    --ido-color-info-tint: #eaeff2;
+    --ido-color-info-text: #4a6a7a;
+    
+    /* --------------------------------
+       消息卡片
+       -------------------------------- */
+    --card-bg-default: transparent;
+    --card-bg-edit: #e8e7e5;
+    --card-border: #ccc;
+    --card-border-focus: #252525;
+    --action-btn-bg: #f1f0ee;
+    --action-btn-hover: #e8e7e5;
+    --overlay-shadow: none;
+    
+    /* 统计栏 */
+    --stats-bg: #e8e7e5;
+    --stats-bg-hover: #dddcda;
+    
+    /* --------------------------------
+       代码块
+       -------------------------------- */
+    --code-bg: #e8e7e5;
+    --code-header-bg: #dddcda;
+    --code-border: #ccc;
+    --code-text: #252525;
+    --code-text-muted: #6e6e73;
+    --code-lang-color: #6e6e73;
+    --code-copy-hover-bg: #dddcda;
+    
+    /* --------------------------------
+       推理/思考链
+       -------------------------------- */
+    --reasoning-toggle-bg: #e8e7e5;
+    --reasoning-toggle-bg-hover: #dddcda;
+    --reasoning-toggle-color: #6e6e73;
+    --reasoning-toggle-color-hover: #4a4a4a;
+    --reasoning-content-bg: #e8e7e5;
+    --reasoning-content-border: #ccc;
+    --reasoning-content-color: #4a4a4a;
+    
+    /* --------------------------------
+       表格
+       -------------------------------- */
+    --table-header-bg: #e8e7e5;
+    --table-row-bg: #f1f0ee;
+    --table-row-alt-bg: #e8e7e5;
+    --table-border: #ccc;
+    
+    /* --------------------------------
+       圆角 - 全部设为 0（极简主义）
+       -------------------------------- */
+    --ido-radius-sm: 0;
+    --ido-radius-md: 0;
+    --ido-radius-lg: 0;
+    --ido-radius-xl: 0;
+    --ido-radius-2xl: 0;
+    --ido-radius-full: 0;
+    
+    /* --------------------------------
+       阴影 - 极简设计不使用阴影
+       -------------------------------- */
+    --ido-shadow-sm: none;
+    --ido-shadow-md: none;
+    --ido-shadow-lg: none;
+    --ido-shadow-xl: none;
+    --ido-shadow-primary: none;
+    --ido-shadow-primary-hover: none;
+    --ido-shadow-primary-btn: none;
+    --ido-shadow-primary-btn-hover: none;
+    
+    /* --------------------------------
+       字体系统
+       -------------------------------- */
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+  }
+  
+  /* ========================================
+     主题特有样式 - 只覆盖变量无法处理的部分
+     ======================================== */
+  
+  /* 侧边栏 - 使用深色边框作为设计特色 */
+  body.duties-theme #left-panel {
+    border-right: 1px solid #252525 !important;
+  }
+  
+  body.duties-theme #sidebar-header {
+    border-bottom: 1px solid #252525 !important;
+  }
+  
+  /* 历史列表项 - 等宽字体 + 大写样式 */
+  body.duties-theme #history-list .ido-list__item {
+    font-family: 'Geist Mono', 'SF Mono', 'Menlo', monospace !important;
+    font-size: 0.75rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.02em !important;
+    border-left: 2px solid transparent !important;
+    transition: all 0.15s ease !important;
+  }
+  
+  body.duties-theme #history-list .ido-list__item:hover {
+    border-left-color: #252525 !important;
+  }
+  
+  body.duties-theme #history-list .ido-list__item--active {
+    border-left-color: #feaf2c !important;
+  }
+  
+  /* 头部标题 - 等宽字体 */
+  body.duties-theme .ido-header {
+    border-bottom: 1px solid #252525 !important;
+    backdrop-filter: none !important;
+  }
+  
+  body.duties-theme .ido-header__title {
+    font-family: 'Geist Mono', 'SF Mono', 'Menlo', monospace !important;
+    font-size: 0.8125rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    font-weight: 500 !important;
+  }
+  
+  /* 消息卡片 - 使用底部边框分隔 */
+  body.duties-theme .ido-message {
+    border: none !important;
+    border-bottom: 1px solid #ccc !important;
+    padding: 1.5rem 1rem !important;
+    margin-bottom: 0 !important;
+  }
+  
+  body.duties-theme .ido-message__role {
+    font-family: 'Geist Mono', 'SF Mono', 'Menlo', monospace !important;
+    font-size: 0.6875rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    margin-bottom: 0.75rem !important;
+  }
+  
+  body.duties-theme .ido-message__content,
+  body.duties-theme .message-content {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.9375rem !important;
+    line-height: 1.7 !important;
+  }
+  
+  /* 消息操作栏 - 使用深色边框 */
+  body.duties-theme .ido-message__actions {
+    border: 1px solid #252525 !important;
+  }
+  
+  /* Markdown 内容 */
+  body.duties-theme .markdown-body {
+    font-family: 'Inter', sans-serif !important;
+  }
+  
+  body.duties-theme .markdown-body h1,
+  body.duties-theme .markdown-body h2,
+  body.duties-theme .markdown-body h3,
+  body.duties-theme .markdown-body h4,
+  body.duties-theme .markdown-body h5,
+  body.duties-theme .markdown-body h6 {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    border-bottom: none !important;
+  }
+  
+  body.duties-theme .markdown-body a {
+    text-decoration: underline !important;
+    text-underline-offset: 2px !important;
+  }
+  
+  body.duties-theme .markdown-body blockquote {
+    border-left: 2px solid #252525 !important;
+    background-color: transparent !important;
+    padding-left: 1rem !important;
+  }
+  
+  body.duties-theme .markdown-body code {
+    font-family: 'Geist Mono', 'SF Mono', 'Menlo', monospace !important;
+  }
+  
+  /* 输入区域 - 使用深色边框 */
+  body.duties-theme #input-area {
+    border-top: 1px solid #252525 !important;
+  }
+  
+  body.duties-theme #input-area > .relative {
+    border: 1px solid #252525 !important;
+  }
+  
+  body.duties-theme #input-area textarea {
+    font-family: 'Inter', sans-serif !important;
+    background-color: var(--ido-color-bg-primary) !important;
+    color: var(--ido-color-text-primary) !important;
+  }
+  
+  /* 发送按钮 - 深色背景，悬停变金色 */
+  body.duties-theme #btn-send {
+    background-color: #252525 !important;
+  }
+  
+  body.duties-theme #btn-send:hover {
+    background-color: #feaf2c !important;
+  }
+  
+  /* 表单元素 */
+  body.duties-theme input,
+  body.duties-theme select,
+  body.duties-theme textarea {
+    background-color: var(--ido-color-bg-primary) !important;
+    color: var(--ido-color-text-primary) !important;
+    border-color: var(--ido-color-border) !important;
+  }
+  
+  body.duties-theme input:focus,
+  body.duties-theme select:focus,
+  body.duties-theme textarea:focus {
+    border-color: var(--ido-color-border-focus) !important;
+  }
+  
+  /* 滚动条 - 极简设计 */
+  body.duties-theme ::-webkit-scrollbar-thumb {
+    background: #ccc !important;
+    border-radius: 0 !important;
+  }
+  
+  body.duties-theme ::-webkit-scrollbar-thumb:hover {
+    background: #aaa !important;
+  }
+
+# 设置表单
+settings:
+  fields:
+    enabled:
+      type: boolean
+      label: 启用 Duties 主题
+      default: true
+
+# 声明式 UI
+ui:
+  SETTINGS_GENERAL:
+    - id: duties-style-settings
+      component: settings-form
+      props:
+        title: Duties 主题设置
+        icon: palette
+        order: 50
+        fields:
+          enabled:
+            type: boolean
+            label: 启用主题
+            default: true
+
+# JavaScript 脚本
+script: |
+  (async function() {
+    const THEME_CLASS = 'duties-theme';
+    
+    function applyTheme(enabled) {
+      // 使用 Plugin API 操作主页面的 body class
+      // 注意：沙箱中的 document 是 iframe 的 DOM，不能直接操作主页面
+      Plugin.toggleBodyClass(THEME_CLASS, enabled);
+    }
+    
+    const settings = await Plugin.getSettings();
+    applyTheme(settings.enabled !== false);
+    
+    if (Plugin.onSettingsChange) {
+      Plugin.onSettingsChange((newSettings) => {
+        applyTheme(newSettings.enabled !== false);
+      });
+    }
+  })();

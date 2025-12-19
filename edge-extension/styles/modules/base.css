@@ -79,6 +79,8 @@ a,
     --ido-color-primary: #3b82f6;
     --ido-color-primary-hover: #2563eb;
     --ido-color-primary-active: #1d4ed8;
+    --ido-color-primary-tint: rgba(59, 130, 246, 0.1);
+    --ido-color-primary-tint-2: rgba(59, 130, 246, 0.15);
     
     /* Colors - Secondary */
     --ido-color-secondary: #6b7280;
@@ -87,12 +89,20 @@ a,
     /* Colors - Semantic */
     --ido-color-success: #10b981;
     --ido-color-success-hover: #059669;
+    --ido-color-success-tint: #d1fae5;
+    --ido-color-success-text: #065f46;
     --ido-color-warning: #f59e0b;
     --ido-color-warning-hover: #d97706;
+    --ido-color-warning-tint: #fef3c7;
+    --ido-color-warning-text: #92400e;
     --ido-color-danger: #ef4444;
     --ido-color-danger-hover: #dc2626;
+    --ido-color-danger-tint: #fee2e2;
+    --ido-color-danger-text: #991b1b;
     --ido-color-info: #06b6d4;
     --ido-color-info-hover: #0891b2;
+    --ido-color-info-tint: #cffafe;
+    --ido-color-info-text: #155e75;
     
     /* Colors - Background */
     --ido-color-bg-primary: #ffffff;
@@ -100,17 +110,24 @@ a,
     --ido-color-bg-tertiary: #f3f4f6;
     --ido-color-bg-hover: #f3f4f6;
     --ido-color-bg-active: #e5e7eb;
+    --ido-color-bg-elevated: #f8fafc;
     
     /* Colors - Text */
     --ido-color-text-primary: #111827;
     --ido-color-text-secondary: #6b7280;
     --ido-color-text-tertiary: #9ca3af;
     --ido-color-text-disabled: #d1d5db;
+    --ido-color-text-muted: #475569;
     
     /* Colors - Border */
     --ido-color-border: #e5e7eb;
     --ido-color-border-hover: #d1d5db;
     --ido-color-border-focus: #3b82f6;
+    --ido-color-border-strong: #d1d5db;
+    
+    /* Colors - Link */
+    --ido-color-link: #3b82f6;
+    --ido-color-link-hover: #2563eb;
     
     /* Message Card Colors (New Design) */
     --card-bg-default: #FFFFFF;
@@ -134,6 +151,21 @@ a,
     --code-lang-color: #57606a;
     --code-copy-hover-bg: rgba(0, 0, 0, 0.05);
     
+    /* Reasoning/Chain of Thought Colors */
+    --reasoning-toggle-bg: #f1f5f9;
+    --reasoning-toggle-bg-hover: #e2e8f0;
+    --reasoning-toggle-color: #64748b;
+    --reasoning-toggle-color-hover: #475569;
+    --reasoning-content-bg: #f8fafc;
+    --reasoning-content-border: #e2e8f0;
+    --reasoning-content-color: #475569;
+    
+    /* Table Colors */
+    --table-header-bg: #f9fafb;
+    --table-row-bg: #ffffff;
+    --table-row-alt-bg: #f9fafb;
+    --table-border: #d1d5db;
+    
     /* Spacing */
     --ido-spacing-xs: 0.25rem;   /* 4px */
     --ido-spacing-sm: 0.5rem;    /* 8px */
@@ -155,11 +187,108 @@ a,
     --ido-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
     --ido-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
     --ido-shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    --ido-shadow-primary: 0 4px 12px rgba(59, 130, 246, 0.15);
+    --ido-shadow-primary-hover: 0 6px 16px rgba(59, 130, 246, 0.25);
+    --ido-shadow-primary-btn: 0 2px 8px rgba(59, 130, 246, 0.3);
+    --ido-shadow-primary-btn-hover: 0 4px 12px rgba(59, 130, 246, 0.4);
     
     /* Transitions */
     --ido-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
     --ido-transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
     --ido-transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ========================================
+   Tailwind Class Overrides with CSS Variables
+   主题可通过覆盖这些变量来改变所有使用相应 Tailwind 类的元素
+   ======================================== */
+
+/* Background Colors */
+.bg-white { background-color: var(--ido-color-bg-primary) !important; }
+.bg-gray-50 { background-color: var(--ido-color-bg-secondary) !important; }
+.bg-gray-100 { background-color: var(--ido-color-bg-tertiary) !important; }
+.bg-gray-200 { background-color: var(--ido-color-bg-active) !important; }
+
+/* Primary (Blue) Tints */
+.bg-blue-50 { background-color: var(--ido-color-primary-tint) !important; }
+.bg-blue-100 { background-color: var(--ido-color-primary-tint-2) !important; }
+.bg-blue-500 { background-color: var(--ido-color-primary) !important; }
+.bg-blue-600 { background-color: var(--ido-color-primary-hover) !important; }
+.bg-blue-700 { background-color: var(--ido-color-primary-active) !important; }
+
+/* Success (Green) Tints */
+.bg-green-50 { background-color: var(--ido-color-success-tint) !important; }
+.bg-green-500 { background-color: var(--ido-color-success) !important; }
+.bg-green-600 { background-color: var(--ido-color-success-hover) !important; }
+
+/* Danger (Red) Tints */
+.bg-red-50 { background-color: var(--ido-color-danger-tint) !important; }
+.bg-red-500 { background-color: var(--ido-color-danger) !important; }
+.bg-red-600 { background-color: var(--ido-color-danger-hover) !important; }
+
+/* Warning (Orange/Yellow) Tints */
+.bg-orange-50 { background-color: var(--ido-color-warning-tint) !important; }
+.bg-orange-500 { background-color: var(--ido-color-warning) !important; }
+.bg-yellow-50 { background-color: var(--ido-color-warning-tint) !important; }
+
+/* Info (Cyan) Tints */
+.bg-cyan-50 { background-color: var(--ido-color-info-tint) !important; }
+
+/* Text Colors */
+.text-gray-500,
+.text-gray-600 { color: var(--ido-color-text-secondary) !important; }
+.text-gray-700,
+.text-gray-800 { color: var(--ido-color-text-primary) !important; }
+.text-blue-600,
+.text-blue-700 { color: var(--ido-color-primary) !important; }
+.text-green-600,
+.text-green-700 { color: var(--ido-color-success-text) !important; }
+.text-red-600,
+.text-red-700 { color: var(--ido-color-danger-text) !important; }
+.text-orange-600,
+.text-orange-700 { color: var(--ido-color-warning-text) !important; }
+
+/* Border Colors */
+.border-gray-100,
+.border-gray-200 { border-color: var(--ido-color-border) !important; }
+.border-gray-300 { border-color: var(--ido-color-border-strong) !important; }
+.border-blue-200 { border-color: var(--ido-color-primary-tint-2) !important; }
+.border-blue-400,
+.border-blue-500,
+.border-blue-600 { border-color: var(--ido-color-primary) !important; }
+.border-red-200 { border-color: var(--ido-color-danger-tint) !important; }
+.border-green-200 { border-color: var(--ido-color-success-tint) !important; }
+.border-amber-200 { border-color: var(--ido-color-warning-tint) !important; }
+
+/* Hover States */
+.hover\:bg-gray-50:hover { background-color: var(--ido-color-bg-secondary) !important; }
+.hover\:bg-gray-100:hover { background-color: var(--ido-color-bg-tertiary) !important; }
+.hover\:bg-gray-200:hover { background-color: var(--ido-color-bg-active) !important; }
+.hover\:bg-blue-50:hover { background-color: var(--ido-color-primary-tint) !important; }
+.hover\:bg-blue-100:hover { background-color: var(--ido-color-primary-tint-2) !important; }
+.hover\:bg-blue-600:hover { background-color: var(--ido-color-primary-hover) !important; }
+.hover\:bg-blue-700:hover { background-color: var(--ido-color-primary-active) !important; }
+.hover\:bg-red-50:hover { background-color: var(--ido-color-danger-tint) !important; }
+.hover\:bg-red-100:hover { background-color: var(--ido-color-danger-tint) !important; }
+.hover\:bg-red-600:hover { background-color: var(--ido-color-danger-hover) !important; }
+.hover\:bg-green-600:hover { background-color: var(--ido-color-success-hover) !important; }
+.hover\:bg-green-700:hover { background-color: var(--ido-color-success-hover) !important; }
+
+/* ========================================
+   Form Elements with CSS Variables
+   ======================================== */
+
+/* Textarea class used in plugin settings */
+.ido-textarea,
+textarea.ido-textarea {
+    background-color: var(--ido-color-bg-primary);
+    color: var(--ido-color-text-primary);
+    border-color: var(--ido-color-border);
+}
+
+.ido-textarea:focus,
+textarea.ido-textarea:focus {
+    border-color: var(--ido-color-border-focus);
 }
 
 /* Dark theme overrides are injected by the builtin theme plugin via <style> to keep core CSS neutral. */

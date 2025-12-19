@@ -1,0 +1,802 @@
+# Kippo Theme Plugin
+# Based on Kippo.com Style Guide - The Dating App for Gamers
+# Dark mode aesthetic with vibrant signature red accent
+
+id: kippo-theme
+version: 1.0.0
+name: Kippo 游戏主题
+description: 基于 Kippo.com 的高对比度暗黑游戏风格主题，标志性红色点缀
+author: IdoFront Team
+icon: sports_esports
+
+# Kippo Theme Styles
+styles: |
+  /* ========================================
+     Kippo Theme - Typography (Google Fonts)
+     ======================================== */
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap');
+
+  /* ========================================
+     Kippo Theme - CSS Variables Override
+     ======================================== */
+  :root.kippo-theme,
+  body.kippo-theme {
+    /* Primary Brand - Signature Kippo Red */
+    --ido-color-primary: #FF4B5C;
+    --ido-color-primary-hover: #FF6B7A;
+    --ido-color-primary-active: #E63E4E;
+    
+    /* Primary tints for selection/hover */
+    --ido-color-primary-tint: rgba(255, 75, 92, 0.1);
+    --ido-color-primary-tint-2: rgba(255, 75, 92, 0.15);
+    
+    /* Backgrounds - Pure Black & Dark Surfaces */
+    --ido-color-bg-primary: #000000;
+    --ido-color-bg-secondary: #111111;
+    --ido-color-bg-tertiary: #1A1A1A;
+    --ido-color-bg-hover: #1A1A1A;
+    --ido-color-bg-active: #222222;
+    --ido-color-bg-elevated: #0A0A0A;
+    
+    /* Text - High Contrast */
+    --ido-color-text-primary: #FFFFFF;
+    --ido-color-text-secondary: #A0A0A0;
+    --ido-color-text-tertiary: #6B6B6B;
+    --ido-color-text-disabled: #4D4D4D;
+    --ido-color-text-muted: #808080;
+    
+    /* Borders - Subtle White */
+    --ido-color-border: rgba(255, 255, 255, 0.1);
+    --ido-color-border-hover: rgba(255, 255, 255, 0.2);
+    --ido-color-border-focus: #FF4B5C;
+    --ido-color-border-strong: rgba(255, 255, 255, 0.2);
+    
+    /* Links */
+    --ido-color-link: #3B82F6;
+    --ido-color-link-hover: #60A5FA;
+    
+    /* Semantic Colors */
+    --ido-color-success: #00FFC2;
+    --ido-color-success-hover: #00E6AF;
+    --ido-color-success-tint: rgba(0, 255, 194, 0.15);
+    --ido-color-success-text: #00FFC2;
+    --ido-color-warning: #FFB800;
+    --ido-color-warning-hover: #E6A600;
+    --ido-color-warning-tint: rgba(255, 184, 0, 0.15);
+    --ido-color-warning-text: #FFB800;
+    --ido-color-danger: #FF4B5C;
+    --ido-color-danger-hover: #E63E4E;
+    --ido-color-danger-tint: rgba(255, 75, 92, 0.15);
+    --ido-color-danger-text: #FF6B7A;
+    --ido-color-info: #3B82F6;
+    --ido-color-info-hover: #2563EB;
+    --ido-color-info-tint: rgba(59, 130, 246, 0.15);
+    --ido-color-info-text: #60A5FA;
+    
+    /* Message Card Colors */
+    --card-bg-default: #111111;
+    --card-bg-edit: #1A1A1A;
+    --card-border: rgba(255, 255, 255, 0.1);
+    --card-border-focus: #FF4B5C;
+    --action-btn-bg: #1A1A1A;
+    --action-btn-hover: #222222;
+    --overlay-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
+    
+    /* Stats Bar Colors */
+    --stats-bg: #0A0A0A;
+    --stats-bg-hover: #111111;
+    
+    /* Code Block Colors */
+    --code-bg: #0D0D0D;
+    --code-header-bg: #151515;
+    --code-border: rgba(255, 255, 255, 0.1);
+    --code-text: #E0E0E0;
+    --code-text-muted: #808080;
+    --code-lang-color: #A0A0A0;
+    --code-copy-hover-bg: rgba(255, 255, 255, 0.1);
+    
+    /* Reasoning/Chain of Thought Colors */
+    --reasoning-toggle-bg: #1A1A1A;
+    --reasoning-toggle-bg-hover: #222222;
+    --reasoning-toggle-color: #A0A0A0;
+    --reasoning-toggle-color-hover: #FFFFFF;
+    --reasoning-content-bg: #0D0D0D;
+    --reasoning-content-border: rgba(255, 255, 255, 0.1);
+    --reasoning-content-color: #A0A0A0;
+    
+    /* Table Colors */
+    --table-header-bg: #1A1A1A;
+    --table-row-bg: #111111;
+    --table-row-alt-bg: #151515;
+    --table-border: rgba(255, 255, 255, 0.1);
+    
+    /* Border Radius - Highly Rounded, Organic Shapes */
+    --ido-radius-sm: 8px;
+    --ido-radius-md: 12px;
+    --ido-radius-lg: 16px;
+    --ido-radius-xl: 24px;
+    --ido-radius-2xl: 32px;
+    --ido-radius-full: 9999px;
+    
+    /* Shadows - Soft Glows */
+    --ido-shadow-sm: 0 4px 6px rgba(0, 0, 0, 0.3);
+    --ido-shadow-md: 0 10px 15px rgba(0, 0, 0, 0.5);
+    --ido-shadow-lg: 0 20px 25px rgba(0, 0, 0, 0.6);
+    --ido-shadow-xl: 0 25px 50px rgba(0, 0, 0, 0.7);
+    --ido-shadow-primary: 0 4px 12px rgba(255, 75, 92, 0.2);
+    --ido-shadow-primary-hover: 0 6px 16px rgba(255, 75, 92, 0.3);
+    --ido-shadow-primary-btn: 0 0 15px rgba(255, 75, 92, 0.25);
+    --ido-shadow-primary-btn-hover: 0 0 20px rgba(255, 75, 92, 0.4);
+    
+    /* Kippo Brand Glow */
+    --kippo-glow-primary: 0 0 20px rgba(255, 75, 92, 0.3);
+    --kippo-glow-success: 0 0 20px rgba(0, 255, 194, 0.3);
+    
+    /* Transitions - Snappy but Smooth */
+    --ido-transition-fast: 150ms ease;
+    --ido-transition-base: 300ms ease;
+    --ido-transition-slow: 400ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    
+    /* Base colors */
+    background-color: #000000;
+    color: #FFFFFF;
+  }
+
+  /* ========================================
+     Kippo Theme - Typography
+     ======================================== */
+  html.kippo-theme,
+  body.kippo-theme {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+  }
+
+  body.kippo-theme h1,
+  body.kippo-theme h2,
+  body.kippo-theme h3,
+  body.kippo-theme .ido-header__title,
+  body.kippo-theme .ido-panel__title {
+    font-family: 'Poppins', system-ui, sans-serif !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.01em !important;
+  }
+
+  body.kippo-theme code,
+  body.kippo-theme pre,
+  body.kippo-theme .hljs {
+    font-family: 'Fira Code', monospace !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Base Layout
+     ======================================== */
+  body.kippo-theme {
+    background-color: #000000 !important;
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme #app-container {
+    background-color: #000000 !important;
+  }
+
+  /* Main View & Panels */
+  body.kippo-theme main,
+  body.kippo-theme #left-panel,
+  body.kippo-theme #right-panel {
+    background-color: #000000 !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* Sidebar */
+  body.kippo-theme #sidebar-header,
+  body.kippo-theme #slot-sidebar-top,
+  body.kippo-theme #history-list,
+  body.kippo-theme #slot-sidebar-bottom {
+    background-color: #000000 !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* Chat Stream */
+  body.kippo-theme #chat-stream {
+    background-color: #000000 !important;
+  }
+
+  /* Input Area */
+  body.kippo-theme #input-area {
+    background-color: #000000 !important;
+    border-top-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme #input-area > .relative {
+    background-color: #111111 !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    border-radius: 24px !important;
+  }
+
+  body.kippo-theme #input-area textarea {
+    background-color: transparent !important;
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme #input-area textarea::placeholder {
+    color: #4D4D4D !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Header (Glassmorphism)
+     ======================================== */
+  body.kippo-theme .ido-header {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+    backdrop-filter: blur(10px) !important;
+    -webkit-backdrop-filter: blur(10px) !important;
+    border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .ido-header__title {
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme .ido-header__subtitle {
+    color: #A0A0A0 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Buttons
+     ======================================== */
+  
+  /* Primary Button - Kippo Style */
+  body.kippo-theme .ido-btn--primary,
+  body.kippo-theme #btn-send {
+    background: #FF4B5C !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 9999px !important;
+    font-family: 'Poppins', sans-serif !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+  }
+
+  body.kippo-theme .ido-btn--primary:hover:not(:disabled),
+  body.kippo-theme #btn-send:hover:not(:disabled) {
+    background: #FF6B7A !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 0 20px rgba(255, 75, 92, 0.3) !important;
+  }
+
+  body.kippo-theme .ido-btn--primary:active:not(:disabled),
+  body.kippo-theme #btn-send:active:not(:disabled) {
+    background: #E63E4E !important;
+    transform: translateY(0) !important;
+  }
+
+  /* Secondary Button */
+  body.kippo-theme .ido-btn--secondary {
+    background-color: #111111 !important;
+    color: #FFFFFF !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 9999px !important;
+  }
+
+  body.kippo-theme .ido-btn--secondary:hover:not(:disabled) {
+    background-color: #1A1A1A !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+  }
+
+  /* Ghost Button */
+  body.kippo-theme .ido-btn--ghost {
+    background-color: transparent !important;
+    color: #A0A0A0 !important;
+  }
+
+  body.kippo-theme .ido-btn--ghost:hover:not(:disabled) {
+    background-color: #1A1A1A !important;
+    color: #FFFFFF !important;
+  }
+
+  /* Icon Button */
+  body.kippo-theme .ido-icon-btn {
+    color: #A0A0A0 !important;
+    border-radius: 12px !important;
+    transition: all 0.3s ease !important;
+  }
+
+  body.kippo-theme .ido-icon-btn:hover {
+    background-color: #1A1A1A !important;
+    color: #FF4B5C !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Cards
+     ======================================== */
+  body.kippo-theme .ido-card,
+  body.kippo-theme .ido-message {
+    background-color: #111111 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 24px !important;
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+  }
+
+  body.kippo-theme .ido-card:hover,
+  body.kippo-theme .ido-message:hover {
+    transform: scale(1.01) !important;
+    border-color: rgba(255, 75, 92, 0.4) !important;
+  }
+
+  body.kippo-theme .ido-card--selected {
+    border-color: #FF4B5C !important;
+    background-color: rgba(255, 75, 92, 0.1) !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Messages
+     ======================================== */
+  body.kippo-theme .message-content,
+  body.kippo-theme .markdown-body {
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme .markdown-body h1,
+  body.kippo-theme .markdown-body h2,
+  body.kippo-theme .markdown-body h3,
+  body.kippo-theme .markdown-body h4 {
+    color: #FFFFFF !important;
+    font-family: 'Poppins', sans-serif !important;
+    border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .markdown-body a {
+    color: #3B82F6 !important;
+  }
+
+  body.kippo-theme .markdown-body a:hover {
+    color: #60A5FA !important;
+  }
+
+  body.kippo-theme .markdown-body blockquote {
+    border-left-color: #FF4B5C !important;
+    background-color: rgba(255, 75, 92, 0.1) !important;
+    color: #A0A0A0 !important;
+  }
+
+  body.kippo-theme .markdown-body hr {
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .markdown-body table th {
+    background-color: #1A1A1A !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .markdown-body table td {
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .markdown-body table tr {
+    background-color: #111111 !important;
+  }
+
+  body.kippo-theme .markdown-body table tr:nth-child(2n) {
+    background-color: #151515 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Reasoning/Chain of Thought
+     ======================================== */
+  body.kippo-theme .reasoning-toggle {
+    background-color: #1A1A1A !important;
+    color: #A0A0A0 !important;
+  }
+
+  body.kippo-theme .reasoning-toggle:hover {
+    background-color: #222222 !important;
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme .reasoning-content {
+    background-color: #0D0D0D !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    color: #A0A0A0 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Code Blocks
+     ======================================== */
+  body.kippo-theme .markdown-body pre,
+  body.kippo-theme pre.hljs {
+    background-color: #0D0D0D !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 16px !important;
+  }
+
+  body.kippo-theme .markdown-body code,
+  body.kippo-theme code {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    color: #FF6B7A !important;
+    border-radius: 6px !important;
+  }
+
+  body.kippo-theme .markdown-body pre code {
+    background-color: transparent !important;
+    color: #E0E0E0 !important;
+  }
+
+  body.kippo-theme .code-block-header {
+    background-color: #151515 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 16px 16px 0 0 !important;
+  }
+
+  body.kippo-theme .code-block-header span {
+    color: #A0A0A0 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Panels
+     ======================================== */
+  body.kippo-theme .ido-panel {
+    background-color: #000000 !important;
+    border-radius: 24px !important;
+  }
+
+  body.kippo-theme .ido-panel__header {
+    background-color: #000000 !important;
+    border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .ido-panel__title {
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme .ido-panel__footer {
+    background-color: #111111 !important;
+    border-top-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Sidebar
+     ======================================== */
+  body.kippo-theme .ido-sidebar {
+    background-color: #000000 !important;
+    border-right-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .ido-sidebar__header {
+    border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .ido-sidebar__footer {
+    background-color: #111111 !important;
+    border-top-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Lists
+     ======================================== */
+  body.kippo-theme .ido-list__item {
+    border-radius: 12px !important;
+    transition: all 0.3s ease !important;
+  }
+
+  body.kippo-theme .ido-list__item:hover {
+    background-color: #1A1A1A !important;
+  }
+
+  body.kippo-theme .ido-list__item--active {
+    background-color: rgba(255, 75, 92, 0.15) !important;
+    color: #FF4B5C !important;
+    border-left: 3px solid #FF4B5C !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Forms
+     ======================================== */
+  body.kippo-theme .ido-form-input,
+  body.kippo-theme .ido-form-textarea,
+  body.kippo-theme .ido-form-select,
+  body.kippo-theme .ido-textarea,
+  body.kippo-theme textarea,
+  body.kippo-theme input[type="text"],
+  body.kippo-theme input[type="password"],
+  body.kippo-theme input[type="email"],
+  body.kippo-theme input[type="number"],
+  body.kippo-theme input[type="url"],
+  body.kippo-theme select {
+    background-color: #111111 !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    color: #FFFFFF !important;
+    border-radius: 12px !important;
+  }
+
+  body.kippo-theme .ido-form-input:focus,
+  body.kippo-theme .ido-form-textarea:focus,
+  body.kippo-theme .ido-form-select:focus,
+  body.kippo-theme .ido-textarea:focus,
+  body.kippo-theme textarea:focus,
+  body.kippo-theme input:focus,
+  body.kippo-theme select:focus {
+    border-color: #FF4B5C !important;
+    box-shadow: 0 0 0 3px rgba(255, 75, 92, 0.2) !important;
+    outline: none !important;
+  }
+
+  body.kippo-theme .ido-form-input::placeholder,
+  body.kippo-theme .ido-form-textarea::placeholder,
+  body.kippo-theme .ido-textarea::placeholder,
+  body.kippo-theme textarea::placeholder,
+  body.kippo-theme input::placeholder {
+    color: #4D4D4D !important;
+  }
+
+  body.kippo-theme .ido-form-label,
+  body.kippo-theme label {
+    color: #FFFFFF !important;
+  }
+
+  /* Switch */
+  body.kippo-theme .ido-form-switch__slider {
+    background-color: #333333 !important;
+  }
+
+  body.kippo-theme .ido-form-switch__input:checked + .ido-form-switch__slider {
+    background-color: #FF4B5C !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Badges & Chips
+     ======================================== */
+  body.kippo-theme .ido-badge {
+    border-radius: 9999px !important;
+  }
+
+  body.kippo-theme .ido-badge--primary {
+    background-color: rgba(255, 75, 92, 0.2) !important;
+    color: #FF6B7A !important;
+  }
+
+  body.kippo-theme .ido-badge--success {
+    background-color: rgba(0, 255, 194, 0.2) !important;
+    color: #00FFC2 !important;
+  }
+
+  body.kippo-theme .ido-badge--warning {
+    background-color: rgba(255, 184, 0, 0.2) !important;
+    color: #FFB800 !important;
+  }
+
+  body.kippo-theme .ido-badge--danger {
+    background-color: rgba(255, 75, 92, 0.2) !important;
+    color: #FF4B5C !important;
+  }
+
+  body.kippo-theme .ido-badge--info {
+    background-color: rgba(59, 130, 246, 0.2) !important;
+    color: #3B82F6 !important;
+  }
+
+  body.kippo-theme .ido-badge--secondary {
+    background-color: #1A1A1A !important;
+    color: #A0A0A0 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Dividers
+     ======================================== */
+  body.kippo-theme .ido-divider {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .ido-divider--vertical {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Scrollbar
+     ======================================== */
+  body.kippo-theme ::-webkit-scrollbar {
+    width: 6px !important;
+    height: 6px !important;
+  }
+
+  body.kippo-theme ::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+  body.kippo-theme ::-webkit-scrollbar-thumb {
+    background: #333333 !important;
+    border-radius: 3px !important;
+  }
+
+  body.kippo-theme ::-webkit-scrollbar-thumb:hover {
+    background: #444444 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Loading Dots
+     ======================================== */
+  body.kippo-theme .ido-loading-dots__dot {
+    background-color: #FF4B5C !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Quick Navigation
+     ======================================== */
+  body.kippo-theme .ido-quick-nav {
+    background-color: #111111 !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    border-radius: 16px !important;
+  }
+
+  body.kippo-theme .ido-quick-nav__btn {
+    color: #A0A0A0 !important;
+  }
+
+  body.kippo-theme .ido-quick-nav__btn:not(:last-child) {
+    border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .ido-quick-nav__btn:hover {
+    background-color: #1A1A1A !important;
+    color: #FF4B5C !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Bottom Sheet
+     ======================================== */
+  body.kippo-theme #bottom-sheet-content {
+    background-color: #000000 !important;
+    border-radius: 24px 24px 0 0 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Right Panel
+     ======================================== */
+  body.kippo-theme #right-panel-default {
+    background-color: #000000 !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Override Tailwind Utilities
+     ======================================== */
+  body.kippo-theme .bg-white {
+    background-color: #111111 !important;
+  }
+
+  body.kippo-theme .bg-gray-50,
+  body.kippo-theme .bg-gray-100 {
+    background-color: #0A0A0A !important;
+  }
+
+  body.kippo-theme .bg-gray-200 {
+    background-color: #1A1A1A !important;
+  }
+
+  body.kippo-theme .border-gray-100,
+  body.kippo-theme .border-gray-200,
+  body.kippo-theme .border-gray-300 {
+    border-color: rgba(255, 255, 255, 0.1) !important;
+  }
+
+  body.kippo-theme .text-gray-900,
+  body.kippo-theme .text-gray-800,
+  body.kippo-theme .text-gray-700 {
+    color: #FFFFFF !important;
+  }
+
+  body.kippo-theme .text-gray-600,
+  body.kippo-theme .text-gray-500 {
+    color: #A0A0A0 !important;
+  }
+
+  body.kippo-theme .text-gray-400,
+  body.kippo-theme .text-gray-300 {
+    color: #6B6B6B !important;
+  }
+
+  body.kippo-theme .hover\:bg-gray-100:hover,
+  body.kippo-theme .hover\:bg-gray-50:hover {
+    background-color: #1A1A1A !important;
+  }
+
+  body.kippo-theme .hover\:bg-red-50:hover {
+    background-color: rgba(255, 75, 92, 0.1) !important;
+  }
+
+  /* ========================================
+     Kippo Theme - Special Effects
+     ======================================== */
+  
+  /* Glow effect for primary elements on focus */
+  body.kippo-theme .ido-btn--primary:focus,
+  body.kippo-theme #btn-send:focus {
+    box-shadow: 0 0 20px rgba(255, 75, 92, 0.4) !important;
+    outline: none !important;
+  }
+
+  /* Subtle inner glow for images */
+  body.kippo-theme img {
+    border-radius: 16px !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* Entrance animation for messages */
+  @keyframes kippo-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  body.kippo-theme .ido-message {
+    animation: kippo-slide-up 0.3s ease-out !important;
+  }
+
+  /* Respect reduced motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    body.kippo-theme .ido-message {
+      animation: none !important;
+    }
+    
+    body.kippo-theme .ido-card:hover,
+    body.kippo-theme .ido-message:hover {
+      transform: none !important;
+    }
+    
+    body.kippo-theme .ido-btn--primary:hover,
+    body.kippo-theme #btn-send:hover {
+      transform: none !important;
+    }
+  }
+
+# Settings
+settings:
+  fields:
+    enabled:
+      type: boolean
+      label: 启用主题
+      default: true
+
+# UI - Settings Panel
+ui:
+  SETTINGS_GENERAL:
+    - id: kippo-theme-settings
+      component: settings-form
+      props:
+        title: Kippo 游戏主题
+        icon: sports_esports
+        order: 51
+        fields:
+          enabled:
+            type: boolean
+            label: 启用主题
+            default: true
+
+# Theme Toggle Script
+script: |
+  (async function() {
+    const THEME_CLASS = 'kippo-theme';
+    
+    function applyTheme(enabled) {
+      // Must use Plugin.toggleBodyClass, cannot directly access document
+      Plugin.toggleBodyClass(THEME_CLASS, enabled);
+      
+      if (enabled) {
+        console.log('[kippo-theme] Theme enabled - Pure black gaming aesthetic activated!');
+      } else {
+        console.log('[kippo-theme] Theme disabled');
+      }
+    }
+    
+    // Initialize
+    const settings = await Plugin.getSettings();
+    applyTheme(settings.enabled !== false);
+    
+    // Listen for settings changes
+    Plugin.onSettingsChange((newSettings) => {
+      applyTheme(newSettings.enabled !== false);
+    });
+  })();

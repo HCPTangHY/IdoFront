@@ -27,25 +27,58 @@
 body.ido-theme-dark {
     /* Backgrounds */
     --ido-color-bg-primary: #020617;   /* slate-950 */
-    --ido-color-bg-secondary: #020617;
-    --ido-color-bg-tertiary: #020617;
-    --ido-color-bg-hover: #0f172a;     /* slate-900 */
-    --ido-color-bg-active: #1e293b;    /* slate-800 */
+    --ido-color-bg-secondary: #0f172a; /* slate-900 */
+    --ido-color-bg-tertiary: #1e293b;  /* slate-800 */
+    --ido-color-bg-hover: #1e293b;     /* slate-800 */
+    --ido-color-bg-active: #334155;    /* slate-700 */
+    --ido-color-bg-elevated: #0f172a;  /* slate-900 */
 
     /* Text */
-    --ido-color-text-primary: #e5e7eb;  /* slate-200 */
-    --ido-color-text-secondary: #cbd5f5; /* slate-300 */
-    --ido-color-text-tertiary: #9ca3af;  /* slate-400 */
-    --ido-color-text-disabled: #4b5563;  /* slate-600 */
+    --ido-color-text-primary: #f1f5f9;  /* slate-100 */
+    --ido-color-text-secondary: #cbd5e1; /* slate-300 */
+    --ido-color-text-tertiary: #94a3b8;  /* slate-400 */
+    --ido-color-text-disabled: #475569;  /* slate-600 */
+    --ido-color-text-muted: #64748b;     /* slate-500 */
 
     /* Borders */
-    --ido-color-border: #1f2937;        /* slate-800 */
-    --ido-color-border-hover: #374151;  /* slate-700 */
+    --ido-color-border: #1e293b;        /* slate-800 */
+    --ido-color-border-hover: #334155;  /* slate-700 */
+    --ido-color-border-focus: #60a5fa;  /* blue-400 */
+    --ido-color-border-strong: #334155; /* slate-700 */
 
-    /* Keep primary brand color, but它在暗色背景上会稍微亮一点 */
+    /* Primary brand color - brighter for dark background */
     --ido-color-primary: #60a5fa;        /* blue-400 */
     --ido-color-primary-hover: #3b82f6;  /* blue-500 */
-    --ido-color-primary-active: #1d4ed8; /* blue-700 */
+    --ido-color-primary-active: #2563eb; /* blue-600 */
+    --ido-color-primary-tint: rgba(96, 165, 250, 0.15);
+    --ido-color-primary-tint-2: rgba(96, 165, 250, 0.25);
+
+    /* Links */
+    --ido-color-link: #60a5fa;           /* blue-400 */
+    --ido-color-link-hover: #93c5fd;     /* blue-300 */
+
+    /* Semantic Colors - Dark Theme */
+    --ido-color-success-tint: rgba(34, 197, 94, 0.2);
+    --ido-color-success-text: #4ade80;   /* green-400 */
+    --ido-color-warning-tint: rgba(251, 191, 36, 0.2);
+    --ido-color-warning-text: #fbbf24;   /* amber-400 */
+    --ido-color-danger-tint: rgba(248, 113, 113, 0.2);
+    --ido-color-danger-text: #f87171;    /* red-400 */
+    --ido-color-info-tint: rgba(96, 165, 250, 0.2);
+    --ido-color-info-text: #60a5fa;      /* blue-400 */
+
+    /* Message Card Colors */
+    --card-bg-default: #0f172a;
+    --card-bg-edit: #1e293b;
+    --card-border: #1e293b;
+    --card-border-focus: #60a5fa;
+    --action-btn-bg: #1e293b;
+    --action-btn-hover: #334155;
+    --overlay-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+
+    /* Stats Bar Colors */
+    --stats-bg: #0f172a;
+    --stats-bg-hover: #1e293b;
 
     /* Code Block Colors (Dark theme) */
     --code-bg: #0d1117;
@@ -56,9 +89,24 @@ body.ido-theme-dark {
     --code-lang-color: #8b949e;
     --code-copy-hover-bg: rgba(255, 255, 255, 0.1);
 
+    /* Reasoning/Chain of Thought Colors */
+    --reasoning-toggle-bg: #1e293b;
+    --reasoning-toggle-bg-hover: #334155;
+    --reasoning-toggle-color: #94a3b8;
+    --reasoning-toggle-color-hover: #f1f5f9;
+    --reasoning-content-bg: #0f172a;
+    --reasoning-content-border: #1e293b;
+    --reasoning-content-color: #94a3b8;
+
+    /* Table Colors */
+    --table-header-bg: #1e293b;
+    --table-row-bg: #0f172a;
+    --table-row-alt-bg: #1e293b;
+    --table-border: #334155;
+
     /* Base page background & text (override tailwind body bg-light) */
     background-color: #020617;
-    color: #e5e7eb;
+    color: #f1f5f9;
 }
 
 /* Structural layout overrides for dark theme */
@@ -99,10 +147,19 @@ body.ido-theme-dark #input-area {
     border-top-color: var(--ido-color-border) !important;
 }
 
-/* 文本输入容器（原本 bg-white + border-gray-300） */
+/* 文本输入容器 */
 body.ido-theme-dark #input-area > .relative {
     background-color: var(--ido-color-bg-primary) !important;
     border-color: var(--ido-color-border) !important;
+}
+
+/* 输入框文字颜色 */
+body.ido-theme-dark #input-area textarea {
+    color: var(--ido-color-text-primary) !important;
+}
+
+body.ido-theme-dark #input-area textarea::placeholder {
+    color: var(--ido-color-text-tertiary) !important;
 }
 
 /* 顶部 Header 在暗色模式下使用深色半透明背景 */
@@ -125,49 +182,41 @@ body.ido-theme-dark #bottom-sheet-content {
     background-color: var(--ido-color-bg-primary) !important;
 }
 
-/* 覆盖通用 Tailwind 浅色背景，避免“大片白块” */
-body.ido-theme-dark .bg-white {
-    background-color: var(--ido-color-bg-primary) !important;
-}
-
-body.ido-theme-dark .bg-gray-50,
-body.ido-theme-dark .bg-gray-100 {
+/* Form elements */
+body.ido-theme-dark .ido-form-input,
+body.ido-theme-dark .ido-form-textarea,
+body.ido-theme-dark .ido-form-select,
+body.ido-theme-dark .ido-textarea,
+body.ido-theme-dark textarea,
+body.ido-theme-dark input[type="text"],
+body.ido-theme-dark input[type="password"],
+body.ido-theme-dark input[type="email"],
+body.ido-theme-dark input[type="number"],
+body.ido-theme-dark input[type="url"],
+body.ido-theme-dark select {
     background-color: var(--ido-color-bg-secondary) !important;
-}
-
-body.ido-theme-dark .border-gray-100,
-body.ido-theme-dark .border-gray-200 {
     border-color: var(--ido-color-border) !important;
-}
-
-/* Dark theme text color overrides: ensure gray-based labels are readable on dark background */
-body.ido-theme-dark .text-gray-900,
-body.ido-theme-dark .text-gray-800,
-body.ido-theme-dark .text-gray-700 {
     color: var(--ido-color-text-primary) !important;
 }
 
-body.ido-theme-dark .text-gray-600,
-body.ido-theme-dark .text-gray-500,
-body.ido-theme-dark .text-gray-400 {
-    color: var(--ido-color-text-secondary) !important;
+body.ido-theme-dark .ido-form-input:focus,
+body.ido-theme-dark .ido-form-textarea:focus,
+body.ido-theme-dark .ido-form-select:focus,
+body.ido-theme-dark .ido-textarea:focus,
+body.ido-theme-dark textarea:focus,
+body.ido-theme-dark input:focus,
+body.ido-theme-dark select:focus {
+    border-color: var(--ido-color-primary) !important;
+    box-shadow: 0 0 0 3px var(--ido-color-primary-tint) !important;
 }
 
-body.ido-theme-dark .text-gray-300,
-body.ido-theme-dark .text-gray-200,
-body.ido-theme-dark .text-gray-100,
-body.ido-theme-dark .text-gray-50 {
+body.ido-theme-dark textarea::placeholder,
+body.ido-theme-dark input::placeholder {
     color: var(--ido-color-text-tertiary) !important;
 }
 
-/* Dark theme hover overrides: avoid white hover backgrounds with light text */
-body.ido-theme-dark .hover\\:bg-red-50:hover,
-body.ido-theme-dark .hover\\:bg-gray-100:hover {
-    background-color: var(--ido-color-bg-hover) !important;
-}
-
-body.ido-theme-dark .hover\\:border-red-200:hover {
-    border-color: var(--ido-color-border-hover) !important;
+body.ido-theme-dark label {
+    color: var(--ido-color-text-primary) !important;
 }
 `;
 

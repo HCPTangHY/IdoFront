@@ -254,7 +254,7 @@
 }
 
 .ido-message__popover button.danger:hover {
-    background-color: #fee2e2;
+    background-color: var(--ido-color-danger-tint);
 }
 
 /* ========================================
@@ -292,13 +292,13 @@
     border-radius: var(--ido-radius-2xl);
     padding: var(--ido-spacing-md);
     transition: all var(--ido-transition-base);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    box-shadow: var(--ido-shadow-primary);
     grid-column: 1 / -1; /* 在网格中占满整行 */
 }
 
 .message-edit-input-wrapper:focus-within {
     border-color: var(--ido-color-primary-hover);
-    box-shadow: 0 6px 16px rgba(59, 130, 246, 0.25);
+    box-shadow: var(--ido-shadow-primary-hover);
 }
 
 /* 输入框 */
@@ -379,25 +379,25 @@
 .message-edit-icon-btn--send {
     background: linear-gradient(135deg, var(--ido-color-primary) 0%, var(--ido-color-primary-hover) 100%);
     color: white;
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    box-shadow: var(--ido-shadow-primary-btn);
 }
 
 /* User Bubble: Send Button (White bg, Blue icon) */
 .ido-message--user .message-edit-icon-btn--send {
-    background: white;
+    background: var(--ido-color-bg-primary);
     color: var(--ido-color-primary);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--ido-shadow-md);
 }
 
 .message-edit-icon-btn--send:hover {
     background: linear-gradient(135deg, var(--ido-color-primary-hover) 0%, var(--ido-color-primary-active) 100%);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    box-shadow: var(--ido-shadow-primary-btn-hover);
     transform: scale(1.05);
 }
 
 .ido-message--user .message-edit-icon-btn--send:hover {
-    background: #f8fafc;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    background: var(--ido-color-bg-elevated);
+    box-shadow: var(--ido-shadow-lg);
 }
 
 .message-edit-icon-btn--send:active {
@@ -514,7 +514,7 @@
 }
 
 .message-edit-add-attachment:hover {
-    background-color: rgba(59, 130, 246, 0.05);
+    background-color: var(--ido-color-primary-tint);
     border-style: solid;
 }
 
@@ -727,7 +727,7 @@
 .message-edit-textarea:focus {
     outline: none;
     border-color: var(--ido-color-primary-hover);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    box-shadow: 0 0 0 3px var(--ido-color-primary-tint);
 }
 
 .message-edit-buttons {

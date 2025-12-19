@@ -8,7 +8,7 @@ dist/
 web-dist/
 node_modules/
 package-lock.json
-external-plugins/
+/external-plugins/
 
 # Android keystore
 *.keystore

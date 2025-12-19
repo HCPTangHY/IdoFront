@@ -18,27 +18,27 @@
     align-items: center;
     gap: 0.25rem;
     cursor: pointer;
-    color: #64748b; /* slate-500 */
+    color: var(--reasoning-toggle-color);
     font-weight: 500;
     padding: 0.25rem 0.5rem;
-    background-color: #f1f5f9; /* slate-100 */
+    background-color: var(--reasoning-toggle-bg);
     border-radius: 0.375rem;
-    transition: background-color 0.2s;
+    transition: background-color 0.2s, color 0.2s;
     user-select: none;
 }
 
 .reasoning-toggle:hover {
-    background-color: #e2e8f0; /* slate-200 */
-    color: #475569; /* slate-600 */
+    background-color: var(--reasoning-toggle-bg-hover);
+    color: var(--reasoning-toggle-color-hover);
 }
 
 .reasoning-content {
     margin-top: 0.5rem;
     padding: 0.75rem;
-    background-color: #f8fafc; /* slate-50 */
-    border: 1px solid #e2e8f0; /* slate-200 */
+    background-color: var(--reasoning-content-bg);
+    border: 1px solid var(--reasoning-content-border);
     border-radius: 0.5rem;
-    color: #475569; /* slate-600 */
+    color: var(--reasoning-content-color);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     white-space: pre-wrap;
     display: none; /* Hidden by default, toggled by JS */
@@ -84,12 +84,12 @@
     line-height: 1.25;
 }
 
-.markdown-body h1 { font-size: 1.5em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
-.markdown-body h2 { font-size: 1.3em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+.markdown-body h1 { font-size: 1.5em; border-bottom: 1px solid var(--ido-color-border); padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.3em; border-bottom: 1px solid var(--ido-color-border); padding-bottom: 0.3em; }
 .markdown-body h3 { font-size: 1.15em; }
 .markdown-body h4 { font-size: 1em; }
 .markdown-body h5 { font-size: 0.9em; }
-.markdown-body h6 { font-size: 0.85em; color: #6b7280; }
+.markdown-body h6 { font-size: 0.85em; color: var(--ido-color-text-secondary); }
 
 /* ========================================
    Paragraphs
@@ -281,8 +281,8 @@
 .markdown-body blockquote {
     margin: 0 0 0.75em 0;
     padding: 0 1em;
-    color: #6b7280;
-    border-left: 0.25em solid #d1d5db;
+    color: var(--ido-color-text-secondary);
+    border-left: 0.25em solid var(--ido-color-border-strong);
 }
 
 .markdown-body blockquote > :first-child {
@@ -298,11 +298,12 @@
    ======================================== */
 
 .markdown-body a {
-    color: #3b82f6;
+    color: var(--ido-color-link);
     text-decoration: none;
 }
 
 .markdown-body a:hover {
+    color: var(--ido-color-link-hover);
     text-decoration: underline;
 }
 
@@ -314,7 +315,7 @@
     height: 0.25em;
     padding: 0;
     margin: 1.5em 0;
-    background-color: #e5e7eb;
+    background-color: var(--ido-color-border);
     border: 0;
 }
 
@@ -322,32 +323,47 @@
    Tables
    ======================================== */
 
+/* 表格容器 - 允许表格在容器内水平滚动 */
+.markdown-body .table-wrapper {
+    overflow-x: auto;
+    margin-bottom: 0.75em;
+    -webkit-overflow-scrolling: touch;
+}
+
+.markdown-body .table-wrapper table {
+    margin-bottom: 0;
+}
+
 .markdown-body table {
     border-collapse: collapse;
     border-spacing: 0;
     margin-top: 0;
     margin-bottom: 0.75em;
     width: 100%;
+    max-width: 100%;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .markdown-body table th,
 .markdown-body table td {
     padding: 6px 13px;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--table-border);
 }
 
 .markdown-body table th {
     font-weight: 600;
-    background-color: #f9fafb;
+    background-color: var(--table-header-bg);
 }
 
 .markdown-body table tr {
-    background-color: #fff;
-    border-top: 1px solid #d1d5db;
+    background-color: var(--table-row-bg);
+    border-top: 1px solid var(--table-border);
 }
 
 .markdown-body table tr:nth-child(2n) {
-    background-color: #f9fafb;
+    background-color: var(--table-row-alt-bg);
 }
 
 /* ========================================
@@ -357,7 +373,7 @@
 .markdown-body img {
     max-width: 100%;
     box-sizing: content-box;
-    background-color: #fff;
+    background-color: var(--ido-color-bg-primary);
 }
 
 /* ========================================
