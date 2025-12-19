@@ -26,7 +26,8 @@
         const downloadUrl = service.getDownloadUrl(latestRelease);
         const isElectron = config.platform.isElectron;
         const isAndroid = config.platform.isAndroid;
-        const supportsInAppDownload = isElectron || isAndroid;
+        const isWeb = platform === 'web';
+        const supportsInAppDownload = (isElectron || isAndroid) && !isWeb;
 
         // 创建遮罩层
         const overlay = document.createElement('div');
@@ -61,7 +62,8 @@
         const platformNames = {
             android: 'Android APK',
             electron: 'Windows 桌面版',
-            web: '浏览器扩展'
+            extension: '浏览器扩展',
+            web: '网页版'
         };
 
         // 更新内容（简化 Markdown）
@@ -189,7 +191,7 @@
                     cursor: pointer;
                     transition: all 0.15s ease;
                 ">
-                    ${supportsInAppDownload ? '下载并安装' : '立即下载'}
+                    ${isWeb ? '查看更新' : (supportsInAppDownload ? '下载并安装' : '立即下载')}
                 </button>
             </div>
         `;
@@ -317,15 +319,52 @@
         const progressBar = document.getElementById('idofront-progress-bar');
         const progressText = document.getElementById('idofront-progress-text');
         
+        // 处理不确定进度（原生 HTTP 下载不支持进度回调）
+        if (data.indeterminate || data.percent === -1) {
+            if (progressBar) {
+                // 添加不确定进度动画
+                progressBar.style.width = '100%';
+                progressBar.style.animation = 'indeterminate-progress 1.5s infinite ease-in-out';
+                progressBar.style.background = 'linear-gradient(90deg, transparent, #10b981, transparent)';
+                progressBar.style.backgroundSize = '200% 100%';
+            }
+            if (progressText) {
+                progressText.textContent = data.message || '正在下载，请稍候...';
+            }
+            
+            // 添加动画样式
+            if (!document.getElementById('idofront-indeterminate-styles')) {
+                const style = document.createElement('style');
+                style.id = 'idofront-indeterminate-styles';
+                style.textContent = `
+                    @keyframes indeterminate-progress {
+                        0% { background-position: 200% 0; }
+                        100% { background-position: -200% 0; }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            return;
+        }
+        
+        // 正常进度显示
         if (progressBar) {
+            // 移除不确定动画
+            progressBar.style.animation = '';
+            progressBar.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+            progressBar.style.backgroundSize = '';
             progressBar.style.width = `${data.percent.toFixed(1)}%`;
         }
         
         if (progressText) {
-            const transferred = formatBytes(data.transferred);
-            const total = formatBytes(data.total);
-            const speed = formatBytes(data.bytesPerSecond);
-            progressText.textContent = `${transferred} / ${total} (${speed}/s)`;
+            if (data.message) {
+                progressText.textContent = data.message;
+            } else {
+                const transferred = formatBytes(data.transferred);
+                const total = formatBytes(data.total);
+                const speed = formatBytes(data.bytesPerSecond);
+                progressText.textContent = `${transferred} / ${total} (${speed}/s)`;
+            }
         }
     }
 

@@ -174,11 +174,17 @@
             return await window.electronUpdater.downloadUpdate();
         }
         
-        // Android/Web: 使用 fetch 下载
+        // Android/Web: 检查下载地址
         if (!downloadUrl) {
             return { success: false, error: '下载地址无效' };
         }
 
+        // Android: 使用原生 HTTP 下载（绕过 CORS）
+        if (platform === 'android') {
+            return await downloadApkWithNativeHttp(downloadUrl, onProgress);
+        }
+
+        // Web/扩展环境: 尝试使用 fetch 下载
         try {
             const response = await fetch(downloadUrl);
             
@@ -215,11 +221,6 @@
             // 合并数据块
             const blob = new Blob(chunks);
             
-            // Android: 保存并安装 APK
-            if (platform === 'android') {
-                return await saveAndInstallApk(blob, downloadUrl);
-            }
-            
             // Web: 创建下载链接
             const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -232,6 +233,195 @@
         } catch (error) {
             console.error('[IdoFront.updater] 下载失败:', error);
             return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Android: 使用 Capacitor 原生 HTTP 下载 APK
+     * CapacitorHttp 在原生层执行请求，绕过 CORS 限制
+     * @param {string} downloadUrl - 下载地址
+     * @param {Function} onProgress - 进度回调
+     * @returns {Promise<Object>}
+     */
+    async function downloadApkWithNativeHttp(downloadUrl, onProgress) {
+        try {
+            const Capacitor = window.Capacitor;
+            const CapacitorHttp = Capacitor?.Plugins?.CapacitorHttp;
+            const Filesystem = Capacitor?.Plugins?.Filesystem;
+            const FileOpener = Capacitor?.Plugins?.FileOpener;
+            
+            // 检查必需的插件是否可用
+            if (!CapacitorHttp) {
+                console.warn('[IdoFront.updater] CapacitorHttp 不可用，降级到系统浏览器下载');
+                return await openAndroidDownloadInBrowser(downloadUrl);
+            }
+            
+            if (!Filesystem) {
+                console.warn('[IdoFront.updater] Filesystem 不可用，降级到系统浏览器下载');
+                return await openAndroidDownloadInBrowser(downloadUrl);
+            }
+
+            console.log('[IdoFront.updater] 开始使用原生 HTTP 下载 APK:', downloadUrl);
+            
+            // 显示下载中状态（CapacitorHttp 不支持进度回调）
+            if (onProgress) {
+                onProgress({
+                    percent: -1, // -1 表示不确定进度
+                    transferred: 0,
+                    total: 0,
+                    bytesPerSecond: 0,
+                    indeterminate: true
+                });
+            }
+
+            // 使用原生 HTTP 下载（返回 base64 编码的数据）
+            const response = await CapacitorHttp.get({
+                url: downloadUrl,
+                responseType: 'blob', // 返回 base64 编码的二进制数据
+                headers: {
+                    'Accept': 'application/vnd.android.package-archive,application/octet-stream,*/*'
+                }
+            });
+
+            if (response.status !== 200) {
+                throw new Error(`下载失败: HTTP ${response.status}`);
+            }
+
+            // 获取下载的数据（base64 编码）
+            let base64Data = response.data;
+            
+            // 如果返回的数据包含 data URL 前缀，去掉它
+            if (typeof base64Data === 'string' && base64Data.includes(',')) {
+                base64Data = base64Data.split(',')[1];
+            }
+
+            console.log('[IdoFront.updater] 下载完成，保存文件...');
+
+            // 更新进度
+            if (onProgress) {
+                onProgress({
+                    percent: 50,
+                    transferred: 0,
+                    total: 0,
+                    bytesPerSecond: 0,
+                    message: '正在保存文件...'
+                });
+            }
+
+            // 保存到下载目录
+            const fileName = downloadUrl.split('/').pop() || 'IdoFront.apk';
+            const Directory = Capacitor.Plugins.Directory || { ExternalStorage: 'EXTERNAL_STORAGE', Cache: 'CACHE' };
+            
+            // 尝试保存到外部存储的下载目录
+            let saveResult;
+            let savedPath;
+            
+            try {
+                // 首先尝试保存到外部存储
+                saveResult = await Filesystem.writeFile({
+                    path: 'Download/' + fileName,
+                    data: base64Data,
+                    directory: 'EXTERNAL_STORAGE',
+                    recursive: true
+                });
+                savedPath = saveResult.uri;
+            } catch (extError) {
+                console.warn('[IdoFront.updater] 无法保存到外部存储，尝试缓存目录:', extError);
+                
+                // 降级到缓存目录
+                saveResult = await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64Data,
+                    directory: 'CACHE'
+                });
+                savedPath = saveResult.uri;
+            }
+
+            console.log('[IdoFront.updater] APK 已保存:', savedPath);
+
+            // 更新进度
+            if (onProgress) {
+                onProgress({
+                    percent: 100,
+                    transferred: 0,
+                    total: 0,
+                    bytesPerSecond: 0,
+                    message: '下载完成'
+                });
+            }
+
+            // 尝试打开 APK 进行安装
+            if (FileOpener && FileOpener.open) {
+                try {
+                    console.log('[IdoFront.updater] 尝试打开 APK 安装...');
+                    await FileOpener.open({
+                        filePath: savedPath,
+                        contentType: 'application/vnd.android.package-archive',
+                        openWithDefault: true
+                    });
+                    return {
+                        success: true,
+                        message: '正在打开安装程序...',
+                        filePath: savedPath
+                    };
+                } catch (openError) {
+                    console.warn('[IdoFront.updater] 打开 APK 失败:', openError);
+                    return {
+                        success: true,
+                        message: `APK 已保存\n请从文件管理器打开安装`,
+                        filePath: savedPath
+                    };
+                }
+            } else {
+                return {
+                    success: true,
+                    message: `APK 已保存到下载目录\n请从文件管理器打开安装`,
+                    filePath: savedPath
+                };
+            }
+        } catch (error) {
+            console.error('[IdoFront.updater] 原生下载失败:', error);
+            
+            // 降级到系统浏览器下载
+            console.log('[IdoFront.updater] 降级到系统浏览器下载');
+            return await openAndroidDownloadInBrowser(downloadUrl);
+        }
+    }
+
+    /**
+     * Android: 使用系统浏览器下载 APK（降级方案）
+     * @param {string} downloadUrl - 下载地址
+     * @returns {Promise<Object>}
+     */
+    async function openAndroidDownloadInBrowser(downloadUrl) {
+        try {
+            // 优先使用 Capacitor Browser 插件
+            const Browser = window.Capacitor?.Plugins?.Browser;
+            
+            if (Browser && Browser.open) {
+                await Browser.open({
+                    url: downloadUrl,
+                    windowName: '_system'
+                });
+                return {
+                    success: true,
+                    message: '已在浏览器中打开下载链接\n下载完成后请从通知栏或下载目录安装 APK'
+                };
+            }
+            
+            // 降级：使用 window.open
+            window.open(downloadUrl, '_system');
+            
+            return {
+                success: true,
+                message: '已在浏览器中打开下载链接\n下载完成后请从通知栏或下载目录安装 APK'
+            };
+        } catch (error) {
+            console.error('[IdoFront.updater] 打开浏览器失败:', error);
+            return {
+                success: false,
+                error: '打开下载链接失败: ' + error.message
+            };
         }
     }
 
@@ -391,6 +581,10 @@
                 return latestRelease.downloadUrls.android;
             case 'electron':
                 return latestRelease.downloadUrls.windows;
+            case 'extension':
+                return latestRelease.downloadUrls.extension;
+            case 'web':
+                return null; // 网页版通常不需要下载更新，直接刷新即可
             default:
                 return latestRelease.downloadUrls.extension;
         }

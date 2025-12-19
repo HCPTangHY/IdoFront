@@ -81,6 +81,17 @@ const FrameworkCore = (function() {
             // Main header & stream
             if (ui.mainSlots.header) ui.mainSlots.header.style.display = display;
             if (ui.mainSlots.stream) ui.mainSlots.stream.style.display = display;
+            
+            // 快速导航按钮（跟随 chat-stream 显示/隐藏）
+            const quickNav = document.getElementById('quick-nav-container');
+            if (quickNav) {
+                quickNav.style.display = display;
+            }
+            
+            // 聊天流父容器（Chat Stream Container）
+            if (ui.mainSlots.stream && ui.mainSlots.stream.parentElement) {
+                ui.mainSlots.stream.parentElement.style.display = display;
+            }
 
             // 输入区
             if (ui.mainSlots.input) {

@@ -49,15 +49,23 @@
                 return typeof window.electronPlatform !== 'undefined' &&
                        window.electronPlatform.isElectron === true;
             },
-            // Web/扩展环境
+            // 浏览器扩展环境检测
+            get isExtension() {
+                return typeof chrome !== 'undefined' &&
+                       chrome.runtime &&
+                       chrome.runtime.id &&
+                       (location.protocol === 'chrome-extension:' || location.protocol === 'extension:');
+            },
+            // Web 网页环境
             get isWeb() {
-                return !this.isAndroid && !this.isElectron;
+                return !this.isAndroid && !this.isElectron && !this.isExtension;
             },
             
             // 获取当前平台
             get current() {
                 if (this.isAndroid) return 'android';
                 if (this.isElectron) return 'electron';
+                if (this.isExtension) return 'extension';
                 return 'web';
             }
         },
