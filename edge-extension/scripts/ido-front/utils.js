@@ -16,12 +16,13 @@
             return String(prefix || 'id') + '-' + now + '-' + counter;
         },
 
-        deriveTitleFromConversation(conversation) {
-            if (!conversation || !Array.isArray(conversation.messages)) {
-                return conversation && conversation.title ? conversation.title : 'New Chat';
+        deriveTitleFromConversation(conversation, messages) {
+            const msgs = messages || conversation?.messages;
+            if (!msgs || !Array.isArray(msgs)) {
+                return conversation && conversation.title ? conversation.title : '新对话';
             }
-            for (let i = 0; i < conversation.messages.length; i += 1) {
-                const msg = conversation.messages[i];
+            for (let i = 0; i < msgs.length; i += 1) {
+                const msg = msgs[i];
                 if (msg.role === 'user' && msg.content) {
                     const trimmed = String(msg.content).trim().replace(/\s+/g, ' ');
                     if (!trimmed) continue;
@@ -29,7 +30,7 @@
                     return trimmed.slice(0, 30) + '…';
                 }
             }
-            return conversation.title || 'New Chat';
+            return conversation?.title || '新对话';
         },
 
         /**

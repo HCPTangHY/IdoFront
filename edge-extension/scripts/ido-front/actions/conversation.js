@@ -29,6 +29,11 @@
                 // 同步UI以显示新面具的对话
                 syncUI();
             });
+            
+            // 监听对话重命名事件，增量更新侧边栏
+            store.events.on('conversation:renamed', (data) => {
+                updateConversationTitleInList(data.id, data.title);
+            });
         }
     };
 
@@ -70,22 +75,9 @@
         
         store.persist();
         
+        // syncUI 会统一处理 loading 状态和发送按钮状态
         syncUI();
         updateHeader(target);
-        
-        // 修复：切换对话后，更新发送按钮状态
-        // 检查新对话是否有活跃的生成请求
-        const hasActiveGeneration = messageActions && messageActions.hasActiveGeneration
-            ? messageActions.hasActiveGeneration(id)
-            : false;
-        
-        const isGenerating = store.state.isTyping &&
-                            store.state.typingConversationId === id &&
-                            hasActiveGeneration;
-        
-        if (context && context.setSendButtonLoading) {
-            context.setSendButtonLoading(isGenerating);
-        }
 
         if (context && context.events) {
             context.events.emit('chat:conversation-selected', { conversationId: id });
@@ -227,6 +219,14 @@
                     if (msg.reasoningDuration !== undefined) {
                         payload.reasoningDuration = msg.reasoningDuration;
                     }
+                    
+                    // ★ 累计计时字段（用于恢复进行中的计时器）
+                    if (msg.reasoningAccumulatedTime !== undefined) {
+                        payload.reasoningAccumulatedTime = msg.reasoningAccumulatedTime;
+                    }
+                    if (msg.reasoningSegmentStart !== undefined) {
+                        payload.reasoningSegmentStart = msg.reasoningSegmentStart;
+                    }
                 }
                 
                 // 添加附件信息（如果存在）
@@ -302,52 +302,35 @@
                 });
             }
 
-            // 如果当前对话正在生成回复，恢复对应的加载指示器 / 流式状态
-            if (store.state.isTyping && store.state.typingConversationId === active.id && context) {
-                const typingMsgId = store.state.typingMessageId;
-
-                // 兜底校验：若没有活跃生成标记，避免创建幽灵 loading
-                const hasActiveGen = window.IdoFront.messageActions && window.IdoFront.messageActions.hasActiveGeneration
-                    ? window.IdoFront.messageActions.hasActiveGeneration(active.id)
-                    : false;
-
-                // 先清理可能残留的流式指示器（例如上一次渲染留下的）
-                if (typingMsgId && context.removeMessageStreamingIndicator) {
-                    try {
-                        context.removeMessageStreamingIndicator(typingMsgId);
-                    } catch (e) {
-                        console.warn('removeMessageStreamingIndicator error:', e);
+            // 唯一判断条件：typingMessageId 是否在当前活跃路径中
+            const typingMsgId = store.state.typingMessageId;
+            
+            // 清理所有独立的 loading 气泡（syncUI 重建后不应该有残留）
+            const loadingChatStream = document.getElementById('chat-stream');
+            if (loadingChatStream) {
+                const strayLoadings = loadingChatStream.querySelectorAll('[data-loading-id]');
+                strayLoadings.forEach(el => el.remove());
+            }
+            
+            // 判断 typingMsgId 是否在当前活跃路径中
+            const isTypingMsgInActivePath = typingMsgId && activePath.some(m => m.id === typingMsgId);
+            
+            if (isTypingMsgInActivePath && context) {
+                // 消息在活跃路径中，恢复 loading 指示器到该消息
+                if (context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
+                    const loadingId = context.addLoadingIndicator();
+                    const attached = context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
+                    if (!attached && context.removeLoadingIndicator) {
+                        context.removeLoadingIndicator(loadingId);
                     }
                 }
-
-                if (hasActiveGen && typingMsgId && context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
-                    // 已经有助手消息，直接在该消息下方挂载 loading 指示器
-                    const loadingId = context.addLoadingIndicator();
-                    context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
-                    // 同步发送按钮状态
-                    if (context.setSendButtonLoading) {
-                        context.setSendButtonLoading(true);
-                    }
-                } else if (hasActiveGen && !typingMsgId && context.addLoadingIndicator) {
-                    // 还没有助手消息（请求已发出但首个 chunk 未到达），显示独立的 loading 气泡
-                    context.addLoadingIndicator();
-                    // 同步发送按钮状态
-                    if (context.setSendButtonLoading) {
-                        context.setSendButtonLoading(true);
-                    }
-                } else {
-                    // 无活跃生成，清理全局 typing 状态，避免幽灵 loading
-                    store.state.isTyping = false;
-                    store.state.typingConversationId = null;
-                    store.state.typingMessageId = null;
-                    store.persist();
-                    // 同步发送按钮状态
-                    if (context.setSendButtonLoading) {
-                        context.setSendButtonLoading(false);
-                    }
+                // 发送按钮禁用（与 loading 一致）
+                if (context.setSendButtonLoading) {
+                    context.setSendButtonLoading(true);
                 }
             } else {
-                // 当前对话没有进行中的生成，确保按钮状态正确
+                // 消息不在活跃路径中，或无活跃生成
+                // 发送按钮可用（用户可以在其他分支发送消息）
                 if (context.setSendButtonLoading) {
                     context.setSendButtonLoading(false);
                 }
@@ -399,12 +382,23 @@
             item.className = `group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
                 isActive ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-100 text-gray-700'
             }`;
+            item.dataset.convId = conv.id;
             
             const title = document.createElement('div');
             title.className = "flex-1 text-xs font-medium truncate";
             title.textContent = conv.title || '新对话';
             title.title = conv.title || '新对话';
             
+            // 编辑按钮
+            const editBtn = document.createElement('button');
+            editBtn.className = "opacity-0 group-hover:opacity-100 p-1 hover:bg-blue-50 text-gray-400 hover:text-blue-500 rounded transition-all";
+            editBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">edit</span>';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                startInlineEdit(item, title, conv.id, conv.title || '新对话');
+            };
+            
+            // 删除按钮
             const deleteBtn = document.createElement('button');
             deleteBtn.className = "opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded transition-all";
             deleteBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">delete</span>';
@@ -420,9 +414,102 @@
             };
             
             item.appendChild(title);
+            item.appendChild(editBtn);
             item.appendChild(deleteBtn);
             listContainer.appendChild(item);
         });
+    }
+
+    /**
+     * 增量更新对话列表中的标题
+     * @param {string} convId - 对话 ID
+     * @param {string} newTitle - 新标题
+     */
+    function updateConversationTitleInList(convId, newTitle) {
+        const listContainer = document.getElementById('history-list');
+        if (!listContainer) return;
+        
+        const item = listContainer.querySelector(`[data-conv-id="${convId}"]`);
+        if (!item) return;
+        
+        const titleEl = item.querySelector('.flex-1.text-xs.font-medium.truncate');
+        if (!titleEl) return;
+        
+        // 更新标题内容
+        titleEl.textContent = newTitle;
+        titleEl.title = newTitle;
+        
+        // 添加高亮动效
+        item.classList.add('ido-title-updated');
+        
+        // 动效结束后移除类
+        setTimeout(() => {
+            item.classList.remove('ido-title-updated');
+        }, 1500);
+        
+        // 同步更新 header（如果是当前活跃对话）
+        if (convId === store.state.activeConversationId) {
+            const headerTitle = document.getElementById('chat-title');
+            if (headerTitle && headerTitle.dataset.editing !== 'true') {
+                headerTitle.textContent = newTitle;
+            }
+        }
+    }
+
+    /**
+     * 启动内联编辑模式（对话列表项）
+     */
+    function startInlineEdit(itemEl, titleEl, convId, currentTitle) {
+        // 如果已经在编辑模式，忽略
+        if (itemEl.querySelector('input')) return;
+        
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentTitle;
+        input.className = 'flex-1 text-xs font-medium bg-white border border-blue-400 rounded px-1 py-0.5 outline-none';
+        input.style.minWidth = '0';
+        
+        // 隐藏原标题
+        titleEl.style.display = 'none';
+        
+        // 插入输入框
+        itemEl.insertBefore(input, titleEl);
+        input.focus();
+        input.select();
+        
+        const finishEdit = (save) => {
+            if (save) {
+                const newTitle = input.value.trim();
+                if (newTitle && newTitle !== currentTitle) {
+                    store.renameConversation(convId, newTitle, 'user');
+                    titleEl.textContent = newTitle;
+                    titleEl.title = newTitle;
+                    // 同步更新 header（如果是当前活跃对话）
+                    if (convId === store.state.activeConversationId) {
+                        const headerTitle = document.getElementById('chat-title');
+                        if (headerTitle) {
+                            headerTitle.textContent = newTitle;
+                        }
+                    }
+                }
+            }
+            input.remove();
+            titleEl.style.display = '';
+        };
+        
+        input.onblur = () => finishEdit(true);
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                finishEdit(true);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                finishEdit(false);
+            }
+        };
+        
+        // 阻止点击事件冒泡以免触发选择
+        input.onclick = (e) => e.stopPropagation();
     }
 
     /**
@@ -483,6 +570,20 @@
         const titleEl = document.getElementById('chat-title');
         if (titleEl) {
             titleEl.textContent = conv ? (conv.title || '新对话') : '新对话';
+            
+            // 添加可编辑样式提示
+            titleEl.style.cursor = conv ? 'pointer' : 'default';
+            titleEl.title = conv ? '点击编辑标题' : '';
+            
+            // 移除旧的事件监听器（避免重复绑定）
+            titleEl.onclick = null;
+            
+            if (conv) {
+                titleEl.onclick = (e) => {
+                    e.stopPropagation();
+                    startHeaderTitleEdit(titleEl, conv.id, conv.title || '新对话');
+                };
+            }
         }
         
         // 更新模型信息
@@ -499,6 +600,70 @@
                 modelInfoEl.textContent = '';
             }
         }
+    }
+
+    /**
+     * 启动 Header 标题编辑模式
+     */
+    function startHeaderTitleEdit(titleEl, convId, currentTitle) {
+        // 如果已经在编辑模式，忽略
+        if (titleEl.dataset.editing === 'true') return;
+        titleEl.dataset.editing = 'true';
+        
+        const originalText = titleEl.textContent;
+        const originalStyles = {
+            cursor: titleEl.style.cursor,
+            minWidth: titleEl.style.minWidth
+        };
+        
+        // 创建输入框
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentTitle;
+        input.className = 'bg-transparent border-b border-blue-400 outline-none text-inherit font-inherit';
+        input.style.width = Math.max(100, titleEl.offsetWidth + 20) + 'px';
+        input.style.fontSize = 'inherit';
+        input.style.fontWeight = 'inherit';
+        
+        // 隐藏原标题文本
+        titleEl.textContent = '';
+        titleEl.appendChild(input);
+        titleEl.style.cursor = 'text';
+        
+        input.focus();
+        input.select();
+        
+        const finishEdit = (save) => {
+            if (titleEl.dataset.editing !== 'true') return; // 防止重复调用
+            titleEl.dataset.editing = 'false';
+            
+            if (save) {
+                const newTitle = input.value.trim();
+                if (newTitle && newTitle !== currentTitle) {
+                    store.renameConversation(convId, newTitle, 'user');
+                    titleEl.textContent = newTitle;
+                    // 同步更新对话列表
+                    renderConversationList();
+                } else {
+                    titleEl.textContent = originalText;
+                }
+            } else {
+                titleEl.textContent = originalText;
+            }
+            
+            titleEl.style.cursor = originalStyles.cursor;
+        };
+        
+        input.onblur = () => finishEdit(true);
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                input.blur(); // 触发 onblur 保存
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                finishEdit(false);
+            }
+        };
     }
 
     // 暴露 API 供外部调用

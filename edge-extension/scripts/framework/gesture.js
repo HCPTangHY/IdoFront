@@ -18,7 +18,8 @@ const FrameworkGesture = (function() {
         isDragging: false,
         swipeTarget: null,
         startTime: 0,
-        directionLocked: false
+        directionLocked: false,
+        ignoreGesture: false
     };
 
     // 手势配置
@@ -110,7 +111,7 @@ const FrameworkGesture = (function() {
 
         // 检查是否在可水平滚动的元素内（如代码块）
         if (isInScrollableElement(e.target)) {
-            swipeState.swipeTarget = null;
+            swipeState.ignoreGesture = true;
             return;
         }
 
@@ -124,6 +125,7 @@ const FrameworkGesture = (function() {
         swipeState.isDragging = false;
         swipeState.swipeTarget = null;
         swipeState.directionLocked = false;
+        swipeState.ignoreGesture = false;
     }
 
     /**
@@ -148,6 +150,7 @@ const FrameworkGesture = (function() {
      */
     function handleTouchMove(e) {
         if (window.innerWidth >= SWIPE_CONFIG.MOBILE_BREAKPOINT) return;
+        if (swipeState.ignoreGesture) return;
 
         const touch = e.touches[0];
         swipeState.currentX = touch.clientX;
@@ -239,7 +242,7 @@ const FrameworkGesture = (function() {
      * 处理触摸结束
      */
     function handleTouchEnd(e) {
-        if (!swipeState.swipeTarget) {
+        if (swipeState.ignoreGesture || !swipeState.swipeTarget) {
             resetSwipeState();
             return;
         }
@@ -327,6 +330,7 @@ const FrameworkGesture = (function() {
         swipeState.swipeTarget = null;
         swipeState.startTime = 0;
         swipeState.directionLocked = false;
+        swipeState.ignoreGesture = false;
     }
 
     return {

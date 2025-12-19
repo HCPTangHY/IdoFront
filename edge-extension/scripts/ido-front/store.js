@@ -33,7 +33,10 @@
             networkLogs: [], // 网络日志
             isTyping: false,
             channels: [],
-            pluginStates: {} // Format: "slot::id": boolean
+            pluginStates: {}, // Format: "slot::id": boolean
+            settings: {
+                autoGenerateTitle: true  // AI 自动生成对话标题
+            }
         },
 
         // 统一状态源事件总线：所有对外的状态变更都通过 Store 自己发出
@@ -219,7 +222,8 @@
                 activeConversationId: this.state.activeConversationId,
                 logs: Array.isArray(this.state.logs) ? this.state.logs.slice(0, MAX_LOGS) : [],
                 channels: this.state.channels,
-                pluginStates: this.state.pluginStates
+                pluginStates: this.state.pluginStates,
+                settings: this.state.settings
             };
         },
 
@@ -356,6 +360,9 @@
                     }
                     if (snapshot.pluginStates) {
                         this.state.pluginStates = snapshot.pluginStates;
+                    }
+                    if (snapshot.settings) {
+                        this.state.settings = { ...this.state.settings, ...snapshot.settings };
                     }
                 }
             } catch (e) {
@@ -541,8 +548,9 @@
                  }
                  
                  // Auto-title
-                 if(message.role === 'user') {
-                     conv.title = window.IdoFront.utils.deriveTitleFromConversation(conv) || conv.title;
+                 if(message.role === 'user' && !conv.titleEditedByUser && !conv.titleGeneratedByAI) {
+                     const activePath = this.getActivePath(convId);
+                     conv.title = window.IdoFront.utils.deriveTitleFromConversation(conv, activePath) || conv.title;
                  }
                  this.persist();
              }
@@ -845,8 +853,9 @@
             conv.activeBranchMap[parentKey] = newMessage.id;
             
             // Auto-title
-            if (newMessage.role === 'user') {
-                conv.title = window.IdoFront.utils.deriveTitleFromConversation(conv) || conv.title;
+            if (newMessage.role === 'user' && !conv.titleEditedByUser && !conv.titleGeneratedByAI) {
+                const activePath = this.getActivePath(convId);
+                conv.title = window.IdoFront.utils.deriveTitleFromConversation(conv, activePath) || conv.title;
             }
             
             this.persist();
@@ -887,6 +896,79 @@
             });
             
             this.persist();
+        },
+
+        /**
+         * 重命名对话
+         * @param {string} convId - 对话 ID
+         * @param {string} newTitle - 新标题
+         * @param {string} [source='user'] - 来源：'user' 表示用户手动编辑，'ai' 表示 AI 生成
+         * @returns {boolean} 是否成功
+         */
+        renameConversation(convId, newTitle, source) {
+            const conv = this.state.conversations.find(c => c.id === convId);
+            if (!conv) return false;
+            
+            const trimmed = (newTitle || '').trim();
+            if (!trimmed) return false;
+            
+            // 如果用户已编辑过标题，AI 不能再修改
+            if (source === 'ai' && conv.titleEditedByUser) {
+                return false;
+            }
+            
+            conv.title = trimmed;
+            conv.updatedAt = Date.now();
+            
+            // 标记用户编辑
+            if (source === 'user') {
+                conv.titleEditedByUser = true;
+            } else if (source === 'ai') {
+                conv.titleGeneratedByAI = true;
+            }
+            
+            this.persist();
+            
+            // 触发事件通知 UI 更新
+            if (this.events) {
+                this.events.emit('conversation:renamed', { id: convId, title: trimmed, source: source || 'user' });
+            }
+            return true;
+        },
+
+        // ==================== 全局设置方法 ====================
+
+        /**
+         * 获取全局设置
+         * @param {string} [key] - 设置键名，不传返回所有设置
+         * @returns {*} 设置值或所有设置对象
+         */
+        getSetting(key) {
+            if (!this.state.settings) {
+                this.state.settings = { autoGenerateTitle: true };
+            }
+            if (key) {
+                return this.state.settings[key];
+            }
+            return { ...this.state.settings };
+        },
+
+        /**
+         * 设置全局设置
+         * @param {string} key - 设置键名
+         * @param {*} value - 设置值
+         */
+        setSetting(key, value) {
+            if (!this.state.settings) {
+                this.state.settings = { autoGenerateTitle: true };
+            }
+            this.state.settings[key] = value;
+            this.persist();
+            
+            // 触发设置变更事件
+            if (this.events) {
+                this.events.emit('settings:changed', { key, value });
+            }
         },
 
         deleteConversation(id) {

@@ -218,11 +218,17 @@ const FrameworkMessages = (function() {
         let branchInfo = null;
         let createdAt = null;
 
+        // 累计计时所需的额外字段
+        let reasoningAccumulatedTime = null;
+        let reasoningSegmentStart = null;
+
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
             reasoning = textOrObj.reasoning || null;
             attachments = textOrObj.attachments || null;
             reasoningDuration = textOrObj.reasoningDuration || null;
+            reasoningAccumulatedTime = textOrObj.reasoningAccumulatedTime || null;
+            reasoningSegmentStart = textOrObj.reasoningSegmentStart || null;
             modelName = textOrObj.modelName || null;
             channelName = textOrObj.channelName || null;
             stats = textOrObj.stats || null;
@@ -337,27 +343,77 @@ const FrameworkMessages = (function() {
 
     /**
      * 创建思维链区块
+     * 支持三种状态：
+     * 1. 已完成（有 reasoningDuration）→ 静态显示最终时长
+     * 2. 进行中（有 reasoningAccumulatedTime + reasoningSegmentStart）→ 恢复计时器
+     * 3. 新消息（无上述字段）→ 根据 isHistorical 决定
      */
     function createReasoningBlock(reasoning, textOrObj, options) {
+        options = options || {};  // 确保 options 存在
+        
         const reasoningBlock = document.createElement('div');
         reasoningBlock.className = 'reasoning-block';
 
         const toggle = document.createElement('div');
         toggle.className = 'reasoning-toggle';
 
+        // 从传入数据中提取计时相关字段
         let reasoningDuration = null;
-        if (typeof textOrObj === 'object' && textOrObj !== null && textOrObj.reasoningDuration !== undefined) {
-            reasoningDuration = textOrObj.reasoningDuration;
+        let reasoningAccumulatedTime = null;
+        let reasoningSegmentStart = null;
+        
+        if (typeof textOrObj === 'object' && textOrObj !== null) {
+            // 使用 undefined 检查，避免 0 被误判为 falsy
+            reasoningDuration = textOrObj.reasoningDuration !== undefined ? textOrObj.reasoningDuration : null;
+            reasoningAccumulatedTime = textOrObj.reasoningAccumulatedTime !== undefined ? textOrObj.reasoningAccumulatedTime : null;
+            reasoningSegmentStart = textOrObj.reasoningSegmentStart !== undefined ? textOrObj.reasoningSegmentStart : null;
         }
 
         const text = typeof textOrObj === 'object' ? textOrObj.content : textOrObj;
-        const isHistoricalMessage = (text && text.trim().length > 0) || options.isHistorical;
+        // 老对话可能没有 reasoningDuration，但有 content，应该被视为历史消息
+        // 新增：如果有 reasoning 但没有任何计时字段，也视为历史消息
+        const hasAnyTimingData = reasoningDuration != null || reasoningAccumulatedTime != null || reasoningSegmentStart != null;
+        const isHistoricalMessage = (text && text.trim().length > 0) || options.isHistorical || (reasoning && !hasAnyTimingData);
 
-        if (reasoningDuration !== null && reasoningDuration !== undefined) {
+        // 状态1：已完成，静态显示最终时长
+        if (reasoningDuration != null) {
             toggle.innerHTML = `<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">${typeof reasoningDuration === 'number' ? reasoningDuration.toFixed(1) : reasoningDuration}s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>`;
-        } else if (isHistoricalMessage) {
+        }
+        // 状态2：进行中，恢复计时器（从 Store 恢复状态）
+        // 使用 != null 同时检查 null 和 undefined，避免老对话被误判
+        else if (reasoningAccumulatedTime != null || reasoningSegmentStart != null) {
+            const accumulated = reasoningAccumulatedTime || 0;
+            const segmentStart = reasoningSegmentStart || null;
+            
+            // 计算初始显示值
+            let initialDisplay = accumulated;
+            if (segmentStart) {
+                initialDisplay = accumulated + (Date.now() - segmentStart) / 1000;
+            }
+            
+            toggle.innerHTML = `<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">${initialDisplay.toFixed(1)}s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>`;
+            
+            // 只有在思维链段进行中时才启动计时器
+            if (segmentStart) {
+                const timerSpan = toggle.querySelector('.reasoning-timer');
+                const timerId = setInterval(() => {
+                    const currentTime = accumulated + (Date.now() - segmentStart) / 1000;
+                    if (timerSpan) timerSpan.textContent = currentTime.toFixed(1) + 's';
+                }, 100);
+                
+                reasoningBlock.dataset.timerId = timerId;
+                reasoningBlock.dataset.accumulatedTime = accumulated;
+                reasoningBlock.dataset.segmentStart = segmentStart;
+            } else {
+                // 只有累计时间，无进行中的段，静态显示
+            }
+        }
+        // 状态3：历史消息，无计时数据
+        else if (isHistoricalMessage) {
             toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
-        } else {
+        }
+        // 状态4：新生成的消息（不应该走到这里，因为 Store 会先设置 segmentStart）
+        else {
             toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
 
             const timerSpan = toggle.querySelector('.reasoning-timer');
@@ -761,41 +817,9 @@ const FrameworkMessages = (function() {
             }
         }
 
-        // 停止思维链计时器
-        if (text && reasoningBlock && reasoningBlock.dataset.timerId) {
-            const timerId = parseInt(reasoningBlock.dataset.timerId);
-            clearInterval(timerId);
-
-            const toggle = reasoningBlock.querySelector('.reasoning-toggle');
-            const timerSpan = toggle?.querySelector('.reasoning-timer');
-            let finalDuration = 0;
-
-            if (timerSpan && reasoningBlock.dataset.startTime) {
-                finalDuration = (Date.now() - parseInt(reasoningBlock.dataset.startTime)) / 1000;
-                timerSpan.textContent = finalDuration.toFixed(1) + 's';
-            }
-
-            if (finalDuration > 0 && events) {
-                if (typeof events.emitAsync === 'function') {
-                    events.emitAsync('reasoning:completed', {
-                        messageId: lastMsg.id,
-                        duration: finalDuration
-                    });
-                } else if (typeof events.emit === 'function') {
-                    events.emit('reasoning:completed', {
-                        messageId: lastMsg.id,
-                        duration: finalDuration
-                    });
-                }
-            }
-
-            delete reasoningBlock.dataset.timerId;
-
-            const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
-            if (reasoningContentDiv && lastMsg.reasoning && markdown) {
-                markdown.enqueueRender(reasoningContentDiv, lastMsg.reasoning);
-            }
-        }
+        // ★ 不在这里停止思维链计时器
+        // 计时器只在 finalizeStreamingMessage 中停止
+        // 这样支持多段思维链（思维链-正文-思维链-正文）累计计时
 
         // 更新正文
         if (contentSpan && lastMsg.role !== 'user' && text && markdown) {
@@ -877,44 +901,39 @@ const FrameworkMessages = (function() {
         const lastMsg = state.messages[state.messages.length - 1];
         const lastMsgId = lastMsg?.id;
 
-        // 停止思维链计时器
+        // 停止思维链计时器（如果还有运行中的）
         const reasoningBlock = container.querySelector('.reasoning-block');
         if (reasoningBlock && reasoningBlock.dataset.timerId) {
             const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
             if (!Number.isNaN(timerId)) {
                 clearInterval(timerId);
             }
-
-            let finalDuration = 0;
-            if (reasoningBlock.dataset.startTime) {
-                const startTime = parseInt(reasoningBlock.dataset.startTime, 10);
-                if (!Number.isNaN(startTime)) {
-                    finalDuration = (Date.now() - startTime) / 1000;
-                }
-            }
-
-            const toggle = reasoningBlock.querySelector('.reasoning-toggle');
-            const timerSpan = toggle && toggle.querySelector('.reasoning-timer');
-            if (timerSpan && finalDuration > 0) {
-                timerSpan.textContent = finalDuration.toFixed(1) + 's';
-            }
-
             delete reasoningBlock.dataset.timerId;
             delete reasoningBlock.dataset.startTime;
-
-            if (finalDuration > 0 && lastMsgId && events) {
-                if (typeof events.emitAsync === 'function') {
-                    events.emitAsync('reasoning:completed', {
-                        messageId: lastMsgId,
-                        duration: finalDuration
-                    });
-                } else if (typeof events.emit === 'function') {
-                    events.emit('reasoning:completed', {
-                        messageId: lastMsgId,
-                        duration: finalDuration
-                    });
+            delete reasoningBlock.dataset.accumulatedTime;
+            delete reasoningBlock.dataset.segmentStart;
+        }
+        
+        // 从 Store 获取最终时长并更新 UI
+        // message.js 已经在生成结束时计算了 reasoningDuration 并保存到 Store
+        // 这里尝试从 Store 读取最新的消息状态来更新显示
+        try {
+            const store = window.IdoFront && window.IdoFront.store;
+            if (store && lastMsgId) {
+                const conv = store.getActiveConversation && store.getActiveConversation();
+                if (conv) {
+                    const storeMsg = conv.messages.find(m => m.id === lastMsgId);
+                    if (storeMsg && storeMsg.reasoningDuration !== undefined) {
+                        const toggle = reasoningBlock && reasoningBlock.querySelector('.reasoning-toggle');
+                        const timerSpan = toggle && toggle.querySelector('.reasoning-timer');
+                        if (timerSpan) {
+                            timerSpan.textContent = storeMsg.reasoningDuration.toFixed(1) + 's';
+                        }
+                    }
                 }
             }
+        } catch (e) {
+            console.warn('Failed to read reasoningDuration from store:', e);
         }
 
         // 渲染思维链 Markdown

@@ -10,8 +10,6 @@
     let store = null;
     let service = null;
     let utils = null;
-    // 每个对话当前活跃的生成请求标识（用于忽略旧请求的流式更新和清理）
-    const activeGenerationTokens = {};
 
     /**
      * 初始化消息处理模块
@@ -22,23 +20,6 @@
         service = window.IdoFront.service;
         utils = window.IdoFront.utils;
         
-        // 监听思维链完成事件，存储时间到消息顶层
-        if (context && context.events) {
-            context.events.on('reasoning:completed', (data) => {
-                const { messageId, duration } = data;
-                const conv = store.getActiveConversation();
-                if (!conv) return;
-                
-                const message = conv.messages.find(m => m.id === messageId);
-                if (message && message.reasoning) {
-                    // 直接存储到消息顶层
-                    message.reasoningDuration = duration;
-                    
-                    // 持久化
-                    store.persist();
-                }
-            });
-        }
 
         // 注入编辑渲染器到 Framework
         if (context) {
@@ -46,11 +27,29 @@
         }
     };
 
-    // 判断某个对话是否有活跃的生成（用于恢复 UI 时去掉幽灵 loading）
+    /**
+     * 判断某个对话是否有活跃的生成
+     * 统一判断：检查 typingMessageId 是否存在且对话匹配
+     */
     window.IdoFront.messageActions.hasActiveGeneration = function(convId) {
         if (!convId) return false;
-        return !!activeGenerationTokens[convId];
+        return store.state.typingConversationId === convId && !!store.state.typingMessageId;
     };
+
+    /**
+     * 统一的 UI 渲染判断函数
+     * 核心逻辑：正在生成的消息 ID 是否在当前活跃路径中
+     * @param {string} convId - 对话 ID
+     * @param {string} messageId - 消息 ID
+     * @returns {boolean} 是否应该渲染 UI
+     */
+    function shouldRenderUI(convId, messageId) {
+        if (!convId || !messageId) return false;
+        if (store.state.activeConversationId !== convId) return false;
+        
+        const activePath = store.getActivePath(convId);
+        return activePath.some(m => m.id === messageId);
+    }
 
     /**
      * 发送消息
@@ -520,12 +519,15 @@
 
     /**
      * 核心响应生成逻辑
+     * 重构：在开始时立即创建空的 AI 消息，统一使用 typingMessageId 判断 UI 渲染
      * @param {Object} conv - 对话对象
      * @param {string} relatedUserMessageId - 触发生成的用户消息 ID
      * @param {string} [parentIdForNewBranch] - 可选，新 AI 消息的父节点 ID（用于分支模式）
      */
     async function generateResponse(conv, relatedUserMessageId, parentIdForNewBranch) {
-        const isActiveConv = () => store.state.activeConversationId === conv.id;
+        // 如果未指定 parentIdForNewBranch，使用 relatedUserMessageId（即用户消息ID）
+        // 因为新的 AI 响应将作为用户消息的子节点
+        const effectiveParentId = parentIdForNewBranch !== undefined ? parentIdForNewBranch : relatedUserMessageId;
 
         // 记录请求开始时间，用于计算持续时长
         const requestStartTime = Date.now();
@@ -534,28 +536,86 @@
         // 正文首字时间（收到第一个正文内容的时间，用于计算 TPS）
         let firstContentTime = null;
 
-        // 为当前对话生成一个唯一的请求标识，用于忽略旧请求的流式更新/清理
-        const generationToken = (utils && typeof utils.createId === 'function')
-            ? utils.createId('gen')
-            : `${Date.now()}_${Math.random()}`;
-        activeGenerationTokens[conv.id] = generationToken;
-        const isCurrentGeneration = () => activeGenerationTokens[conv.id] === generationToken;
-
-        // 标记当前正在生成回复的对话，用于在切换对话后恢复 loading 状态
+        // ★ 核心改动：在开始时立即创建空的 AI 消息
+        const now = Date.now();
+        const assistantMessage = {
+            id: utils.createId('msg_b'),
+            role: 'assistant',
+            content: '',  // 空内容，后续流式更新
+            createdAt: now,
+            timestamp: new Date(now).toISOString(),
+            plugin: null
+        };
+        
+        // 保存模型名和渠道名到消息中
+        if (conv.selectedModel) {
+            assistantMessage.modelName = conv.selectedModel;
+        }
+        if (conv.selectedChannelId) {
+            const channel = store.state.channels && store.state.channels.find(c => c.id === conv.selectedChannelId);
+            if (channel) {
+                assistantMessage.channelName = channel.name;
+            }
+        }
+        
+        // 添加消息到对话（这会更新 activeBranchMap）
+        store.addMessageToConversation(conv.id, assistantMessage, effectiveParentId);
+        
+        // 标记当前正在生成回复的对话
+        // ★ 使用 typingMessageId 作为唯一真相来源
         store.state.isTyping = true;
         store.state.typingConversationId = conv.id;
-        store.state.typingMessageId = null;
+        store.state.typingMessageId = assistantMessage.id;
         store.persist();
 
-        // 设置发送按钮为加载状态（仅在当前对话处于激活状态时）
-        if (context && context.setSendButtonLoading && isActiveConv()) {
+        // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
+        let streamEnded = false;
+        
+        // 设置发送按钮为加载状态
+        // 和 loading 一样，只有消息在活跃路径上时才禁用发送按钮
+        // 这样用户可以在其他分支继续发送消息
+        if (context && context.setSendButtonLoading && shouldRenderUI(conv.id, assistantMessage.id)) {
             context.setSendButtonLoading(true);
         }
 
-        // 显示加载指示器（仅在当前对话处于激活状态时渲染到 UI）
+        // 渲染空的 AI 消息卡片 + 附着 loading（如果在活跃路径上）
         let loadingId = null;
-        if (context && context.addLoadingIndicator && isActiveConv()) {
-            loadingId = context.addLoadingIndicator();
+        if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+            // 添加空的 AI 消息卡片
+            const payload = {
+                content: '',
+                id: assistantMessage.id,
+                modelName: assistantMessage.modelName,
+                channelName: assistantMessage.channelName
+            };
+            
+            // 计算分支信息
+            const msgParentId = assistantMessage.parentId === undefined || assistantMessage.parentId === null ? 'root' : assistantMessage.parentId;
+            const siblings = conv.messages.filter(m => {
+                const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
+                return pId === msgParentId;
+            }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            
+            if (siblings.length > 1) {
+                const currentIndex = siblings.findIndex(s => s.id === assistantMessage.id);
+                payload.branchInfo = {
+                    currentIndex,
+                    total: siblings.length,
+                    siblings: siblings.map(s => s.id)
+                };
+            }
+            
+            context.addMessage('ai', payload);
+            
+            // 创建并附着 loading 指示器
+            if (context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
+                loadingId = context.addLoadingIndicator();
+                const attached = context.attachLoadingIndicatorToMessage(loadingId, assistantMessage.id);
+                if (!attached && context.removeLoadingIndicator) {
+                    context.removeLoadingIndicator(loadingId);
+                    loadingId = null;
+                }
+            }
         }
 
         // 2. Prepare API Call
@@ -564,13 +624,8 @@
 
         // 检查对话是否已选择渠道
         if (!conv.selectedChannelId) {
-            if (loadingId && context && context.removeLoadingIndicator) {
-                context.removeLoadingIndicator(loadingId);
-            }
-            const errorMsg = '请先在顶部选择渠道和模型';
-            addAssistantMessage(conv.id, errorMsg, parentIdForNewBranch);
-            store.state.isTyping = false;
-            store.persist();
+            assistantMessage.content = '请先在顶部选择渠道和模型';
+            cleanupAndFinish('请先在顶部选择渠道和模型');
             return;
         }
 
@@ -578,33 +633,40 @@
         channel = store.state.channels.find(c => c.id === conv.selectedChannelId);
         
         if (!channel) {
-            if (loadingId && context && context.removeLoadingIndicator) {
-                context.removeLoadingIndicator(loadingId);
-            }
-            const errorMsg = '所选渠道不存在，请重新选择';
-            addAssistantMessage(conv.id, errorMsg, parentIdForNewBranch);
-            store.state.isTyping = false;
-            store.persist();
+            assistantMessage.content = '所选渠道不存在，请重新选择';
+            cleanupAndFinish('所选渠道不存在，请重新选择');
             return;
         }
 
         if (!channel.enabled) {
+            assistantMessage.content = '所选渠道已禁用，请选择其他渠道或在设置中启用该渠道';
+            cleanupAndFinish('所选渠道已禁用');
+            return;
+        }
+        
+        // 辅助函数：清理并结束生成
+        function cleanupAndFinish(errorMsg) {
             if (loadingId && context && context.removeLoadingIndicator) {
                 context.removeLoadingIndicator(loadingId);
             }
-            const errorMsg = '所选渠道已禁用，请选择其他渠道或在设置中启用该渠道';
-            addAssistantMessage(conv.id, errorMsg, parentIdForNewBranch);
+            if (context && context.removeMessageStreamingIndicator && shouldRenderUI(conv.id, assistantMessage.id)) {
+                context.removeMessageStreamingIndicator(assistantMessage.id);
+            }
+            // 更新 UI 显示错误信息
+            if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                context.updateLastMessage({ content: assistantMessage.content });
+            }
             store.state.isTyping = false;
+            store.state.typingConversationId = null;
+            store.state.typingMessageId = null;
             store.persist();
-            return;
+            if (context && context.setSendButtonLoading) {
+                context.setSendButtonLoading(false);
+            }
         }
 
-        // 使用对话中选择的模型
-        if (conv.selectedModel && channel.models && channel.models.includes(conv.selectedModel)) {
-            selectedModel = conv.selectedModel;
-        } else {
-            selectedModel = channel.models?.[0];
-        }
+        // 使用对话中选择的模型（已在创建消息时设置）
+        selectedModel = conv.selectedModel || channel.models?.[0];
 
         // Get active persona settings
         const activePersona = store.getActivePersona();
@@ -700,12 +762,9 @@
         
                 // 3. Call Service with persona parameters + 会话级别覆写（流式 / 思考预算）
                 
-                // 在外层作用域定义变量，确保在 catch 和 finally 块中可访问
-                let assistantMessage = null;
+                // 流式更新的内容
                 let fullContent = '';
                 let fullReasoning = null;
-                // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
-                let streamEnded = false;
                 
                 try {
                     // 判断当前模型是否为启用思考预算的模型（暂仅识别名称中包含 gpt-5）
@@ -756,8 +815,8 @@
                 if (streamEnded) {
                     return;
                 }
-                // 如果本对话已经发起了新的请求，忽略旧请求的流式更新，避免多个助手气泡同时 loading 或内容错乱
-                if (!isCurrentGeneration()) {
+                // 如果本对话已经有了新的请求（typingMessageId 不匹配），忽略旧请求
+                if (store.state.typingMessageId !== assistantMessage.id) {
                     return;
                 }
 
@@ -778,6 +837,23 @@
                     firstTokenTime = Date.now();
                 }
                 
+                // ★ 思维链累计计时逻辑
+                // 收到 reasoning 且无 segmentStart → 开始新段
+                if (currentReasoning && !assistantMessage.reasoningSegmentStart) {
+                    assistantMessage.reasoningSegmentStart = Date.now();
+                    // 初始化累计时间（如果还没有）
+                    if (assistantMessage.reasoningAccumulatedTime === undefined) {
+                        assistantMessage.reasoningAccumulatedTime = 0;
+                    }
+                }
+                
+                // 收到 content 且有 segmentStart → 累加当前段时间，清除 segmentStart
+                if (currentContent && assistantMessage.reasoningSegmentStart) {
+                    const segmentDuration = (Date.now() - assistantMessage.reasoningSegmentStart) / 1000;
+                    assistantMessage.reasoningAccumulatedTime = (assistantMessage.reasoningAccumulatedTime || 0) + segmentDuration;
+                    delete assistantMessage.reasoningSegmentStart;
+                }
+                
                 // 记录正文首字时间（第一次收到正文内容，用于计算 TPS）
                 if (!firstContentTime && currentContent) {
                     firstContentTime = Date.now();
@@ -786,76 +862,39 @@
                 fullContent = currentContent;
                 fullReasoning = currentReasoning;
                 
-                // 从流式更新数据中提取附件（渠道适配器会直接返回在顶层或 metadata 中）
+                // 从流式更新数据中提取附件
                 let currentAttachments = null;
                 if (data.attachments && Array.isArray(data.attachments)) {
-                    // 渠道适配器直接在顶层返回 attachments
                     currentAttachments = data.attachments;
                 } else if (currentMetadata && Array.isArray(currentMetadata.attachments)) {
-                    // 兼容：某些渠道可能在 metadata 中返回
                     currentAttachments = currentMetadata.attachments;
                 }
                 
-                const updatePayload = {
-                    content: fullContent,
-                    reasoning: fullReasoning
-                };
-                // 若本次增量包含附件，则一并传给 UI，便于框架层在流式过程中直接渲染图片
-                if (currentAttachments && currentAttachments.length > 0) {
-                    updatePayload.attachments = currentAttachments;
+                // 更新助手消息的内容（始终更新 Store）
+                assistantMessage.content = fullContent;
+                if (fullReasoning) {
+                    assistantMessage.reasoning = fullReasoning;
                 }
-                 
-                if (!assistantMessage) {
-                    // 第一次收到内容：创建真实消息（总是写入 Store）
-                    // 传入 parentIdForNewBranch 以支持分支模式
-                    assistantMessage = addAssistantMessage(conv.id, {
+                if (currentAttachments && currentAttachments.length > 0) {
+                    assistantMessage.attachments = currentAttachments;
+                }
+                if (currentMetadata) {
+                    assistantMessage.metadata = currentMetadata;
+                }
+                
+                // 仅当在活跃路径上时才更新 UI
+                if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                    const updatePayload = {
                         content: fullContent,
                         reasoning: fullReasoning,
-                        attachments: currentAttachments,
-                        metadata: currentMetadata
-                    }, parentIdForNewBranch);
-
-                    // 记录当前流式消息的 ID，方便在切换对话后复原 loading 到这条消息上
-                    store.state.typingMessageId = assistantMessage.id;
-                    
-                    // 将加载指示器附着到消息下方（仅对当前激活的对话操作 UI）
-                    if (context && context.attachLoadingIndicatorToMessage && isActiveConv()) {
-                        let attached = false;
-                        
-                        if (loadingId) {
-                            attached = context.attachLoadingIndicatorToMessage(loadingId, assistantMessage.id);
-                        }
-                        
-                        // 如果原始加载气泡已经因为切换对话被清空，则重新创建一个并附着
-                        if (!attached && context.addLoadingIndicator) {
-                            const tmpLoadingId = context.addLoadingIndicator();
-                            context.attachLoadingIndicatorToMessage(tmpLoadingId, assistantMessage.id);
-                        }
-                        
-                        // 之后统一通过 messageId 来清理流式指示器
-                        loadingId = null;
-                    }
-                } else {
-                    // 仅当该对话当前处于激活状态时才更新屏幕上的最后一条消息
-                    if (context && context.updateLastMessage && isActiveConv()) {
-                        // 标记为流式阶段，避免频繁 Markdown 解析
-                        updatePayload.streaming = true;
-                        context.updateLastMessage(updatePayload);
-                    }
-                    // 更新助手消息的内容
-                    assistantMessage.content = fullContent;
-                    if (fullReasoning) {
-                        assistantMessage.reasoning = fullReasoning;
-                    }
+                        streaming: true  // 标记为流式阶段
+                    };
                     if (currentAttachments && currentAttachments.length > 0) {
-                        assistantMessage.attachments = currentAttachments;
+                        updatePayload.attachments = currentAttachments;
                     }
-                    if (currentMetadata) {
-                        assistantMessage.metadata = currentMetadata;
-                    }
-                    // 流式更新时不持久化，避免频繁的 IndexedDB 写入
-                    // 持久化将在流式完成后统一进行
+                    context.updateLastMessage(updatePayload);
                 }
+                // 流式更新时不持久化，避免频繁的 IndexedDB 写入
             };
 
             let response = null;
@@ -875,15 +914,14 @@
                         loadingId = null;
                     }
                     
-                    // 清理流式指示器（如果助手消息已存在）
-                    if (assistantMessage && context && context.removeMessageStreamingIndicator && isActiveConv()) {
+                    // 清理流式指示器
+                    if (context && context.removeMessageStreamingIndicator && shouldRenderUI(conv.id, assistantMessage.id)) {
                         context.removeMessageStreamingIndicator(assistantMessage.id);
                     }
                     
-                    // 如果还没有助手消息，添加一条提示
-                    if (!assistantMessage) {
-                        addAssistantMessage(conv.id, '✋ 已停止生成', parentIdForNewBranch);
-                    }
+                    // 更新消息内容为停止提示
+                    assistantMessage.content = '✋ 已停止生成';
+                    store.persist();
                     
                     // 重置全局打字状态
                     store.state.isTyping = false;
@@ -891,11 +929,8 @@
                     store.state.typingMessageId = null;
                     store.persist();
                     
-                    // 清除当前生成标记，防止 finally 块重复处理
-                    delete activeGenerationTokens[conv.id];
-                    
                     // 恢复发送按钮状态
-                    if (context && context.setSendButtonLoading && isActiveConv()) {
+                    if (context && context.setSendButtonLoading) {
                         context.setSendButtonLoading(false);
                     }
                     
@@ -957,34 +992,56 @@
                 tps: tps
             };
             
-            if (!assistantMessage) {
+            // 处理非流式响应或流式完成
+            if (!fullContent) {
+                // 非流式模式：从响应中提取内容
                 const choice = response.choices?.[0];
-                const content = choice?.message?.content || '无内容响应';
-                const reasoning = choice?.message?.reasoning_content || null;
+                fullContent = choice?.message?.content || '无内容响应';
+                fullReasoning = choice?.message?.reasoning_content || null;
                 const metadata = choice?.message?.metadata || null;
-                
                 const attachments = choice?.message?.attachments || null;
-                addAssistantMessage(conv.id, {
-                    content,
-                    reasoning,
-                    attachments,
-                    metadata,
-                    stats
-                }, parentIdForNewBranch);
-                fullContent = content;
-                if (reasoning) fullReasoning = reasoning;
-            } else {
-                // 标记流式结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的内容
+                
+                assistantMessage.content = fullContent;
+                if (fullReasoning) assistantMessage.reasoning = fullReasoning;
+                if (metadata) assistantMessage.metadata = metadata;
+                if (attachments) assistantMessage.attachments = attachments;
+            }
+            
+            {
+                // 标记流式结束
                 streamEnded = true;
+                
+                // ★ 保存最终思维链时长
+                // 如果还有进行中的思维链段，累加最后一段
+                if (assistantMessage.reasoningSegmentStart) {
+                    const lastSegmentDuration = (Date.now() - assistantMessage.reasoningSegmentStart) / 1000;
+                    assistantMessage.reasoningAccumulatedTime = (assistantMessage.reasoningAccumulatedTime || 0) + lastSegmentDuration;
+                    delete assistantMessage.reasoningSegmentStart;
+                }
+                
+                // 将累计时间保存为最终时长
+                if (assistantMessage.reasoningAccumulatedTime !== undefined && assistantMessage.reasoningAccumulatedTime > 0) {
+                    assistantMessage.reasoningDuration = assistantMessage.reasoningAccumulatedTime;
+                    delete assistantMessage.reasoningAccumulatedTime;
+                }
                 
                 // 更新助手消息的统计信息
                 assistantMessage.stats = stats;
+                store.persist();
                 
-                // 流式更新完成，解析 Markdown（仅在当前对话处于激活状态时处理当前屏幕）
-                if (context && context.finalizeStreamingMessage && isActiveConv()) {
+                // 流式更新完成，解析 Markdown（仅在活跃路径上时）
+                if (context && context.finalizeStreamingMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
                     context.finalizeStreamingMessage(stats);
                 }
-                store.persist();
+                
+                // 触发 AI 自动生成标题
+                const titleGenerator = window.IdoFront.titleGenerator;
+                if (titleGenerator && titleGenerator.shouldGenerate && titleGenerator.shouldGenerate(conv.id)) {
+                    // 异步执行，不阻塞主流程
+                    Promise.resolve().then(() => {
+                        titleGenerator.generate(conv.id);
+                    });
+                }
             }
 
             // 精简响应日志，去除大型 base64 图片数据
@@ -1005,146 +1062,53 @@
         } catch (error) {
             console.error('Message Send Error:', error);
             
-            const errorContent = `请求失败: ${error.message}`;
-            addAssistantMessage(conv.id, errorContent, parentIdForNewBranch);
+            // 更新消息内容为错误信息
+            assistantMessage.content = `请求失败: ${error.message}`;
+            store.persist();
+            
+            // 更新 UI 显示错误信息
+            if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                context.updateLastMessage({ content: assistantMessage.content });
+            }
 
             if (context && logId && typeof context.completeRequest === 'function') {
                 context.completeRequest(logId, 500, { error: error.message });
             }
         } finally {
-            // 如果本对话已经有了更新的请求，则不再负责清理全局打字状态和 UI，交由最新请求处理
-            if (!isCurrentGeneration()) {
-                return;
-            }
-
-            // 清理加载指示器：同时尝试两种方式，确保清理干净
-            // 仅对当前激活的对话执行 UI 清理，避免误删其他对话中的加载状态
-            if (assistantMessage && context && context.removeMessageStreamingIndicator && isActiveConv()) {
+            // 始终清理自己的 loading（无论是否是最新请求）
+            // 这支持多分支/多对话并行生成
+            if (context && context.removeMessageStreamingIndicator) {
                 context.removeMessageStreamingIndicator(assistantMessage.id);
             }
-            if (loadingId && context && context.removeLoadingIndicator && isActiveConv()) {
+            if (loadingId && context && context.removeLoadingIndicator) {
                 context.removeLoadingIndicator(loadingId);
             }
             
-            // 重置全局打字状态和当前流式消息标记
-            store.state.isTyping = false;
-            store.state.typingConversationId = null;
-            store.state.typingMessageId = null;
-            store.persist();
+            // 只有当自己仍是最新请求时，才清理全局状态
+            if (store.state.typingMessageId === assistantMessage.id) {
+                store.state.isTyping = false;
+                store.state.typingConversationId = null;
+                store.state.typingMessageId = null;
+                store.persist();
+            }
             
-            // 恢复发送按钮状态（仅在当前对话处于激活状态时）
-            if (context && context.setSendButtonLoading && isActiveConv()) {
-                context.setSendButtonLoading(false);
+            // 恢复发送按钮状态（基于当前活跃路径是否还有生成中的消息）
+            if (context && context.setSendButtonLoading) {
+                // 检查当前活跃路径是否还有正在生成的消息
+                const activeConv = store.getActiveConversation();
+                if (activeConv && store.state.typingMessageId) {
+                    const activePath = store.getActivePath(activeConv.id);
+                    const stillGenerating = activePath.some(m => m.id === store.state.typingMessageId);
+                    context.setSendButtonLoading(stillGenerating);
+                } else {
+                    context.setSendButtonLoading(false);
+                }
             }
         }
     }
 
-    /**
-     * 添加助手消息
-     * @param {string} convId - 对话 ID
-     * @param {string|Object} contentOrObj - 消息内容或包含内容的对象
-     * @param {string} [parentId] - 可选，父消息 ID（用于分支模式）
-     */
-    function addAssistantMessage(convId, contentOrObj, parentId) {
-        const now = Date.now();
-        let content = contentOrObj;
-        let reasoning = null;
-        let metadata = null;
-        let attachments = null;
-        let stats = null;
-        
-        if (typeof contentOrObj === 'object' && contentOrObj !== null) {
-            content = contentOrObj.content || '';
-            reasoning = contentOrObj.reasoning || null;
-            metadata = contentOrObj.metadata || null;
-            // 直接从顶层提取 attachments
-            attachments = contentOrObj.attachments || null;
-            // 提取统计信息
-            stats = contentOrObj.stats || null;
-        }
-        
-        const msg = {
-            id: utils.createId('msg_b'),
-            role: 'assistant',
-            content: content,
-            createdAt: now,
-            timestamp: new Date(now).toISOString(),
-            plugin: null
-        };
-        
-        if (reasoning) {
-            msg.reasoning = reasoning;
-        }
-        if (attachments && attachments.length > 0) {
-            msg.attachments = attachments;
-        }
-        // 持久化 metadata（框架层不关心具体内容，直接存储）
-        if (metadata) {
-            msg.metadata = metadata;
-        }
-        // 保存统计信息
-        if (stats) {
-            msg.stats = stats;
-        }
-        
-        // 保存模型名和渠道名到消息中
-        const conv = store.state.conversations.find(c => c.id === convId);
-        if (conv) {
-            if (conv.selectedModel) {
-                msg.modelName = conv.selectedModel;
-            }
-            if (conv.selectedChannelId) {
-                const channel = store.state.channels && store.state.channels.find(c => c.id === conv.selectedChannelId);
-                if (channel) {
-                    msg.channelName = channel.name;
-                }
-            }
-        }
-        
-        // 添加消息到对话，支持指定父消息 ID（用于分支模式）
-        store.addMessageToConversation(convId, msg, parentId);
-        // 仅当该对话当前处于激活状态时才立即写入当前聊天流 UI，
-        // 否则只更新 Store，待下次 syncUI 时再统一渲染，避免串台。
-        if (context && store.state.activeConversationId === convId) {
-            const payload = { content, reasoning, id: msg.id };
-            if (attachments && attachments.length > 0) {
-                payload.attachments = attachments;
-            }
-            
-            // 使用已保存到消息中的模型和渠道名称
-            if (msg.modelName) {
-                payload.modelName = msg.modelName;
-            }
-            if (msg.channelName) {
-                payload.channelName = msg.channelName;
-            }
-            // 传递统计信息
-            if (stats) {
-                payload.stats = stats;
-            }
-            
-            // 计算分支信息（用于显示分支切换器）
-            if (conv) {
-                const msgParentId = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
-                const siblings = conv.messages.filter(m => {
-                    const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
-                    return pId === msgParentId;
-                }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-                
-                if (siblings.length > 1) {
-                    const currentIndex = siblings.findIndex(s => s.id === msg.id);
-                    payload.branchInfo = {
-                        currentIndex,
-                        total: siblings.length,
-                        siblings: siblings.map(s => s.id)
-                    };
-                }
-            }
-            
-            context.addMessage('ai', payload);
-        }
-        return msg;
-    }
+    // addAssistantMessage 函数已移除，不再需要
+    // 所有消息创建都在 generateResponse 开始时完成
 
     /**
      * 精简响应数据用于日志记录，去除大型 base64 数据

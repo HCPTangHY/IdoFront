@@ -38,6 +38,10 @@
         'plugin-loader.js',
         'service.js',
         
+        // 3.5. 服务层（AI 服务相关）
+        'services/prompts.js',
+        'services/title-generator.js',
+        
         // 4. Actions 模块（依赖基础模块）
         'actions/conversation.js',
         'actions/message.js',
@@ -73,6 +77,7 @@
         'settings/persona-editor.js',
         'settings/persona-settings.js',
         'settings/plugin-settings.js',
+        'settings/ai-service-settings.js',
         'settings/settings-manager.js',
         
         // 5. 主入口（依赖所有模块）

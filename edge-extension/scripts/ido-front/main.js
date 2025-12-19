@@ -26,6 +26,8 @@
         const corePlugins = window.IdoFront.corePlugins;
         const settingsManager = window.IdoFront.settingsManager;
         const pluginLoader = window.IdoFront.pluginLoader;
+        const titleGenerator = window.IdoFront.titleGenerator;
+        const aiServiceSettings = window.IdoFront.aiServiceSettings;
 
         if (conversationActions && conversationActions.init) {
             conversationActions.init(context, store);
@@ -51,8 +53,18 @@
             await pluginLoader.init(context, store);
         }
  
+        // 初始化 AI 服务模块
+        if (titleGenerator && titleGenerator.init) {
+            titleGenerator.init(store);
+        }
+        
         if (settingsManager && settingsManager.init) {
             settingsManager.init(context, store);
+        }
+        
+        // AI 服务设置需要在 settingsManager 之后初始化
+        if (aiServiceSettings && aiServiceSettings.init) {
+            aiServiceSettings.init(store, context);
         }
 
         // 3. 同步初始 UI

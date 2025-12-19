@@ -416,10 +416,100 @@ const FrameworkLayout = (function() {
 
     // --- 初始化与销毁 ---
 
+    /**
+     * 初始化快速导航按钮
+     */
+    function initQuickNav() {
+        if (!ui.chatStream) return;
+
+        const quickNav = document.createElement('div');
+        quickNav.className = 'ido-quick-nav';
+        quickNav.id = 'quick-nav-container';
+        quickNav.innerHTML = `
+            <button class="ido-quick-nav__btn" id="nav-top" title="跳转到顶部">
+                <span class="material-symbols-outlined">vertical_align_top</span>
+            </button>
+            <button class="ido-quick-nav__btn" id="nav-prev" title="上条消息">
+                <span class="material-symbols-outlined">keyboard_arrow_up</span>
+            </button>
+            <button class="ido-quick-nav__btn" id="nav-next" title="下条消息">
+                <span class="material-symbols-outlined">keyboard_arrow_down</span>
+            </button>
+            <button class="ido-quick-nav__btn" id="nav-bottom" title="跳转到底部">
+                <span class="material-symbols-outlined">vertical_align_bottom</span>
+            </button>
+        `;
+
+        // 插入到 chat-stream 的父容器中，确保它悬浮在聊天流上方且不随内容滚动，也不被输入框挡住
+        const streamContainer = ui.chatStream.parentElement;
+        streamContainer.appendChild(quickNav);
+
+        const btnTop = quickNav.querySelector('#nav-top');
+        const btnPrev = quickNav.querySelector('#nav-prev');
+        const btnNext = quickNav.querySelector('#nav-next');
+        const btnBottom = quickNav.querySelector('#nav-bottom');
+
+        // 滚动监听，控制显示/隐藏
+        ui.chatStream.addEventListener('scroll', () => {
+            if (ui.chatStream.scrollTop > 200) {
+                quickNav.classList.add('ido-quick-nav--visible');
+            } else {
+                quickNav.classList.remove('ido-quick-nav--visible');
+            }
+        });
+
+        btnTop.onclick = () => {
+            ui.chatStream.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        btnBottom.onclick = () => {
+            ui.chatStream.scrollTo({ top: ui.chatStream.scrollHeight, behavior: 'smooth' });
+        };
+
+        const getVisibleMessages = () => {
+            const messages = Array.from(ui.chatStream.querySelectorAll('.ido-message'));
+            const containerRect = ui.chatStream.getBoundingClientRect();
+            return messages.map(msg => {
+                const rect = msg.getBoundingClientRect();
+                return {
+                    el: msg,
+                    top: rect.top - containerRect.top + ui.chatStream.scrollTop,
+                    bottom: rect.bottom - containerRect.top + ui.chatStream.scrollTop,
+                    inView: rect.top < containerRect.bottom && rect.bottom > containerRect.top
+                };
+            });
+        };
+
+        btnPrev.onclick = () => {
+            const msgs = getVisibleMessages();
+            const currentScroll = ui.chatStream.scrollTop;
+            // 找到第一个顶部在当前视口上方的消息
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].top < currentScroll - 10) {
+                    ui.chatStream.scrollTo({ top: msgs[i].top, behavior: 'smooth' });
+                    break;
+                }
+            }
+        };
+
+        btnNext.onclick = () => {
+            const msgs = getVisibleMessages();
+            const currentScroll = ui.chatStream.scrollTop;
+            // 找到第一个顶部在当前视口下方的消息
+            for (let i = 0; i < msgs.length; i++) {
+                if (msgs[i].top > currentScroll + 10) {
+                    ui.chatStream.scrollTo({ top: msgs[i].top, behavior: 'smooth' });
+                    break;
+                }
+            }
+        };
+    }
+
     function init() {
         bindUI();
         initResizers();
         updatePanelWidths();
+        initQuickNav();
 
         // Backdrop 点击关闭
         if (ui.backdrop) {
