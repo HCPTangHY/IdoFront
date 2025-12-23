@@ -732,6 +732,7 @@ const FrameworkMessages = (function() {
         let reasoning = null;
         let attachments;
         let streaming = false;
+        let reasoningEnded = false;
 
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
@@ -740,6 +741,7 @@ const FrameworkMessages = (function() {
                 attachments = textOrObj.attachments;
             }
             streaming = !!textOrObj.streaming;
+            reasoningEnded = !!textOrObj.reasoningEnded;
         }
 
         const lastMsg = state.messages[state.messages.length - 1];
@@ -751,7 +753,7 @@ const FrameworkMessages = (function() {
             lastMsg.attachments = attachments;
         }
 
-        pendingUpdate = { text, reasoning, streaming };
+        pendingUpdate = { text, reasoning, streaming, reasoningEnded };
 
         if (!rafUpdatePending) {
             rafUpdatePending = true;
@@ -769,7 +771,7 @@ const FrameworkMessages = (function() {
     function performUIUpdate(update) {
         if (!update) return;
 
-        const { text, reasoning, streaming } = update;
+        const { text, reasoning, streaming, reasoningEnded } = update;
         const lastMsg = state.messages[state.messages.length - 1];
 
         const lastCard = getLastMessageCard();
@@ -838,9 +840,45 @@ const FrameworkMessages = (function() {
             }
         }
 
-        // ★ 不在这里停止思维链计时器
-        // 计时器只在 finalizeStreamingMessage 中停止
-        // 这样支持多段思维链（思维链-正文-思维链-正文）累计计时
+        // ★ 思维链计时器控制逻辑（支持多段思维链）
+        // reasoningEnded = true 表示当前思维链段已结束（正在输出正文）
+        // reasoningEnded = false 表示当前在思维链段中（可能是新段开始）
+        if (reasoningBlock) {
+            const hasTimer = !!reasoningBlock.dataset.timerId;
+            
+            if (reasoningEnded && hasTimer) {
+                // 思维链段结束，停止计时器
+                const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
+                if (!Number.isNaN(timerId)) {
+                    clearInterval(timerId);
+                }
+                delete reasoningBlock.dataset.timerId;
+                // 保留 startTime 等数据，记录最后停止时的时间用于后续可能的恢复
+                if (reasoningBlock.dataset.startTime) {
+                    const startTime = parseInt(reasoningBlock.dataset.startTime, 10);
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    // 将当前累计时间保存到 dataset 中
+                    reasoningBlock.dataset.accumulatedTime = elapsed;
+                }
+            } else if (!reasoningEnded && reasoning && !hasTimer) {
+                // 新的思维链段开始，重新启动计时器
+                // 从之前累计的时间继续
+                const prevAccumulated = parseFloat(reasoningBlock.dataset.accumulatedTime) || 0;
+                const toggle = reasoningBlock.querySelector('.reasoning-toggle');
+                const timerSpan = toggle && toggle.querySelector('.reasoning-timer');
+                
+                if (timerSpan) {
+                    const startTime = Date.now();
+                    const timerId = setInterval(() => {
+                        const newElapsed = prevAccumulated + (Date.now() - startTime) / 1000;
+                        timerSpan.textContent = newElapsed.toFixed(1) + 's';
+                    }, 100);
+                    
+                    reasoningBlock.dataset.timerId = timerId;
+                    reasoningBlock.dataset.startTime = startTime;
+                }
+            }
+        }
 
         // 更新正文
         if (contentSpan && lastMsg.role !== 'user' && text && markdown) {

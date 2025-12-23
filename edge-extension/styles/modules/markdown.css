@@ -122,6 +122,10 @@
     margin-bottom: 0.5em;
 }
 
+.markdown-body li > p:last-child {
+    margin-bottom: 0;
+}
+
 /* ========================================
    Inline Code
    ======================================== */
@@ -410,4 +414,24 @@
 
 .reasoning-content.markdown-body {
     font-size: 0.875rem;
+}
+
+/* 修复思维链 Markdown 渲染后的空白问题 */
+.reasoning-content.markdown-body:not([data-needs-markdown]) {
+    white-space: normal;
+}
+
+.reasoning-content.markdown-body p,
+.reasoning-content.markdown-body ul,
+.reasoning-content.markdown-body ol {
+    margin-bottom: 0.5em;
+}
+
+.reasoning-content.markdown-body ul,
+.reasoning-content.markdown-body ol {
+    padding-left: 1.25em;
+}
+
+.reasoning-content.markdown-body li > p {
+    margin-bottom: 0.25em;
 }

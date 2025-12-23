@@ -840,8 +840,16 @@
                 }
                 
                 // ★ 思维链累计计时逻辑
-                // 收到 reasoning 且无 segmentStart → 开始新段
-                if (currentReasoning && !assistantMessage.reasoningSegmentStart) {
+                // 通过检测 reasoning 内容是否增长来判断是否有新的思维链
+                // 这样可以同时支持：
+                // 1. 某些模型在正文输出时仍携带相同的 reasoning 字段 → 不会重新开始计时
+                // 2. 真正的多段思维链（reasoning 继续增长）→ 会继续计时
+                const currentReasoningLength = currentReasoning ? currentReasoning.length : 0;
+                const prevReasoningLength = assistantMessage._prevReasoningLength || 0;
+                const hasNewReasoning = currentReasoningLength > prevReasoningLength;
+                
+                // 收到新的 reasoning 内容且无 segmentStart → 开始新段
+                if (hasNewReasoning && !assistantMessage.reasoningSegmentStart) {
                     assistantMessage.reasoningSegmentStart = Date.now();
                     // 初始化累计时间（如果还没有）
                     if (assistantMessage.reasoningAccumulatedTime === undefined) {
@@ -849,7 +857,13 @@
                     }
                 }
                 
+                // 更新记录的 reasoning 长度
+                if (currentReasoningLength > prevReasoningLength) {
+                    assistantMessage._prevReasoningLength = currentReasoningLength;
+                }
+                
                 // 收到 content 且有 segmentStart → 累加当前段时间，清除 segmentStart
+                // 不设置全局结束标记，允许后续多段思维链继续计时
                 if (currentContent && assistantMessage.reasoningSegmentStart) {
                     const segmentDuration = (Date.now() - assistantMessage.reasoningSegmentStart) / 1000;
                     assistantMessage.reasoningAccumulatedTime = (assistantMessage.reasoningAccumulatedTime || 0) + segmentDuration;
@@ -886,10 +900,14 @@
                 
                 // 仅当在活跃路径上时才更新 UI
                 if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                    // 判断当前思维链段是否结束：有正文内容且没有进行中的思维链段
+                    const isReasoningSegmentEnded = !!currentContent && !assistantMessage.reasoningSegmentStart;
+                    
                     const updatePayload = {
                         content: fullContent,
                         reasoning: fullReasoning,
-                        streaming: true  // 标记为流式阶段
+                        streaming: true,  // 标记为流式阶段
+                        reasoningEnded: isReasoningSegmentEnded
                     };
                     if (currentAttachments && currentAttachments.length > 0) {
                         updatePayload.attachments = currentAttachments;
