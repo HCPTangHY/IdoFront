@@ -52,9 +52,17 @@ document.addEventListener('IdoFrontLoaded', async () => {
 
     // Handle Enter key in textarea
     input.addEventListener('keydown', (e) => {
+        // IME 组合输入中不触发发送
+        if (e.isComposing || e.keyCode === 229) return;
+
         if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            btnSend.click();
+            // 只有在非移动端（桌面端）才支持回车发送
+            // 移动端保持默认行为（换行），方便用户输入多行内容
+            const isMobile = window.innerWidth < 768;
+            if (!isMobile) {
+                e.preventDefault();
+                btnSend.click();
+            }
         }
     });
 
