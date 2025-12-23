@@ -109,14 +109,12 @@
         try {
             // 传递 signal 给适配器
             const result = await adapter.call(messages, effectiveChannel, safeOnUpdate, signal);
-            
+            return result;
+        } finally {
             // 等待所有 onUpdate 回调执行完毕，确保 UI 状态与返回结果同步
             if (pendingUpdates.length > 0) {
                 await Promise.all(pendingUpdates);
             }
-            
-            return result;
-        } finally {
             // 清理当前控制器引用
             if (currentAbortController && currentAbortController.signal === signal) {
                 currentAbortController = null;

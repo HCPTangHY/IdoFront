@@ -554,12 +554,16 @@
                     parts.push(part);
                 }
                 
-                const geminiMsg = {
-                    role: role,
-                    parts: parts
-                };
-                
-                contents.push(geminiMsg);
+                // 只有当 parts 非空时才添加到 contents
+                // Gemini API 要求每个 content 对象必须包含至少一个 parts
+                if (parts.length > 0) {
+                    const geminiMsg = {
+                        role: role,
+                        parts: parts
+                    };
+                    
+                    contents.push(geminiMsg);
+                }
             }
         }
         return { contents, systemInstruction };

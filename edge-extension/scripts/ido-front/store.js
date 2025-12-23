@@ -22,6 +22,8 @@
         _lastPersistAt: 0,
         _persistTimer: null,
         _pendingSnapshot: null,
+        // 活跃路径缓存
+        _activePathCache: {},
         
         state: {
             personas: [], // 面具列表
@@ -694,6 +696,7 @@
 
         /**
          * 获取对话的活跃路径（从根到当前选中的叶子节点）
+         * 性能优化：使用缓存避免重复计算
          * @param {string} convId - 对话 ID
          * @returns {Array} 按顺序排列的消息数组
          */
@@ -708,6 +711,14 @@
                 conv.activeBranchMap = {};
             }
             
+            // 生成缓存键：基于 activeBranchMap 和消息数量
+            // 当分支切换或消息增删时，缓存自动失效
+            const cacheKey = JSON.stringify(conv.activeBranchMap) + ':' + conv.messages.length;
+            const cached = this._activePathCache[convId];
+            if (cached && cached.key === cacheKey) {
+                return cached.path;
+            }
+            
             // 构建父子关系映射
             const childrenMap = {}; // parentId -> [children]
             conv.messages.forEach(msg => {
@@ -717,6 +728,11 @@
                 }
                 childrenMap[pId].push(msg);
             });
+            
+            // 预排序所有分支
+            for (const key in childrenMap) {
+                childrenMap[key].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            }
             
             // 从根开始遍历
             const path = [];
@@ -732,10 +748,8 @@
                     selectedChild = children.find(c => c.id === selectedId);
                 }
                 
-                // 如果没有选中或选中的不存在，默认选择第一个（按创建时间排序）
+                // 如果没有选中或选中的不存在，默认选择第一个（已排序）
                 if (!selectedChild) {
-                    // 按 createdAt 排序，选择最早的
-                    children.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
                     selectedChild = children[0];
                     // 更新 activeBranchMap
                     conv.activeBranchMap[currentParentId] = selectedChild.id;
@@ -745,7 +759,21 @@
                 currentParentId = selectedChild.id;
             }
             
+            // 更新缓存
+            this._activePathCache[convId] = { key: cacheKey, path };
+            
             return path;
+        },
+        
+        /**
+         * 清除活跃路径缓存（当消息结构发生变化时调用）
+         */
+        _invalidateActivePathCache(convId) {
+            if (convId) {
+                delete this._activePathCache[convId];
+            } else {
+                this._activePathCache = {};
+            }
         },
 
         /**

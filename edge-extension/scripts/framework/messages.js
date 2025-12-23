@@ -280,9 +280,16 @@ const FrameworkMessages = (function() {
 
         const contentSpan = document.createElement('div');
         contentSpan.className = 'message-content markdown-body';
-        contentSpan.textContent = text || '';
+        
         if (role !== 'user') {
-            contentSpan.dataset.needsMarkdown = 'true';
+            if (options.renderMarkdownSync && markdown) {
+                markdown.renderSync(contentSpan, text || '');
+            } else {
+                contentSpan.textContent = text || '';
+                contentSpan.dataset.needsMarkdown = 'true';
+            }
+        } else {
+            contentSpan.textContent = text || '';
         }
         contentDiv.appendChild(contentSpan);
         container.appendChild(contentDiv);
@@ -440,8 +447,13 @@ const FrameworkMessages = (function() {
 
         const content = document.createElement('div');
         content.className = 'reasoning-content markdown-body';
-        content.textContent = reasoning || '';
-        content.dataset.needsMarkdown = 'true';
+        
+        if (options.renderMarkdownSync && markdown) {
+            markdown.renderSync(content, reasoning || '');
+        } else {
+            content.textContent = reasoning || '';
+            content.dataset.needsMarkdown = 'true';
+        }
 
         reasoningBlock.appendChild(toggle);
         reasoningBlock.appendChild(content);
@@ -558,14 +570,23 @@ const FrameworkMessages = (function() {
         store.switchBranch(conv.id, messageId, { silent: true });
         
         // 重新渲染 UI，使用增量更新模式：只更新 parentId 之后的消息
+        // 性能优化：
+        // 1. skipConversationListUpdate: 分支切换不改变对话列表
+        // 2. asyncMarkdown: 使用异步 Markdown 渲染减少主线程阻塞
         if (window.IdoFront.conversationActions && window.IdoFront.conversationActions.syncUI) {
             if (parentId) {
                 window.IdoFront.conversationActions.syncUI({
                     focusMessageId: parentId,
-                    incrementalFromParent: true  // 启用增量更新
+                    incrementalFromParent: true,
+                    skipConversationListUpdate: true,
+                    asyncMarkdown: true
                 });
             } else {
-                window.IdoFront.conversationActions.syncUI({ preserveScroll: true });
+                window.IdoFront.conversationActions.syncUI({
+                    preserveScroll: true,
+                    skipConversationListUpdate: true,
+                    asyncMarkdown: true
+                });
             }
         }
     }

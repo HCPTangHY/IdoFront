@@ -28,6 +28,8 @@
                 renderConversationList();
                 // 同步UI以显示新面具的对话
                 syncUI();
+                // 移动端自动关闭侧边栏
+                closeSidebarIfMobile();
             });
             
             // 监听对话重命名事件，增量更新侧边栏
@@ -56,6 +58,10 @@
         } else {
             store.persist();
         }
+
+        // 移动端自动关闭侧边栏
+        closeSidebarIfMobile();
+
         return conv;
     };
 
@@ -66,6 +72,16 @@
         const target = store.state.conversations.find(c => c.id === id);
         if (!target) return;
 
+        const previousConvId = store.state.activeConversationId;
+        
+        // 保存当前对话的 DOM 缓存（切换前）
+        if (previousConvId && previousConvId !== id) {
+            const chatStream = document.getElementById('chat-stream');
+            if (chatStream && window.IdoFront.virtualList) {
+                window.IdoFront.virtualList.saveToCache(previousConvId, chatStream);
+            }
+        }
+
         store.state.activeConversationId = id;
         
         // If switching to a conversation from a different persona, switch persona too
@@ -73,15 +89,19 @@
             store.state.activePersonaId = target.personaId;
         }
         
-        store.persist();
+        // 使用静默持久化，避免触发不必要的事件广播
+        store.persistSilent();
         
         // syncUI 会统一处理 loading 状态和发送按钮状态
-        syncUI();
+        syncUI({ useCache: true });
         updateHeader(target);
 
         if (context && context.events) {
             context.events.emit('chat:conversation-selected', { conversationId: id });
         }
+
+        // 移动端自动关闭侧边栏
+        closeSidebarIfMobile();
     };
 
     /**
@@ -124,9 +144,19 @@
     /**
      * 同步 UI（将 Store 中的消息渲染到界面）
      * 使用活跃路径（getActivePath）而非全部消息，以支持分支功能
+     *
+     * 性能优化策略：
+     * 1. DOM 缓存 - 切换对话时尝试从缓存恢复，避免重复渲染
+     * 2. 窗口化渲染 - 消息数量多时只渲染最近的 N 条
+     * 3. 增量更新 - 分支切换时只更新变化的部分
+     * 4. 跳过不必要的更新 - 分支切换时不更新对话列表
+     *
      * @param {Object} [options] - 可选配置
      * @param {string} [options.focusMessageId] - 渲染后尝试滚动到的消息 ID（用于分支切换时保持位置）
      * @param {boolean} [options.incrementalFromParent] - 增量更新模式：只更新 focusMessageId 之后的消息
+     * @param {boolean} [options.useCache] - 是否尝试使用 DOM 缓存
+     * @param {boolean} [options.skipConversationListUpdate] - 跳过对话列表更新（分支切换时使用）
+     * @param {boolean} [options.asyncMarkdown] - 使用异步 Markdown 渲染（分支切换时使用以减少卡顿）
      */
     function syncUI(options) {
         options = options || {};
@@ -135,21 +165,29 @@
         const active = store.getActiveConversation();
         if (active) {
             const chatStream = document.getElementById('chat-stream');
+            if (!chatStream) return;
+            
+            // ★ 性能优化：尝试从缓存恢复
+            if (options.useCache && window.IdoFront.virtualList) {
+                const restored = window.IdoFront.virtualList.restoreFromCache(
+                    active.id,
+                    chatStream,
+                    rebindMessageEvents
+                );
+                if (restored) {
+                    // 缓存恢复成功，只需更新状态相关的 UI
+                    updateHeader(active);
+                    updateTypingState(active.id);
+                    renderConversationList();
+                    return;
+                }
+            }
             
             // 使用活跃路径而非全部消息，以支持分支功能
             const activePath = store.getActivePath(active.id);
             
             // 性能优化：一次性构建 childrenMap，避免 getSiblings 对每条消息重复遍历 O(N²) -> O(N)
-            const childrenMap = {};
-            active.messages.forEach(m => {
-                const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
-                if (!childrenMap[pId]) childrenMap[pId] = [];
-                childrenMap[pId].push(m);
-            });
-            // 预排序所有分支
-            for (const key in childrenMap) {
-                childrenMap[key].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-            }
+            const childrenMap = buildChildrenMap(active.messages);
             
             // 增量更新模式：只删除并重建 focusMessageId 之后的消息
             let startIndex = 0;
@@ -202,70 +240,12 @@
             // 使用 DocumentFragment 批量渲染，减少 DOM 重排
             const fragment = document.createDocumentFragment();
             
+            // 分支切换时使用异步渲染，减少主线程阻塞
+            const useAsyncMarkdown = options.asyncMarkdown || options.incrementalFromParent;
+            
             for (let idx = startIndex; idx < activePath.length; idx++) {
                 const msg = activePath[idx];
-                const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
-                const payload = {
-                    content: msg.content,
-                    id: msg.id,
-                    createdAt: msg.createdAt  // 传递消息时间
-                };
-                
-                // 添加 reasoning（如果存在）
-                if (msg.reasoning) {
-                    payload.reasoning = msg.reasoning;
-                    
-                    // 添加存储的思维链时间（如果存在）
-                    if (msg.reasoningDuration !== undefined) {
-                        payload.reasoningDuration = msg.reasoningDuration;
-                    }
-                    
-                    // ★ 累计计时字段（用于恢复进行中的计时器）
-                    if (msg.reasoningAccumulatedTime !== undefined) {
-                        payload.reasoningAccumulatedTime = msg.reasoningAccumulatedTime;
-                    }
-                    if (msg.reasoningSegmentStart !== undefined) {
-                        payload.reasoningSegmentStart = msg.reasoningSegmentStart;
-                    }
-                }
-                
-                // 添加附件信息（如果存在）
-                if (msg.attachments) {
-                    payload.attachments = msg.attachments;
-                }
-                
-                // AI 消息：添加模型名和渠道名
-                if (msg.role === 'assistant') {
-                    if (msg.modelName) {
-                        payload.modelName = msg.modelName;
-                    }
-                    if (msg.channelName) {
-                        payload.channelName = msg.channelName;
-                    }
-                    // 添加统计信息（如果存在）
-                    if (msg.stats) {
-                        payload.stats = msg.stats;
-                    }
-                }
-                
-                // 添加分支信息（使用预构建的 childrenMap，O(1) 查找）
-                const parentKey = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
-                const siblings = childrenMap[parentKey] || [];
-                if (siblings.length > 1) {
-                    const currentIndex = siblings.findIndex(s => s.id === msg.id);
-                    payload.branchInfo = {
-                        currentIndex,
-                        total: siblings.length,
-                        siblings: siblings.map(s => s.id)
-                    };
-                }
-                
-                // 批量渲染：所有消息都不触发滚动，使用 fragment 作为目标容器
-                context.addMessage(uiRole, payload, {
-                    noScroll: true,
-                    targetContainer: fragment,
-                    isHistorical: true  // 标记为历史消息，避免启动计时器
-                });
+                renderSingleMessage(msg, fragment, childrenMap, useAsyncMarkdown);
             }
             
             // 一次性插入所有消息到 DOM
@@ -273,8 +253,9 @@
                 chatStream.appendChild(fragment);
             }
             
-            // 恢复滚动位置
-            if (chatStream) {
+            // 恢复滚动位置（初步）
+            const applyScroll = () => {
+                if (!chatStream) return;
                 if (scrollAnchor) {
                     const anchorEl = chatStream.querySelector(`[data-message-id="${scrollAnchor}"]`);
                     if (anchorEl) {
@@ -289,52 +270,29 @@
                     // 完全重建时滚动到底部
                     chatStream.scrollTop = chatStream.scrollHeight;
                 }
-            }
+            };
+
+            applyScroll();
             
             // 同步时也更新header
             updateHeader(active);
             
             // 批量渲染所有历史消息的 Markdown（性能优化）
             if (context.renderAllPendingMarkdown) {
-                // 使用 requestAnimationFrame 确保 DOM 已更新，避免宏任务排队带来的延迟
+                // 使用 requestAnimationFrame 确保 DOM 已更新
                 requestAnimationFrame(() => {
                     context.renderAllPendingMarkdown();
+                    
+                    // 在渲染排队后再次尝试修正滚动位置（防止 Markdown/代码块撑开高度导致的错位）
+                    // 使用 setTimeout(0) 确保在 idle 渲染任务开始前能有一个及时的校准
+                    setTimeout(applyScroll, 0);
+                    // 并在下一帧再次校准，以应对可能的复杂布局变化
+                    requestAnimationFrame(applyScroll);
                 });
             }
 
-            // 唯一判断条件：typingMessageId 是否在当前活跃路径中
-            const typingMsgId = store.state.typingMessageId;
-            
-            // 清理所有独立的 loading 气泡（syncUI 重建后不应该有残留）
-            const loadingChatStream = document.getElementById('chat-stream');
-            if (loadingChatStream) {
-                const strayLoadings = loadingChatStream.querySelectorAll('[data-loading-id]');
-                strayLoadings.forEach(el => el.remove());
-            }
-            
-            // 判断 typingMsgId 是否在当前活跃路径中
-            const isTypingMsgInActivePath = typingMsgId && activePath.some(m => m.id === typingMsgId);
-            
-            if (isTypingMsgInActivePath && context) {
-                // 消息在活跃路径中，恢复 loading 指示器到该消息
-                if (context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
-                    const loadingId = context.addLoadingIndicator();
-                    const attached = context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
-                    if (!attached && context.removeLoadingIndicator) {
-                        context.removeLoadingIndicator(loadingId);
-                    }
-                }
-                // 发送按钮禁用（与 loading 一致）
-                if (context.setSendButtonLoading) {
-                    context.setSendButtonLoading(true);
-                }
-            } else {
-                // 消息不在活跃路径中，或无活跃生成
-                // 发送按钮可用（用户可以在其他分支发送消息）
-                if (context.setSendButtonLoading) {
-                    context.setSendButtonLoading(false);
-                }
-            }
+            // 更新 loading 状态
+            updateTypingState(active.id);
         } else {
             if (context.clearMessages) context.clearMessages();
             // 清空header
@@ -346,18 +304,193 @@
         }
         
         // 更新对话列表（仅显示当前面具的对话）
-        renderConversationList();
+        // 分支切换时跳过，因为对话列表不变
+        if (!options.skipConversationListUpdate) {
+            renderConversationList();
+        }
+    }
+
+    /**
+     * 构建 childrenMap（parentId -> children 映射）
+     */
+    function buildChildrenMap(messages) {
+        const childrenMap = {};
+        messages.forEach(m => {
+            const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
+            if (!childrenMap[pId]) childrenMap[pId] = [];
+            childrenMap[pId].push(m);
+        });
+        // 预排序所有分支
+        for (const key in childrenMap) {
+            childrenMap[key].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        }
+        return childrenMap;
+    }
+
+    /**
+     * 渲染单条消息到容器
+     * @param {Object} msg - 消息对象
+     * @param {Element} container - 目标容器
+     * @param {Object} childrenMap - 父子关系映射
+     * @param {boolean} [asyncMarkdown=false] - 是否使用异步 Markdown 渲染
+     */
+    function renderSingleMessage(msg, container, childrenMap, asyncMarkdown) {
+        const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
+        const payload = {
+            content: msg.content,
+            id: msg.id,
+            createdAt: msg.createdAt
+        };
+        
+        // 添加 reasoning（如果存在）
+        if (msg.reasoning) {
+            payload.reasoning = msg.reasoning;
+            if (msg.reasoningDuration !== undefined) {
+                payload.reasoningDuration = msg.reasoningDuration;
+            }
+            if (msg.reasoningAccumulatedTime !== undefined) {
+                payload.reasoningAccumulatedTime = msg.reasoningAccumulatedTime;
+            }
+            if (msg.reasoningSegmentStart !== undefined) {
+                payload.reasoningSegmentStart = msg.reasoningSegmentStart;
+            }
+        }
+        
+        // 添加附件信息
+        if (msg.attachments) {
+            payload.attachments = msg.attachments;
+        }
+        
+        // AI 消息：添加模型名和渠道名
+        if (msg.role === 'assistant') {
+            if (msg.modelName) payload.modelName = msg.modelName;
+            if (msg.channelName) payload.channelName = msg.channelName;
+            if (msg.stats) payload.stats = msg.stats;
+        }
+        
+        // 添加分支信息
+        const parentKey = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
+        const siblings = childrenMap[parentKey] || [];
+        if (siblings.length > 1) {
+            const currentIndex = siblings.findIndex(s => s.id === msg.id);
+            payload.branchInfo = {
+                currentIndex,
+                total: siblings.length,
+                siblings: siblings.map(s => s.id)
+            };
+        }
+        
+        context.addMessage(uiRole, payload, {
+            noScroll: true,
+            targetContainer: container,
+            isHistorical: true,
+            // 分支切换时使用异步渲染以减少卡顿
+            renderMarkdownSync: !asyncMarkdown
+        });
+    }
+
+    /**
+     * 更新 loading/typing 状态
+     */
+    function updateTypingState(convId) {
+        const chatStream = document.getElementById('chat-stream');
+        const typingMsgId = store.state.typingMessageId;
+        
+        // 清理所有独立的 loading 气泡
+        if (chatStream) {
+            const strayLoadings = chatStream.querySelectorAll('[data-loading-id]');
+            strayLoadings.forEach(el => el.remove());
+        }
+        
+        // 判断 typingMsgId 是否在当前活跃路径中
+        const activePath = store.getActivePath(convId);
+        const isTypingMsgInActivePath = typingMsgId && activePath.some(m => m.id === typingMsgId);
+        
+        if (isTypingMsgInActivePath && context) {
+            if (context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
+                const loadingId = context.addLoadingIndicator();
+                const attached = context.attachLoadingIndicatorToMessage(loadingId, typingMsgId);
+                if (!attached && context.removeLoadingIndicator) {
+                    context.removeLoadingIndicator(loadingId);
+                }
+            }
+            if (context.setSendButtonLoading) {
+                context.setSendButtonLoading(true);
+            }
+        } else {
+            if (context.setSendButtonLoading) {
+                context.setSendButtonLoading(false);
+            }
+        }
+    }
+
+    /**
+     * 重新绑定消息事件（从缓存恢复时调用）
+     * 性能优化：一次性构建 childrenMap，避免多次调用 getSiblings 导致的 O(N²) 复杂度
+     */
+    function rebindMessageEvents(chatStream) {
+        const conv = store.getActiveConversation();
+        if (!conv) return;
+        
+        // 一次性构建 childrenMap，避免每个消息都遍历一次
+        const childrenMap = buildChildrenMap(conv.messages);
+        
+        // 重新绑定分支切换器事件
+        const switchers = chatStream.querySelectorAll('.ido-branch-switcher');
+        switchers.forEach(switcher => {
+            const msgEl = switcher.closest('[data-message-id]');
+            if (!msgEl) return;
+            
+            const messageId = msgEl.dataset.messageId;
+            const prevBtn = switcher.querySelector('.ido-branch-switcher__btn:first-child');
+            const nextBtn = switcher.querySelector('.ido-branch-switcher__btn:last-child');
+            
+            const msg = conv.messages.find(m => m.id === messageId);
+            if (!msg) return;
+            
+            // 使用预构建的 childrenMap 获取兄弟信息
+            const parentKey = msg.parentId === undefined || msg.parentId === null ? 'root' : msg.parentId;
+            const siblings = childrenMap[parentKey] || [];
+            const currentIndex = siblings.findIndex(s => s.id === messageId);
+            
+            if (prevBtn) {
+                prevBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    if (currentIndex > 0) {
+                        const prevId = siblings[currentIndex - 1].id;
+                        if (window.FrameworkMessages && window.FrameworkMessages.switchToBranch) {
+                            window.FrameworkMessages.switchToBranch(prevId);
+                        }
+                    }
+                };
+            }
+            
+            if (nextBtn) {
+                nextBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    if (currentIndex < siblings.length - 1) {
+                        const nextId = siblings[currentIndex + 1].id;
+                        if (window.FrameworkMessages && window.FrameworkMessages.switchToBranch) {
+                            window.FrameworkMessages.switchToBranch(nextId);
+                        }
+                    }
+                };
+            }
+        });
+        
+        // 重新绑定消息操作按钮事件（复制、删除等）
+        // 这些按钮通常由插件系统处理，这里只处理核心事件
     }
     
     /**
      * 渲染对话列表（仅显示当前面具的对话）
      * 列表按最近更新时间倒序排列：最新有消息活动的对话排在最前
+     *
+     * 性能优化：使用差分更新，只更新变化的项
      */
     function renderConversationList() {
         const listContainer = document.getElementById('history-list');
         if (!listContainer) return;
-        
-        listContainer.innerHTML = '';
         
         // 根据 updatedAt / createdAt 倒序排序，最近活跃的对话排在前面
         const personaConvs = getPersonaConversations()
@@ -368,6 +501,76 @@
                 return bTime - aTime;
             });
         
+        const activeId = store.state.activeConversationId;
+        
+        // 使用差分更新
+        if (window.IdoFront.virtualList) {
+            window.IdoFront.virtualList.diffUpdateConversationList(
+                personaConvs,
+                listContainer,
+                createConversationItem,
+                activeId
+            );
+        } else {
+            // 回退到全量渲染
+            renderConversationListFull(listContainer, personaConvs, activeId);
+        }
+    }
+
+    /**
+     * 创建单个对话列表项
+     */
+    function createConversationItem(conv, activeId) {
+        const isActive = conv.id === activeId;
+        
+        const item = document.createElement('div');
+        item.className = `group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+            isActive ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-100 text-gray-700'
+        }`;
+        item.dataset.convId = conv.id;
+        
+        const title = document.createElement('div');
+        title.className = "flex-1 text-xs font-medium truncate";
+        title.textContent = conv.title || '新对话';
+        title.title = conv.title || '新对话';
+        
+        // 编辑按钮
+        const editBtn = document.createElement('button');
+        editBtn.className = "opacity-0 group-hover:opacity-100 p-1 hover:bg-blue-50 text-gray-400 hover:text-blue-500 rounded transition-all";
+        editBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">edit</span>';
+        editBtn.onclick = (e) => {
+            e.stopPropagation();
+            startInlineEdit(item, title, conv.id, conv.title || '新对话');
+        };
+        
+        // 删除按钮
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = "opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded transition-all";
+        deleteBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">delete</span>';
+        deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (confirm(`确定要删除对话 "${conv.title}" 吗？`)) {
+                window.IdoFront.conversationActions.delete(conv.id);
+            }
+        };
+        
+        item.onclick = () => {
+            window.IdoFront.conversationActions.select(conv.id);
+        };
+        
+        item.appendChild(title);
+        item.appendChild(editBtn);
+        item.appendChild(deleteBtn);
+        
+        return item;
+    }
+
+    /**
+     * 全量渲染对话列表（回退方案）
+     */
+    function renderConversationListFull(listContainer, personaConvs, activeId) {
+        listContainer.innerHTML = '';
+        
         if (personaConvs.length === 0) {
             const empty = document.createElement('div');
             empty.className = "text-center py-8 text-gray-400 text-xs";
@@ -377,45 +580,7 @@
         }
         
         personaConvs.forEach(conv => {
-            const item = document.createElement('div');
-            const isActive = conv.id === store.state.activeConversationId;
-            item.className = `group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-                isActive ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-100 text-gray-700'
-            }`;
-            item.dataset.convId = conv.id;
-            
-            const title = document.createElement('div');
-            title.className = "flex-1 text-xs font-medium truncate";
-            title.textContent = conv.title || '新对话';
-            title.title = conv.title || '新对话';
-            
-            // 编辑按钮
-            const editBtn = document.createElement('button');
-            editBtn.className = "opacity-0 group-hover:opacity-100 p-1 hover:bg-blue-50 text-gray-400 hover:text-blue-500 rounded transition-all";
-            editBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">edit</span>';
-            editBtn.onclick = (e) => {
-                e.stopPropagation();
-                startInlineEdit(item, title, conv.id, conv.title || '新对话');
-            };
-            
-            // 删除按钮
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = "opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded transition-all";
-            deleteBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">delete</span>';
-            deleteBtn.onclick = (e) => {
-                e.stopPropagation();
-                if (confirm(`确定要删除对话 "${conv.title}" 吗？`)) {
-                    window.IdoFront.conversationActions.delete(conv.id);
-                }
-            };
-            
-            item.onclick = () => {
-                window.IdoFront.conversationActions.select(conv.id);
-            };
-            
-            item.appendChild(title);
-            item.appendChild(editBtn);
-            item.appendChild(deleteBtn);
+            const item = createConversationItem(conv, activeId);
             listContainer.appendChild(item);
         });
     }
@@ -664,6 +829,19 @@
                 finishEdit(false);
             }
         };
+    }
+
+    /**
+     * 移动端辅助：自动关闭侧边栏
+     */
+    function closeSidebarIfMobile() {
+        const FrameworkLayout = window.FrameworkLayout || (typeof globalThis !== 'undefined' && globalThis.FrameworkLayout);
+        if (FrameworkLayout && FrameworkLayout.LAYOUT_DEFAULTS) {
+            const isMobile = window.innerWidth < FrameworkLayout.LAYOUT_DEFAULTS.MOBILE_BREAKPOINT;
+            if (isMobile) {
+                FrameworkLayout.togglePanel('left', false);
+            }
+        }
     }
 
     // 暴露 API 供外部调用

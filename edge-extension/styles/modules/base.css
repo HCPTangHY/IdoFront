@@ -142,14 +142,14 @@ a,
     --stats-bg: #FCFCFC;
     --stats-bg-hover: #F8F9FA;
     
-    /* Code Block Colors */
-    --code-bg: #f6f8fa;
-    --code-header-bg: #eaecef;
-    --code-border: #d0d7de;
-    --code-text: #24292f;
-    --code-text-muted: #656d76;
-    --code-lang-color: #57606a;
-    --code-copy-hover-bg: rgba(0, 0, 0, 0.05);
+    /* Code Block Colors (Always dark to support GitHub Dark syntax highlighting) */
+    --code-bg: #0d1117;
+    --code-header-bg: #161b22;
+    --code-border: #30363d;
+    --code-text: #e6edf3;
+    --code-text-muted: #8b949e;
+    --code-lang-color: #8b949e;
+    --code-copy-hover-bg: rgba(255, 255, 255, 0.1);
     
     /* Reasoning/Chain of Thought Colors */
     --reasoning-toggle-bg: #f1f5f9;

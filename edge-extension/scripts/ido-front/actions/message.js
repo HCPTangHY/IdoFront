@@ -646,6 +646,7 @@
         
         // 辅助函数：清理并结束生成
         function cleanupAndFinish(errorMsg) {
+            streamEnded = true;
             if (loadingId && context && context.removeLoadingIndicator) {
                 context.removeLoadingIndicator(loadingId);
             }
@@ -694,8 +695,9 @@
         
         // 3. Add actual conversation messages - 使用活跃路径而非全部消息
         // 这确保了在分支模式下只发送当前选中路径的消息给 AI
+        // 注意：排除当前正在生成的 assistant 消息（它刚被创建，内容为空）
         const activePath = store.getActivePath(conv.id);
-        activePath.forEach(m => {
+        activePath.filter(m => m.id !== assistantMessage.id).forEach(m => {
             const msg = {
                 role: m.role,
                 content: m.content
@@ -908,6 +910,9 @@
                     // 用户主动取消，不视为错误
                     console.log('请求已被用户取消');
                     
+                    streamEnded = true;
+                    fullContent = '✋ 已停止生成';
+
                     // 清理加载指示器
                     if (loadingId && context && context.removeLoadingIndicator) {
                         context.removeLoadingIndicator(loadingId);
@@ -920,7 +925,7 @@
                     }
                     
                     // 更新消息内容为停止提示
-                    assistantMessage.content = '✋ 已停止生成';
+                    assistantMessage.content = fullContent;
                     store.persist();
                     
                     // 重置全局打字状态
@@ -1062,13 +1067,17 @@
         } catch (error) {
             console.error('Message Send Error:', error);
             
+            streamEnded = true;
+            const errorText = `请求失败: ${error.message}`;
+            fullContent = errorText; // 同步更新闭包变量，防止被后续逻辑误用
+            
             // 更新消息内容为错误信息
-            assistantMessage.content = `请求失败: ${error.message}`;
+            assistantMessage.content = errorText;
             store.persist();
             
             // 更新 UI 显示错误信息
             if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
-                context.updateLastMessage({ content: assistantMessage.content });
+                context.updateLastMessage({ content: errorText });
             }
 
             if (context && logId && typeof context.completeRequest === 'function') {

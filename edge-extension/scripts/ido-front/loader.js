@@ -23,6 +23,7 @@
         'utils.js',
         'idb-storage.js',  // IndexedDB 存储层（store.js 依赖）
         'store.js',
+        'virtual-list.js', // 虚拟列表/DOM缓存管理（性能优化）
         'runtime.js',      // Runtime: 统一对外暴露 store 等核心能力
         'network-logger.js',
         'channels/channel-registry.js',
