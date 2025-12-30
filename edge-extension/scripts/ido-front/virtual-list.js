@@ -121,10 +121,11 @@
         const activePath = store.getActivePath(convId);
         const currentIds = activePath.map(m => m.id);
         
-        // 简单的缓存有效性检查：最后几条消息 ID 是否匹配
-        // 如果用户在其他地方修改了消息，缓存将失效
-        const cacheValid = cached.messageIds.length === currentIds.length &&
-            cached.messageIds.every((id, i) => id === currentIds[i]);
+        // 性能优化：使用 join 生成快照进行比较，比 every() 更快
+        // 对于长消息列表，字符串比较通常比逐元素比较更高效
+        const cachedSnapshot = cached.messageIds.join(',');
+        const currentSnapshot = currentIds.join(',');
+        const cacheValid = cachedSnapshot === currentSnapshot;
 
         if (!cacheValid) {
             messageCache.delete(convId);

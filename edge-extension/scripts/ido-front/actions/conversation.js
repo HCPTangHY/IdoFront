@@ -206,13 +206,15 @@
                     if (anchorIndex !== -1) {
                         startIndex = anchorIndex + 1; // 从锚点的下一条开始更新
                         
-                        // 删除锚点之后的所有 DOM 节点
+                        // 性能优化：批量收集并删除锚点之后的所有 DOM 节点
+                        const toRemove = [];
                         let sibling = anchorEl.nextElementSibling;
                         while (sibling) {
-                            const next = sibling.nextElementSibling;
-                            sibling.remove();
-                            sibling = next;
+                            toRemove.push(sibling);
+                            sibling = sibling.nextElementSibling;
                         }
+                        // 批量删除（减少重排次数）
+                        toRemove.forEach(el => el.remove());
                         
                         // 更新锚点消息的分支切换器（它的分支信息可能已改变）
                         updateMessageBranchSwitcher(anchorEl, activePath[anchorIndex], childrenMap);

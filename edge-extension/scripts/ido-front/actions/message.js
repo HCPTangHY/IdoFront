@@ -491,11 +491,14 @@
             if (parentMsgIndex !== -1) {
                 const chatStream = document.getElementById('chat-stream');
                 if (chatStream) {
-                    // 移除 parentIdForNewBranch 之后的所有消息的 DOM 节点
-                    for (let i = parentMsgIndex + 1; i < activePath.length; i++) {
-                        const msgToRemove = activePath[i];
-                        const msgEl = chatStream.querySelector(`[data-message-id="${msgToRemove.id}"]`);
-                        if (msgEl) msgEl.remove();
+                    // 性能优化：批量收集要删除的消息 ID，使用单次 querySelectorAll
+                    const idsToRemove = activePath.slice(parentMsgIndex + 1).map(m => m.id);
+                    if (idsToRemove.length > 0) {
+                        // 构建选择器，一次性查询所有要删除的元素
+                        const selector = idsToRemove.map(id => `[data-message-id="${id}"]`).join(',');
+                        const elementsToRemove = chatStream.querySelectorAll(selector);
+                        // 批量删除（现代浏览器会合并重排）
+                        elementsToRemove.forEach(el => el.remove());
                     }
                 }
             }
@@ -1050,7 +1053,8 @@
                 
                 // 更新助手消息的统计信息
                 assistantMessage.stats = stats;
-                store.persist();
+                // AI 回复完成，立即保存（关键时刻）
+                store.persistImmediately();
                 
                 // 流式更新完成，解析 Markdown（仅在活跃路径上时）
                 if (context && context.finalizeStreamingMessage && shouldRenderUI(conv.id, assistantMessage.id)) {

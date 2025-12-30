@@ -22,6 +22,8 @@
         _lastPersistAt: 0,
         _persistTimer: null,
         _pendingSnapshot: null,
+        _hasPendingWrite: false, // 标记是否有待写入的数据
+        _backgroundSaveTimer: null, // 后台保存定时器
         // 活跃路径缓存
         _activePathCache: {},
         
@@ -83,7 +85,7 @@
 
         async init() {
             if (this._initPromise) return this._initPromise;
-            
+
             this._initPromise = (async () => {
                 await this.restore();
                 this.state.networkLogs = [];
@@ -98,14 +100,34 @@
                 }
                 // Migration: Ensure all conversations have a personaId
                 this.migrateConversations();
-                
+
                 // Final validation to ensure state consistency
                 this.validateIntegrity();
-                
+
+                // 注册页面关闭时的数据保存
+                this._registerBeforeUnload();
+
                 this._initialized = true;
             })();
-            
+
             return this._initPromise;
+        },
+
+        /**
+         * 注册 beforeunload 事件，确保页面关闭前保存数据
+         */
+        _registerBeforeUnload() {
+            window.addEventListener('beforeunload', () => {
+                if (this._hasPendingWrite) {
+                    this.persistImmediately();
+                }
+            });
+            // visibilitychange 作为补充（移动端/标签页切换）
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden' && this._hasPendingWrite) {
+                    this.persistImmediately();
+                }
+            });
         },
 
         validateIntegrity() {
@@ -231,91 +253,52 @@
 
         /**
          * 执行保存操作（内部方法）
+         *
+         * 性能优化：在扩展环境下 IndexedDB 写入会阻塞主线程（约 2.5 秒），
+         * 因此普通 persist 只标记脏数据，不实际写入。
+         * 实际写入只在 persistImmediately() 中触发（页面关闭/发送消息等关键时刻）。
          */
         _doSave(snap) {
-            if (window.IdoFront.idbStorage) {
-                window.IdoFront.idbStorage.save(snap).catch(error => {
-                    console.error('IndexedDB 保存失败:', error);
-                    try {
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
-                    } catch (e) {
-                        console.error('localStorage 保存也失败:', e);
-                    }
-                });
-            } else {
-                try {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
-                } catch (e) {
-                    console.error('Storage save error:', e);
-                }
-            }
+            // 不实际写入，只更新待保存快照
+            // 实际写入由 persistImmediately() 在关键时刻触发
+            this._pendingSnapshot = snap;
+            this._hasPendingWrite = true;
         },
 
         /**
-         * 静默持久化：只保存数据，不广播事件
-         * 用于分支切换等场景，调用者会自行处理 UI 更新，避免重复刷新
+         * 真正执行 IndexedDB 写入（内部方法）
+         */
+        _doSaveToIDB(snap) {
+            if (window.IdoFront.idbStorage) {
+                return window.IdoFront.idbStorage.save(snap);
+            }
+            return Promise.resolve();
+        },
+
+        /**
+         * 静默持久化：只标记脏数据，不实际写入，不广播事件
+         * 用于分支切换等高频场景，避免阻塞主线程
+         *
+         * 实际写入时机：
+         * - 页面关闭/隐藏时 (beforeunload/visibilitychange)
+         * - 30 秒后台静默保存
          */
         persistSilent() {
-            const now = Date.now();
             const snapshot = this._buildSnapshot();
             this._pendingSnapshot = snapshot;
-
-            const THROTTLE_MS = 250;
-            if (now - this._lastPersistAt < THROTTLE_MS) {
-                if (!this._persistTimer) {
-                    this._persistTimer = setTimeout(() => {
-                        this._persistTimer = null;
-                        this._lastPersistAt = Date.now();
-                        const snapToSave = this._pendingSnapshot;
-                        if (this._pendingSnapshot === snapToSave) {
-                            this._pendingSnapshot = null;
-                        }
-                        if (snapToSave) {
-                            this._doSave(snapToSave);
-                        }
-                    }, THROTTLE_MS);
-                }
-            } else {
-                this._lastPersistAt = now;
-                const snapToSave = this._pendingSnapshot;
-                this._pendingSnapshot = null;
-                if (snapToSave) {
-                    this._doSave(snapToSave);
-                }
-            }
+            this._hasPendingWrite = true;
+            // 触发 30 秒后台保存
+            this.persistInBackground();
             // 不触发事件
         },
 
         persist() {
-            // 轻量节流 + 日志裁剪，避免频繁 JSON 序列化和 IDB 写入导致卡顿
-            const now = Date.now();
             const snapshot = this._buildSnapshot();
             this._pendingSnapshot = snapshot;
+            this._hasPendingWrite = true;
+            // 触发 30 秒后台保存
+            this.persistInBackground();
 
-            const THROTTLE_MS = 250;
-            if (now - this._lastPersistAt < THROTTLE_MS) {
-                if (!this._persistTimer) {
-                    this._persistTimer = setTimeout(() => {
-                        this._persistTimer = null;
-                        this._lastPersistAt = Date.now();
-                        const snapToSave = this._pendingSnapshot;
-                        if (this._pendingSnapshot === snapToSave) {
-                            this._pendingSnapshot = null;
-                        }
-                        if (snapToSave) {
-                            this._doSave(snapToSave);
-                        }
-                    }, THROTTLE_MS);
-                }
-            } else {
-                this._lastPersistAt = now;
-                const snapToSave = this._pendingSnapshot;
-                this._pendingSnapshot = null;
-                if (snapToSave) {
-                    this._doSave(snapToSave);
-                }
-            }
-    
             // 通知所有订阅者：状态已更新（单一数据源）
             if (this.events) {
                 if (typeof this.events.emitAsync === 'function') {
@@ -324,6 +307,45 @@
                     this.events.emit('updated', this.state);
                 }
             }
+        },
+
+        /**
+         * 强制立即保存（用于页面关闭、发送消息等关键时刻）
+         * 直接写入 IndexedDB
+         */
+        persistImmediately() {
+            if (this._persistTimer) {
+                clearTimeout(this._persistTimer);
+                this._persistTimer = null;
+            }
+            const snapshot = this._pendingSnapshot || this._buildSnapshot();
+            this._pendingSnapshot = null;
+            this._hasPendingWrite = false;
+
+            // 直接写入 IndexedDB（关键时刻必须保存）
+            this._doSaveToIDB(snapshot).catch(e => {
+                console.error('persistImmediately: IndexedDB 保存失败', e);
+            });
+        },
+
+        /**
+         * 后台静默保存（用于非关键时刻，如用户空闲一段时间后）
+         * 使用较长延迟，避免打断用户操作
+         */
+        persistInBackground() {
+            if (this._backgroundSaveTimer) return;
+
+            this._backgroundSaveTimer = setTimeout(() => {
+                this._backgroundSaveTimer = null;
+                if (this._hasPendingWrite) {
+                    const snapshot = this._pendingSnapshot || this._buildSnapshot();
+                    this._pendingSnapshot = null;
+                    this._hasPendingWrite = false;
+                    this._doSaveToIDB(snapshot).catch(e => {
+                        console.warn('后台保存失败:', e);
+                    });
+                }
+            }, 30000); // 30 秒后保存
         },
 
         async restore() {
@@ -711,9 +733,10 @@
                 conv.activeBranchMap = {};
             }
             
-            // 生成缓存键：基于 activeBranchMap 和消息数量
-            // 当分支切换或消息增删时，缓存自动失效
-            const cacheKey = JSON.stringify(conv.activeBranchMap) + ':' + conv.messages.length;
+            // 性能优化：简化缓存键
+            // 分支切换时会主动调用 _invalidateActivePathCache 失效缓存
+            // 因此缓存键只需要基于消息数量（消息增删时自动失效）
+            const cacheKey = convId + ':' + conv.messages.length;
             const cached = this._activePathCache[convId];
             if (cached && cached.key === cacheKey) {
                 return cached.path;
@@ -843,6 +866,9 @@
             
             // 更新选中的分支
             conv.activeBranchMap[parentId] = msgId;
+
+            // 使活跃路径缓存失效（分支切换后路径改变）
+            this._invalidateActivePathCache(convId);
             
             // 静默模式：只保存，不广播事件（调用者会自行处理 UI 更新）
             if (options.silent) {
