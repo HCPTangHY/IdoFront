@@ -36,6 +36,14 @@
             store.events.on('conversation:renamed', (data) => {
                 updateConversationTitleInList(data.id, data.title);
             });
+            
+            // 监听消息添加事件，重新排序对话列表
+            store.events.on('conversation:messageAdded', (data) => {
+                // 使用 requestAnimationFrame 避免频繁更新
+                requestAnimationFrame(() => {
+                    renderConversationList();
+                });
+            });
         }
     };
 

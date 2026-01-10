@@ -33,19 +33,22 @@
         const conv = store.state.conversations.find(c => c.id === convId);
         if (!conv) return false;
         
-        // 用户已编辑过标题或 AI 已生成过标题，不再自动生成
-        if (conv.titleEditedByUser || conv.titleGeneratedByAI) return false;
+        // 用户已手动编辑过标题，不再自动生成
+        // 注意：AI 生成过标题不阻止，这样切换到新分支时可以根据新内容更新标题
+        if (conv.titleEditedByUser) return false;
         
-        // 获取活跃路径
+        // 获取当前活跃路径
         const activePath = store.getActivePath(convId);
         
-        // 条件：第一轮问答完成（2条消息：用户+AI）
+        // 条件：当前活跃路径恰好是第一轮问答完成（2条消息）
+        // 这样无论在哪个分支，只要是第一轮问答完成就会生成标题
         if (activePath.length !== 2) return false;
         
-        // 最后一条必须是 AI 回复
-        if (activePath[1].role !== 'assistant') return false;
+        // 第一条必须是用户消息
+        if (activePath[0].role !== 'user') return false;
         
-        // AI 回复必须有内容
+        // 第二条必须是有内容的助手消息
+        if (activePath[1].role !== 'assistant') return false;
         if (!activePath[1].content || activePath[1].content.trim().length === 0) return false;
         
         return true;

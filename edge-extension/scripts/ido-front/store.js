@@ -285,20 +285,42 @@
                     }
 
                     let normalized = [];
+                    let migrationSuccess = false;
                     try {
                         // eslint-disable-next-line no-await-in-loop
                         const result = await attachmentsApi.normalizeAttachmentsForState(rawAttachments, {
                             source: msg.role === 'assistant' ? 'assistant' : 'user'
                         });
                         normalized = result && Array.isArray(result.attachments) ? result.attachments : [];
+                        
+                        // ★ 验证存储是否成功：检查每个附件的 Blob 是否真的可读取
+                        if (normalized.length > 0) {
+                            let allStored = true;
+                            for (const att of normalized) {
+                                if (att.id) {
+                                    // eslint-disable-next-line no-await-in-loop
+                                    const blob = await attachmentsApi.getBlob(att.id);
+                                    if (!blob) {
+                                        allStored = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            migrationSuccess = allStored;
+                        }
                     } catch (e) {
                         console.warn('[store] migrateAttachmentsToBlobStorage failed:', e);
-                        // 保底：不影响启动流程
+                        // 保底：不影响启动流程，保留原始数据
                         continue;
                     }
 
-                    if (normalized.length > 0) {
+                    // ★ 只有在存储成功后才替换原始数据
+                    if (migrationSuccess && normalized.length > 0) {
                         msg.attachments = normalized;
+                    } else if (!migrationSuccess) {
+                        // 存储失败，保留原始 dataUrl，不删除任何数据
+                        console.warn('[store] migrateAttachmentsToBlobStorage: storage verification failed, keeping original data');
+                        continue;
                     } else {
                         delete msg.attachments;
                     }
@@ -660,6 +682,11 @@
                  
                  conv.messages.push(message);
                  conv.updatedAt = Date.now();
+                 
+                 // 触发对话更新事件（用于侧边栏重新排序）
+                 if (this.events) {
+                     this.events.emit('conversation:messageAdded', { conversationId: convId });
+                 }
                  
                  // 更新 activeBranchMap：将新消息设为其父节点的选中分支
                  if (parentId !== null) {

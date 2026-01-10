@@ -49,6 +49,11 @@
                 const url = typeof resource === 'string' ? resource : resource.url;
                 const method = config?.method || 'GET';
                 
+                // ★ 过滤不需要记录的请求（避免记录图片等二进制资源导致卡顿）
+                if (shouldSkipLogging(url)) {
+                    return originalFetch(...args);
+                }
+                
                 // 创建日志条目
                 const logId = createLogEntry(url, method, config);
                 
@@ -56,11 +61,18 @@
                     // 调用原始 fetch
                     const response = await originalFetch(...args);
                     
+                    // ★ 检查响应类型，跳过二进制响应（图片、音频、视频等）
+                    const contentType = response.headers.get('content-type') || '';
+                    if (isBinaryContentType(contentType)) {
+                        // 标记为二进制响应，不读取响应体
+                        markAsBinaryResponse(logId, response, contentType);
+                        return response;
+                    }
+                    
                     // 克隆响应以便读取
                     const clonedResponse = response.clone();
                     
                     // 检查是否为流式响应
-                    const contentType = response.headers.get('content-type') || '';
                     const isStream = contentType.includes('text/event-stream') ||
                                    contentType.includes('application/x-ndjson');
                     
@@ -143,6 +155,86 @@
         // 截断后保留的后缀长度
         keepSuffix: 200
     };
+
+    /**
+     * 判断是否应该跳过日志记录
+     * @param {string} url - 请求 URL
+     * @returns {boolean}
+     */
+    function shouldSkipLogging(url) {
+        if (!url) return false;
+        
+        // 跳过 blob: 和 data: URL
+        if (url.startsWith('blob:') || url.startsWith('data:')) {
+            return true;
+        }
+        
+        // 跳过常见的静态资源
+        const skipExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot'];
+        const urlLower = url.toLowerCase();
+        for (const ext of skipExtensions) {
+            if (urlLower.includes(ext)) {
+                return true;
+            }
+        }
+        
+        // 跳过 Chrome 扩展内部资源
+        if (url.startsWith('chrome-extension://') && !url.includes('/api/')) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * 判断是否为二进制内容类型
+     * @param {string} contentType - Content-Type header
+     * @returns {boolean}
+     */
+    function isBinaryContentType(contentType) {
+        if (!contentType) return false;
+        
+        const binaryTypes = [
+            'image/',
+            'audio/',
+            'video/',
+            'application/octet-stream',
+            'application/pdf',
+            'application/zip',
+            'font/'
+        ];
+        
+        const ct = contentType.toLowerCase();
+        return binaryTypes.some(type => ct.includes(type));
+    }
+
+    /**
+     * 标记为二进制响应（不读取响应体）
+     */
+    function markAsBinaryResponse(logId, response, contentType) {
+        const store = window.IdoFront.store;
+        const logEntry = store.state.networkLogs?.find(log => log.id === logId);
+        
+        if (!logEntry) return;
+        
+        const responseHeaders = {};
+        response.headers.forEach((value, key) => {
+            responseHeaders[key] = value;
+        });
+        
+        logEntry.response = {
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders,
+            body: `[二进制内容: ${contentType}]`,
+            rawBody: '',
+            isStream: false,
+            isBinary: true
+        };
+        
+        logEntry.duration = Date.now() - logEntry.timestamp;
+        logEntry.status = 'success';
+    }
 
     /**
      * 截断单个超长字符串

@@ -6,7 +6,7 @@
     window.IdoFront = window.IdoFront || {};
 
     const DB_NAME = 'IdoFrontDB';
-    const DB_VERSION = 2;
+    const DB_VERSION = 3;  // v3: 确保 pluginData store 存在
     const STORE_NAME = 'state';
     const PLUGINS_STORE = 'plugins';
     const PLUGIN_DATA_STORE = 'pluginData';  // 插件运行时数据存储

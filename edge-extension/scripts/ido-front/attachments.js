@@ -10,8 +10,16 @@
     window.IdoFront = window.IdoFront || {};
 
     const PLUGIN_ID = 'core.attachments';
-    const storage = window.IdoFront.storage;
-    const utils = window.IdoFront.utils;
+
+    // ★ 动态获取依赖，避免模块加载顺序问题
+    // 在模块加载时 storage/utils 可能尚未初始化
+    function getStorage() {
+        return window.IdoFront && window.IdoFront.storage;
+    }
+
+    function getUtils() {
+        return window.IdoFront && window.IdoFront.utils;
+    }
 
     // objectURL 缓存（避免频繁从 IDB 读取 + createObjectURL）
     const MAX_OBJECT_URLS = 128;
@@ -19,6 +27,7 @@
     const pendingObjectUrl = new Map(); // id -> Promise<string|null>
 
     function createAttachmentId() {
+        const utils = getUtils();
         if (utils && typeof utils.createId === 'function') {
             return utils.createId('att');
         }
@@ -121,6 +130,7 @@
     }
 
     async function setStoredValue(id, value) {
+        const storage = getStorage();
         if (!storage || typeof storage.setPluginData !== 'function') {
             throw new Error('storage.setPluginData not available');
         }
@@ -128,6 +138,7 @@
     }
 
     async function getStoredValue(id) {
+        const storage = getStorage();
         if (!storage || typeof storage.getPluginData !== 'function') {
             return null;
         }
