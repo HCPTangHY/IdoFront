@@ -79,9 +79,26 @@
             plugin: null
         };
 
-        // 如果有附件，保存到消息顶层
+        // 附件外置化：Blob 存 pluginData（IndexedDB），消息里只保存轻量引用，
+        // 避免 base64 dataUrl 被写入 core.chat.state 导致秒级卡顿。
+        let attachmentRefs = null;
         if (attachments && attachments.length > 0) {
-            userMessage.attachments = attachments;
+            const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+            if (attachmentsApi && typeof attachmentsApi.normalizeAttachmentsForState === 'function') {
+                try {
+                    const normalized = await attachmentsApi.normalizeAttachmentsForState(attachments, { source: 'user' });
+                    attachmentRefs = normalized && Array.isArray(normalized.attachments) ? normalized.attachments : [];
+                } catch (e) {
+                    console.warn('[messageActions.send] normalizeAttachmentsForState failed:', e);
+                    attachmentRefs = [];
+                }
+            } else {
+                attachmentRefs = attachments;
+            }
+        }
+
+        if (attachmentRefs && attachmentRefs.length > 0) {
+            userMessage.attachments = attachmentRefs;
         }
 
         store.addMessageToConversation(conv.id, userMessage);
@@ -292,7 +309,20 @@
                 };
                 
                 if (editingAttachments.length > 0) {
-                    newUserMessage.attachments = editingAttachments;
+                    const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+                    if (attachmentsApi && typeof attachmentsApi.normalizeAttachmentsForState === 'function') {
+                        try {
+                            const normalized = await attachmentsApi.normalizeAttachmentsForState(editingAttachments, { source: 'user' });
+                            if (normalized && Array.isArray(normalized.attachments) && normalized.attachments.length > 0) {
+                                newUserMessage.attachments = normalized.attachments;
+                            }
+                        } catch (e) {
+                            console.warn('[messageActions.edit] normalizeAttachmentsForState failed:', e);
+                        }
+                    } else {
+                        // fallback：保持原逻辑（可能包含 dataUrl）
+                        newUserMessage.attachments = editingAttachments;
+                    }
                 }
                 
                 // 使用 createBranch 创建分支（会自动设置 parentId 并切换到新分支）
@@ -322,9 +352,30 @@
                         role: 'assistant',
                         content: newContent,
                         createdAt: now,
-                        timestamp: new Date(now).toISOString(),
-                        attachments: editingAttachments.length > 0 ? editingAttachments : null
+                        timestamp: new Date(now).toISOString()
                     };
+
+                    // 附件外置化：保存 Blob 并仅保留轻量引用
+                    if (editingAttachments.length > 0) {
+                        const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+                        if (attachmentsApi && typeof attachmentsApi.normalizeAttachmentsForState === 'function') {
+                            try {
+                                const normalized = await attachmentsApi.normalizeAttachmentsForState(editingAttachments, { source: 'assistant' });
+                                if (normalized && Array.isArray(normalized.attachments) && normalized.attachments.length > 0) {
+                                    newAssistantMessage.attachments = normalized.attachments;
+                                } else {
+                                    delete newAssistantMessage.attachments;
+                                }
+                            } catch (e) {
+                                console.warn('[messageActions.edit] normalizeAttachmentsForState failed:', e);
+                                newAssistantMessage.attachments = editingAttachments;
+                            }
+                        } else {
+                            newAssistantMessage.attachments = editingAttachments;
+                        }
+                    } else {
+                        delete newAssistantMessage.attachments;
+                    }
                     
                     // 使用 createBranch 创建分支
                     store.createBranch(conv.id, parentId, newAssistantMessage);
@@ -398,10 +449,26 @@
         const preview = document.createElement('div');
         preview.className = 'message-edit-attachment-item';
         
-        if (attachment.type.startsWith('image/')) {
+        if (attachment.type && attachment.type.startsWith('image/')) {
             const img = document.createElement('img');
-            img.src = attachment.dataUrl;
             img.alt = attachment.name;
+
+            // 优先使用 dataUrl（编辑态新增附件），否则从附件仓库读取 objectURL（已外置化的历史附件）
+            if (attachment.dataUrl) {
+                img.src = attachment.dataUrl;
+            } else if (attachment.id) {
+                const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+                if (attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
+                    attachmentsApi.getObjectUrl(attachment.id).then((url) => {
+                        if (url) {
+                            img.src = url;
+                        }
+                    }).catch(() => {
+                        // ignore
+                    });
+                }
+            }
+
             preview.appendChild(img);
         } else {
             const icon = document.createElement('span');
@@ -700,28 +767,53 @@
         // 这确保了在分支模式下只发送当前选中路径的消息给 AI
         // 注意：排除当前正在生成的 assistant 消息（它刚被创建，内容为空）
         const activePath = store.getActivePath(conv.id);
-        activePath.filter(m => m.id !== assistantMessage.id).forEach(m => {
+        const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+        const attachmentDataUrlCache = new Map();
+
+        for (const m of activePath) {
+            if (!m || m.id === assistantMessage.id) continue;
+
             const msg = {
                 role: m.role,
                 content: m.content
             };
-            
-            // 传递附件和metadata给渠道适配器
-            if (m.attachments && m.attachments.length > 0) {
+
+            // 传递附件给渠道适配器：
+            // Store 中仅保存轻量引用（无 dataUrl），这里按需解析为 dataUrl 供渠道使用。
+            const rawAttachments = Array.isArray(m.attachments) && m.attachments.length > 0
+                ? m.attachments
+                : (m.metadata && Array.isArray(m.metadata.attachments) ? m.metadata.attachments : null);
+
+            if (rawAttachments && rawAttachments.length > 0) {
                 if (!msg.metadata) msg.metadata = {};
-                msg.metadata.attachments = m.attachments;
+
+                if (attachmentsApi && typeof attachmentsApi.resolveAttachmentsForPayload === 'function') {
+                    // eslint-disable-next-line no-await-in-loop
+                    const payloadAttachments = await attachmentsApi.resolveAttachmentsForPayload(rawAttachments, { cache: attachmentDataUrlCache });
+                    if (payloadAttachments && payloadAttachments.length > 0) {
+                        msg.metadata.attachments = payloadAttachments;
+                    }
+                } else {
+                    // fallback：直接透传（可能不包含 dataUrl）
+                    msg.metadata.attachments = rawAttachments;
+                }
             }
-            
+
             // 传递渠道特有的 metadata（如 Gemini 的 thoughtSignature）
             if (m.metadata) {
+                const meta = { ...m.metadata };
+                // 避免把 store 里的 attachments 引用合并回去覆盖 payloadAttachments
+                if (meta.attachments) {
+                    delete meta.attachments;
+                }
                 msg.metadata = {
                     ...(msg.metadata || {}),
-                    ...m.metadata
+                    ...meta
                 };
             }
-            
+
             messagesPayload.push(msg);
-        });
+        }
         
                 // Log Request（使用精简版，避免将大量 base64 附件写入日志导致卡顿）
                 const sanitizedMessages = [];
@@ -815,6 +907,10 @@
                         channelConfig.paramsOverride.reasoning_effort = effort;
                     }
 
+                    // 流式/非流式都可能返回附件。为了避免把 base64 写进 Store，先暂存原始附件，
+                    // 在生成结束时统一外置化并写回 assistantMessage.attachments（仅保存引用）。
+                    let finalAssistantAttachments = null;
+
             const onUpdate = (data) => {
                 // 如果流式已结束，忽略后续延迟到达的更新
                 if (streamEnded) {
@@ -894,11 +990,20 @@
                 if (fullReasoning) {
                     assistantMessage.reasoning = fullReasoning;
                 }
+
+                // ⚠️ 不要把 base64 dataUrl 直接写进 Store（会在持久化时导致卡顿）
+                // 这里只暂存，等流式结束后统一外置化。
                 if (currentAttachments && currentAttachments.length > 0) {
-                    assistantMessage.attachments = currentAttachments;
+                    finalAssistantAttachments = currentAttachments;
                 }
+
+                // metadata 也可能带 attachments，这里写入 Store 前先剥离
                 if (currentMetadata) {
-                    assistantMessage.metadata = currentMetadata;
+                    const meta = { ...currentMetadata };
+                    if (Array.isArray(meta.attachments)) {
+                        delete meta.attachments;
+                    }
+                    assistantMessage.metadata = meta;
                 }
                 
                 // 仅当在活跃路径上时才更新 UI
@@ -1025,12 +1130,23 @@
                 fullContent = choice?.message?.content || '无内容响应';
                 fullReasoning = choice?.message?.reasoning_content || null;
                 const metadata = choice?.message?.metadata || null;
-                const attachments = choice?.message?.attachments || null;
+                const attachments = choice?.message?.attachments
+                    || (metadata && Array.isArray(metadata.attachments) ? metadata.attachments : null);
                 
                 assistantMessage.content = fullContent;
                 if (fullReasoning) assistantMessage.reasoning = fullReasoning;
-                if (metadata) assistantMessage.metadata = metadata;
-                if (attachments) assistantMessage.attachments = attachments;
+
+                if (metadata) {
+                    const meta = { ...metadata };
+                    if (Array.isArray(meta.attachments)) {
+                        delete meta.attachments;
+                    }
+                    assistantMessage.metadata = meta;
+                }
+
+                if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+                    finalAssistantAttachments = attachments;
+                }
             }
             
             {
@@ -1053,6 +1169,26 @@
                 
                 // 更新助手消息的统计信息
                 assistantMessage.stats = stats;
+
+                // 将最终附件外置化后再落盘（避免把 base64 写进 core.chat.state）
+                if (finalAssistantAttachments && Array.isArray(finalAssistantAttachments) && finalAssistantAttachments.length > 0) {
+                    const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+                    if (attachmentsApi && typeof attachmentsApi.normalizeAttachmentsForState === 'function') {
+                        try {
+                            const normalized = await attachmentsApi.normalizeAttachmentsForState(finalAssistantAttachments, { source: 'assistant' });
+                            if (normalized && Array.isArray(normalized.attachments) && normalized.attachments.length > 0) {
+                                assistantMessage.attachments = normalized.attachments;
+                            } else {
+                                delete assistantMessage.attachments;
+                            }
+                        } catch (e) {
+                            console.warn('[generateResponse] normalizeAttachmentsForState failed:', e);
+                            // 保底：不写入 attachments，避免持久化卡顿
+                            delete assistantMessage.attachments;
+                        }
+                    }
+                }
+
                 // AI 回复完成，立即保存（关键时刻）
                 store.persistImmediately();
                 

@@ -22,6 +22,7 @@
         // 1. 基础模块（无依赖）
         'utils.js',
         'idb-storage.js',  // IndexedDB 存储层（store.js 依赖）
+        'attachments.js',  // 附件外置化（Blob 存储 / 引用）
         'store.js',
         'virtual-list.js', // 虚拟列表/DOM缓存管理（性能优化）
         'runtime.js',      // Runtime: 统一对外暴露 store 等核心能力

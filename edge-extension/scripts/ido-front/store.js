@@ -88,6 +88,11 @@
 
             this._initPromise = (async () => {
                 await this.restore();
+
+                // 附件外置化迁移：把历史消息中的 base64 dataUrl 挪到 pluginData (Blob) 存储，
+                // 避免 core.chat.state 写入 IndexedDB 时发生秒级 structured clone 卡顿。
+                await this.migrateAttachmentsToBlobStorage();
+
                 this.state.networkLogs = [];
                 if (this.state.conversations.length === 0) {
                     this.createConversationInternal('新对话');
@@ -223,6 +228,99 @@
             }
 
             if (updated) this.persist();
+        },
+
+        /**
+         * 附件外置化迁移：
+         * - 将历史消息中的 attachments（尤其是 base64 dataUrl）迁移到 IndexedDB pluginData（Blob）
+         * - 消息里仅保留轻量引用：{ id, name, type, size, source }
+         *
+         * 迁移后会调用 persistSilent() 标记脏数据（写入将由后台/关键时刻触发）。
+         */
+        async migrateAttachmentsToBlobStorage() {
+            const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+            if (!attachmentsApi || typeof attachmentsApi.normalizeAttachmentsForState !== 'function') {
+                return;
+            }
+
+            if (!Array.isArray(this.state.conversations) || this.state.conversations.length === 0) {
+                return;
+            }
+
+            let hasChanges = false;
+            let migratedMsgCount = 0;
+            let migratedAttachmentCount = 0;
+
+            for (const conv of this.state.conversations) {
+                if (!conv || !Array.isArray(conv.messages) || conv.messages.length === 0) continue;
+
+                for (const msg of conv.messages) {
+                    if (!msg) continue;
+
+                    // 兼容：优先读 msg.attachments，否则从 msg.metadata.attachments 迁移
+                    const directAttachments = Array.isArray(msg.attachments) ? msg.attachments : null;
+                    const metaAttachments = msg.metadata && Array.isArray(msg.metadata.attachments)
+                        ? msg.metadata.attachments
+                        : null;
+
+                    const fromMeta = (!directAttachments || directAttachments.length === 0)
+                        && metaAttachments
+                        && metaAttachments.length > 0;
+
+                    const rawAttachments = (directAttachments && directAttachments.length > 0)
+                        ? directAttachments
+                        : (fromMeta ? metaAttachments : null);
+
+                    if (!rawAttachments || rawAttachments.length === 0) {
+                        continue;
+                    }
+
+                    // 判断是否存在需要迁移/剥离的大字段
+                    const needsStrip = rawAttachments.some(a => a && (a.dataUrl || a.file));
+                    const needsId = rawAttachments.some(a => a && !a.id);
+
+                    if (!needsStrip && !needsId && !fromMeta) {
+                        // 已经是轻量引用，无需处理
+                        continue;
+                    }
+
+                    let normalized = [];
+                    try {
+                        // eslint-disable-next-line no-await-in-loop
+                        const result = await attachmentsApi.normalizeAttachmentsForState(rawAttachments, {
+                            source: msg.role === 'assistant' ? 'assistant' : 'user'
+                        });
+                        normalized = result && Array.isArray(result.attachments) ? result.attachments : [];
+                    } catch (e) {
+                        console.warn('[store] migrateAttachmentsToBlobStorage failed:', e);
+                        // 保底：不影响启动流程
+                        continue;
+                    }
+
+                    if (normalized.length > 0) {
+                        msg.attachments = normalized;
+                    } else {
+                        delete msg.attachments;
+                    }
+
+                    // 移除旧字段，避免重复/继续持久化大对象
+                    if (msg.metadata && msg.metadata.attachments) {
+                        delete msg.metadata.attachments;
+                    }
+
+                    hasChanges = true;
+                    migratedMsgCount += 1;
+                    migratedAttachmentCount += normalized.length;
+                }
+            }
+
+            if (hasChanges) {
+                console.log(
+                    `[store] migrateAttachmentsToBlobStorage: migrated ${migratedAttachmentCount} attachments in ${migratedMsgCount} messages.`
+                );
+                // 仅标记脏数据，不阻塞初始化流程
+                this.persistSilent();
+            }
         },
 
         initDefaultChannels() {

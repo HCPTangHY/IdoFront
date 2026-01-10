@@ -65,8 +65,24 @@ const FrameworkMessages = (function() {
 
         const img = document.createElement('img');
         img.className = 'ido-lightbox__image';
-        img.src = images[currentIdx].dataUrl;
         img.alt = images[currentIdx].name || 'Image';
+
+        // 支持附件外置化：如果没有 dataUrl，则按 attachment.id 从 IdoFront.attachments 取 objectURL
+        const initialSrc = images[currentIdx].dataUrl;
+        if (initialSrc) {
+            img.src = initialSrc;
+        } else if (
+            images[currentIdx].id &&
+            window.IdoFront &&
+            window.IdoFront.attachments &&
+            typeof window.IdoFront.attachments.getObjectUrl === 'function'
+        ) {
+            window.IdoFront.attachments.getObjectUrl(images[currentIdx].id).then((url) => {
+                if (url) img.src = url;
+            }).catch(() => {
+                // ignore
+            });
+        }
 
         const closeBtn = document.createElement('button');
         closeBtn.className = 'ido-lightbox__close';
@@ -124,8 +140,26 @@ const FrameworkMessages = (function() {
 
         function navigateLightbox(direction) {
             currentIdx = (currentIdx + direction + images.length) % images.length;
-            img.src = images[currentIdx].dataUrl;
             img.alt = images[currentIdx].name || 'Image';
+
+            const nextSrc = images[currentIdx].dataUrl;
+            if (nextSrc) {
+                img.src = nextSrc;
+            } else {
+                img.removeAttribute('src');
+                if (
+                    images[currentIdx].id &&
+                    window.IdoFront &&
+                    window.IdoFront.attachments &&
+                    typeof window.IdoFront.attachments.getObjectUrl === 'function'
+                ) {
+                    window.IdoFront.attachments.getObjectUrl(images[currentIdx].id).then((url) => {
+                        if (url) img.src = url;
+                    }).catch(() => {
+                        // ignore
+                    });
+                }
+            }
 
             const counter = document.getElementById('lightbox-counter');
             if (counter) {
@@ -483,9 +517,24 @@ const FrameworkMessages = (function() {
             imgWrapper.dataset.imageTotal = imageAttachments.length;
 
             const img = document.createElement('img');
-            img.src = attachment.dataUrl;
             img.alt = attachment.name || 'Attached image';
             img.loading = 'lazy';
+
+            const thumbSrc = attachment.dataUrl;
+            if (thumbSrc) {
+                img.src = thumbSrc;
+            } else if (
+                attachment.id &&
+                window.IdoFront &&
+                window.IdoFront.attachments &&
+                typeof window.IdoFront.attachments.getObjectUrl === 'function'
+            ) {
+                window.IdoFront.attachments.getObjectUrl(attachment.id).then((url) => {
+                    if (url) img.src = url;
+                }).catch(() => {
+                    // ignore
+                });
+            }
 
             const overlay = document.createElement('div');
             overlay.className = 'ido-message__attachment-overlay';

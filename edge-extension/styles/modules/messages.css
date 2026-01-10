@@ -155,6 +155,27 @@
     color: var(--ido-color-primary);
 }
 
+/* ========================================
+   Selection Behavior (Mobile-friendly)
+   目标：长按/拖动选择文本时，不把 UI（按钮/图标/统计/时间等）一起选中复制
+   ======================================== */
+
+/* 消息“外壳”UI 一律不可选中，避免复制时混入 material icon 的文本（如 edit/refresh） */
+.ido-message__role,
+.ido-message__role *,
+.ido-message__time,
+.ido-message__time *,
+.ido-message__controls,
+.ido-message__controls *,
+.ido-message__stats,
+.ido-message__stats *,
+.ido-message__attachments,
+.ido-message__attachments * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
 /* 编辑状态的 Textarea */
 .ido-message__edit-textarea {
     width: 100%;
