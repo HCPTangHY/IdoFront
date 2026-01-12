@@ -8,6 +8,55 @@
     const registry = window.IdoFront.channelRegistry;
     const legacyChannels = window.IdoFront.channels || {};
 
+    // ========== 禁止请求头处理 ==========
+    // Referer, Origin 等是浏览器的 forbidden headers，fetch API 无法直接设置
+    // 需要通过扩展的 declarativeNetRequest API 在网络层修改
+    
+    const FORBIDDEN_HEADERS = [
+        'referer', 'origin', 'host', 'user-agent', 'cookie',
+        'connection', 'content-length', 'accept-encoding'
+    ];
+
+    /**
+     * 检查渠道是否有需要特殊处理的禁止请求头
+     * @param {Object} channel - 渠道配置
+     * @returns {boolean}
+     */
+    function hasForbiddenHeaders(channel) {
+        if (!channel.customHeaders || !Array.isArray(channel.customHeaders)) {
+            return false;
+        }
+        return channel.customHeaders.some(h => 
+            h.key && h.value && FORBIDDEN_HEADERS.includes(h.key.toLowerCase())
+        );
+    }
+
+    /**
+     * 设置渠道的禁止请求头规则（通过 background script）
+     * @param {Object} channel - 渠道配置
+     */
+    async function setupForbiddenHeaderRules(channel) {
+        if (!hasForbiddenHeaders(channel)) {
+            return;
+        }
+        
+        if (typeof chrome === 'undefined' || !chrome.runtime) {
+            console.warn('[Service] chrome.runtime not available, cannot set forbidden headers');
+            return;
+        }
+        
+        try {
+            await chrome.runtime.sendMessage({
+                type: 'UPDATE_CHANNEL_HEADERS',
+                channelId: channel.id || 'temp-channel',
+                baseUrl: channel.baseUrl,
+                customHeaders: channel.customHeaders
+            });
+        } catch (e) {
+            console.warn('[Service] Failed to set forbidden headers via background:', e);
+        }
+    }
+
     function ensureChannel(channel) {
         if (!channel) {
             throw new Error('未指定渠道');
@@ -83,6 +132,10 @@
         const originalChannel = ensureChannel(channel);
         const { adapter, entry } = resolveAdapter(originalChannel, 'call');
         const effectiveChannel = applyDefaults(originalChannel, entry);
+
+        // 设置禁止请求头规则（如 Referer, Origin 等）
+        // 这些头无法通过 fetch 设置，需要通过 declarativeNetRequest 在网络层修改
+        await setupForbiddenHeaderRules(effectiveChannel);
 
         // 创建新的 AbortController
         currentAbortController = new AbortController();
