@@ -1027,6 +1027,11 @@
             conv.messages.push(newMessage);
             conv.updatedAt = Date.now();
             
+            // 触发对话更新事件（用于侧边栏重新排序）
+            if (this.events) {
+                this.events.emit('conversation:messageAdded', { conversationId: convId });
+            }
+            
             // 自动切换到新分支
             const parentKey = parentMsgId === null ? 'root' : parentMsgId;
             conv.activeBranchMap[parentKey] = newMessage.id;

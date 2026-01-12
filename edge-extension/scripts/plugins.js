@@ -56,20 +56,25 @@ document.addEventListener('IdoFrontLoaded', async () => {
         if (e.isComposing || e.keyCode === 229) return;
 
         if (e.key === 'Enter' && !e.shiftKey) {
-            // 只有在非移动端（桌面端）才支持回车发送
-            // 移动端保持默认行为（换行），方便用户输入多行内容
-            const isMobile = window.innerWidth < 768;
-            if (!isMobile) {
+            // 检测是否为移动设备（手机/平板）
+            // 使用 userAgent 检测，避免触摸屏电脑被误判
+            const userAgent = navigator.userAgent.toLowerCase();
+            const isMobileDevice = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(userAgent);
+            
+            // 桌面端（含触摸屏电脑）：Enter 发送，Shift+Enter 换行
+            // 移动设备：Enter 换行（方便输入多行），点击按钮发送
+            if (!isMobileDevice) {
                 e.preventDefault();
                 btnSend.click();
             }
         }
     });
 
-    // Render History List（增量更新，避免每次全量重绘）
+    // Render History List（已迁移到 IdoFront.conversationActions.renderConversationList）
+    // 这里保留空函数以避免破坏其他调用
     function renderHistory() {
-        const list = document.getElementById('history-list');
-        if (!list) return;
+        // 由 IdoFront 的 renderConversationList 统一处理，避免重复渲染导致顺序混乱
+        return;
 
         // 使用面具过滤后的对话列表
         const conversationActions = window.IdoFront.conversationActions;

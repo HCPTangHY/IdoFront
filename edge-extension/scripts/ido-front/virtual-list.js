@@ -337,64 +337,46 @@
      * @param {string} activeId - 当前活跃的对话 ID
      */
     function diffUpdateConversationList(conversations, container, createItem, activeId) {
-        // 构建新的 ID -> 对话映射
-        const newConvMap = new Map();
-        conversations.forEach(conv => newConvMap.set(conv.id, conv));
-
-        // 获取当前 DOM 中的对话项
-        const existingItems = container.querySelectorAll('[data-conv-id]');
+        // 处理空列表
+        if (conversations.length === 0) {
+            container.innerHTML = '';
+            const placeholder = document.createElement('div');
+            placeholder.className = 'ido-empty-placeholder text-center py-8 text-gray-400 text-xs';
+            placeholder.textContent = '暂无对话';
+            container.appendChild(placeholder);
+            return;
+        }
+        
+        // 移除空占位符
+        const emptyPlaceholder = container.querySelector('.ido-empty-placeholder');
+        if (emptyPlaceholder) emptyPlaceholder.remove();
+        
+        // 获取当前 DOM 中的对话项，构建映射
         const existingMap = new Map();
-        existingItems.forEach(item => {
+        Array.from(container.querySelectorAll('[data-conv-id]')).forEach(item => {
             existingMap.set(item.dataset.convId, item);
+            // 先从 DOM 中移除（但保留在内存中，事件处理器不丢失）
+            item.remove();
         });
-
-        // 确定需要删除的项
-        existingItems.forEach(item => {
-            if (!newConvMap.has(item.dataset.convId)) {
-                item.remove();
-                conversationItemCache.delete(item.dataset.convId);
-            }
-        });
-
-        // 按顺序更新/插入项
-        let prevElement = null;
-        conversations.forEach((conv, index) => {
+        
+        // 构建新的 ID 集合
+        const newIds = new Set(conversations.map(c => c.id));
+        
+        // 按正确顺序添加项
+        conversations.forEach((conv) => {
             let item = existingMap.get(conv.id);
             
             if (item) {
-                // 更新已存在的项
+                // 复用已存在的项，更新状态
                 updateConversationItem(item, conv, activeId);
             } else {
                 // 创建新项
                 item = createItem(conv, activeId);
-                conversationItemCache.set(conv.id, item);
             }
-
-            // 确保顺序正确
-            if (index === 0) {
-                if (container.firstChild !== item) {
-                    container.insertBefore(item, container.firstChild);
-                }
-            } else if (prevElement && prevElement.nextSibling !== item) {
-                prevElement.parentNode.insertBefore(item, prevElement.nextSibling);
-            }
-
-            prevElement = item;
+            
+            // 添加到容器末尾（因为我们按顺序遍历，所以末尾添加就是正确顺序）
+            container.appendChild(item);
         });
-
-        // 处理空列表
-        if (conversations.length === 0) {
-            const empty = container.querySelector('.ido-empty-placeholder');
-            if (!empty) {
-                const placeholder = document.createElement('div');
-                placeholder.className = 'ido-empty-placeholder text-center py-8 text-gray-400 text-xs';
-                placeholder.textContent = '暂无对话';
-                container.appendChild(placeholder);
-            }
-        } else {
-            const empty = container.querySelector('.ido-empty-placeholder');
-            if (empty) empty.remove();
-        }
     }
 
     /**

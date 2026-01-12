@@ -11,14 +11,10 @@
  * - Default: arrow cursor everywhere
  * - Text cursor: only on real editable areas (input/textarea/contenteditable)
  * - Pointer: on clickable elements
- * - Selection: disabled by default, re-enabled only where needed
+ * - Selection: allowed in content areas, disabled on UI chrome
  */
-body,
-body * {
+body {
     cursor: default;
-    /* 默认禁止选择：移动端长按/拖动时不会把 UI（标题/按钮等）一起框选，滚动也更顺滑 */
-    -webkit-user-select: none;
-    user-select: none;
     caret-color: transparent;
 }
 
@@ -31,7 +27,32 @@ textarea,
     caret-color: auto;
 }
 
-/* Areas where text selection is allowed but content is not editable */
+/* ========================================
+   Selection Control
+   策略：默认允许选择，仅在 UI 元素上禁用
+   ======================================== */
+
+/* UI 元素禁止选择（避免复制时混入按钮/图标文本） */
+button,
+[role="button"],
+.material-symbols-outlined,
+nav,
+aside,
+header,
+#left-panel,
+#right-panel,
+#main-header,
+#input-area,
+#sidebar-header,
+#history-list,
+.ido-btn,
+.ido-icon-btn {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
+/* 内容区域明确允许选择 */
 #chat-stream,
 #network-list,
 #detail-json,

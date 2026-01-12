@@ -38,12 +38,17 @@
             });
             
             // 监听消息添加事件，重新排序对话列表
-            store.events.on('conversation:messageAdded', (data) => {
-                // 使用 requestAnimationFrame 避免频繁更新
-                requestAnimationFrame(() => {
+            // 使用防抖避免短时间内多次渲染
+            let renderDebounceTimer = null;
+            const debouncedRender = () => {
+                if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+                renderDebounceTimer = setTimeout(() => {
+                    renderDebounceTimer = null;
                     renderConversationList();
-                });
-            });
+                }, 50);
+            };
+            
+            store.events.on('conversation:messageAdded', debouncedRender);
         }
     };
 
@@ -502,7 +507,7 @@
         const listContainer = document.getElementById('history-list');
         if (!listContainer) return;
         
-        // 根据 updatedAt / createdAt 倒序排序，最近活跃的对话排在前面
+        // 获取原始对话数据并按 updatedAt 降序排序
         const personaConvs = getPersonaConversations()
             .slice()
             .sort((a, b) => {
@@ -512,19 +517,7 @@
             });
         
         const activeId = store.state.activeConversationId;
-        
-        // 使用差分更新
-        if (window.IdoFront.virtualList) {
-            window.IdoFront.virtualList.diffUpdateConversationList(
-                personaConvs,
-                listContainer,
-                createConversationItem,
-                activeId
-            );
-        } else {
-            // 回退到全量渲染
-            renderConversationListFull(listContainer, personaConvs, activeId);
-        }
+        renderConversationListFull(listContainer, personaConvs, activeId);
     }
 
     /**
@@ -576,7 +569,7 @@
     }
 
     /**
-     * 全量渲染对话列表（回退方案）
+     * 全量渲染对话列表
      */
     function renderConversationListFull(listContainer, personaConvs, activeId) {
         listContainer.innerHTML = '';
