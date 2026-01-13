@@ -500,55 +500,104 @@ const FrameworkMessages = (function() {
      */
     function createAttachmentsContainer(attachments) {
         const imageAttachments = attachments.filter(a => a && a.type && a.type.startsWith('image/'));
+        const pdfAttachments = attachments.filter(a => a && a.type === 'application/pdf');
 
-        if (imageAttachments.length === 0) return null;
+        if (imageAttachments.length === 0 && pdfAttachments.length === 0) return null;
 
         const attachmentsContainer = document.createElement('div');
-        if (imageAttachments.length === 1) {
-            attachmentsContainer.className = 'ido-message__attachments ido-message__attachments--single';
-        } else {
-            attachmentsContainer.className = 'ido-message__attachments ido-message__attachments--grid';
-        }
-
-        imageAttachments.forEach((attachment, index) => {
-            const imgWrapper = document.createElement('div');
-            imgWrapper.className = 'ido-message__attachment-wrapper';
-            imgWrapper.dataset.imageIndex = index;
-            imgWrapper.dataset.imageTotal = imageAttachments.length;
-
-            const img = document.createElement('img');
-            img.alt = attachment.name || 'Attached image';
-            img.loading = 'lazy';
-
-            const thumbSrc = attachment.dataUrl;
-            if (thumbSrc) {
-                img.src = thumbSrc;
-            } else if (
-                attachment.id &&
-                window.IdoFront &&
-                window.IdoFront.attachments &&
-                typeof window.IdoFront.attachments.getObjectUrl === 'function'
-            ) {
-                window.IdoFront.attachments.getObjectUrl(attachment.id).then((url) => {
-                    if (url) img.src = url;
-                }).catch(() => {
-                    // ignore
-                });
+        
+        // 处理图片附件
+        if (imageAttachments.length > 0) {
+            const imageContainer = document.createElement('div');
+            if (imageAttachments.length === 1) {
+                imageContainer.className = 'ido-message__attachments ido-message__attachments--single';
+            } else {
+                imageContainer.className = 'ido-message__attachments ido-message__attachments--grid';
             }
 
-            const overlay = document.createElement('div');
-            overlay.className = 'ido-message__attachment-overlay';
-            overlay.innerHTML = '<span class="material-symbols-outlined">zoom_in</span>';
+            imageAttachments.forEach((attachment, index) => {
+                const imgWrapper = document.createElement('div');
+                imgWrapper.className = 'ido-message__attachment-wrapper';
+                imgWrapper.dataset.imageIndex = index;
+                imgWrapper.dataset.imageTotal = imageAttachments.length;
 
-            imgWrapper.appendChild(img);
-            imgWrapper.appendChild(overlay);
+                const img = document.createElement('img');
+                img.alt = attachment.name || 'Attached image';
+                img.loading = 'lazy';
 
-            imgWrapper.onclick = () => {
-                openLightbox(imageAttachments, index);
-            };
+                const thumbSrc = attachment.dataUrl;
+                if (thumbSrc) {
+                    img.src = thumbSrc;
+                } else if (
+                    attachment.id &&
+                    window.IdoFront &&
+                    window.IdoFront.attachments &&
+                    typeof window.IdoFront.attachments.getObjectUrl === 'function'
+                ) {
+                    window.IdoFront.attachments.getObjectUrl(attachment.id).then((url) => {
+                        if (url) img.src = url;
+                    }).catch(() => {
+                        // ignore
+                    });
+                }
 
-            attachmentsContainer.appendChild(imgWrapper);
-        });
+                const overlay = document.createElement('div');
+                overlay.className = 'ido-message__attachment-overlay';
+                overlay.innerHTML = '<span class="material-symbols-outlined">zoom_in</span>';
+
+                imgWrapper.appendChild(img);
+                imgWrapper.appendChild(overlay);
+
+                imgWrapper.onclick = () => {
+                    openLightbox(imageAttachments, index);
+                };
+
+                imageContainer.appendChild(imgWrapper);
+            });
+            
+            attachmentsContainer.appendChild(imageContainer);
+        }
+        
+        // 处理 PDF 附件
+        if (pdfAttachments.length > 0) {
+            const pdfContainer = document.createElement('div');
+            pdfContainer.className = 'ido-message__attachments ido-message__attachments--files';
+            
+            pdfAttachments.forEach((attachment) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'ido-message__file-item';
+                
+                const icon = document.createElement('span');
+                icon.className = 'material-symbols-outlined ido-message__file-icon';
+                icon.textContent = 'picture_as_pdf';
+                
+                const info = document.createElement('div');
+                info.className = 'ido-message__file-info';
+                
+                const name = document.createElement('span');
+                name.className = 'ido-message__file-name';
+                name.textContent = attachment.name || 'PDF 文件';
+                name.title = attachment.name || 'PDF 文件';
+                
+                const size = document.createElement('span');
+                size.className = 'ido-message__file-size';
+                if (attachment.size) {
+                    const sizeKB = (attachment.size / 1024).toFixed(1);
+                    const sizeMB = (attachment.size / (1024 * 1024)).toFixed(2);
+                    size.textContent = attachment.size > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+                }
+                
+                info.appendChild(name);
+                info.appendChild(size);
+                
+                fileItem.appendChild(icon);
+                fileItem.appendChild(info);
+                
+                pdfContainer.appendChild(fileItem);
+            });
+            
+            attachmentsContainer.appendChild(pdfContainer);
+        }
 
         return attachmentsContainer;
     }

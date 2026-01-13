@@ -371,8 +371,10 @@
         for (const a of attachments) {
             if (!a) continue;
             const type = normalizeMimeType(pickString(a.type, ''));
-            // 当前仅对 image/* 生效，其他类型在渠道侧也不会被处理
-            if (type && !type.startsWith('image/')) continue;
+            // 支持图片和 PDF 文件
+            const isImage = type && type.startsWith('image/');
+            const isPdf = type === 'application/pdf';
+            if (type && !isImage && !isPdf) continue;
 
             let dataUrl = null;
             if (typeof a.dataUrl === 'string' && a.dataUrl.startsWith('data:')) {

@@ -506,9 +506,12 @@
                 // 构建 parts：从消息顶层字段读取
                 
                 // 1. 添加附件（用户消息或助手消息，从消息顶层的 attachments 读取）
+                // 支持图片 (image/*) 和 PDF (application/pdf) 文件
                 if (msg.attachments && Array.isArray(msg.attachments)) {
                     for (const attachment of msg.attachments) {
-                        if (attachment.type && attachment.type.startsWith('image/')) {
+                        const isImage = attachment.type && attachment.type.startsWith('image/');
+                        const isPdf = attachment.type === 'application/pdf';
+                        if (isImage || isPdf) {
                             // 提取 base64 数据
                             const base64Data = attachment.dataUrl.split(',')[1];
                             const part = {
@@ -527,7 +530,9 @@
                 } else if (msg.metadata?.attachments && Array.isArray(msg.metadata.attachments)) {
                     // 兼容旧数据：从 metadata.attachments 读取
                     for (const attachment of msg.metadata.attachments) {
-                        if (attachment.type && attachment.type.startsWith('image/')) {
+                        const isImage = attachment.type && attachment.type.startsWith('image/');
+                        const isPdf = attachment.type === 'application/pdf';
+                        if (isImage || isPdf) {
                             const base64Data = attachment.dataUrl.split(',')[1];
                             const part = {
                                 inlineData: {

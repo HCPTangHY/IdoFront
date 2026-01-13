@@ -286,3 +286,65 @@
         transform: scale(1);
     }
 }
+
+/* ========================================
+   PDF 文件附件样式
+   ======================================== */
+
+/* 文件类附件容器 */
+.ido-message__attachments--files {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ido-spacing-xs);
+    margin-top: var(--ido-spacing-sm);
+}
+
+/* 文件项 */
+.ido-message__file-item {
+    display: flex;
+    align-items: center;
+    gap: var(--ido-spacing-sm);
+    padding: var(--ido-spacing-sm) var(--ido-spacing-md);
+    background-color: var(--ido-color-bg-secondary);
+    border: 1px solid var(--ido-color-border);
+    border-radius: var(--ido-radius-md);
+    transition: all var(--ido-transition-base);
+}
+
+.ido-message__file-item:hover {
+    border-color: var(--ido-color-primary);
+    background-color: var(--ido-color-bg-tertiary);
+}
+
+/* PDF 图标 */
+.ido-message__file-icon {
+    font-size: 1.5rem;
+    color: #e74c3c; /* PDF 红色 */
+    flex-shrink: 0;
+}
+
+/* 文件信息 */
+.ido-message__file-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+    flex: 1;
+}
+
+/* 文件名 */
+.ido-message__file-name {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ido-color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+/* 文件大小 */
+.ido-message__file-size {
+    font-size: 0.6875rem;
+    color: var(--ido-color-text-tertiary);
+}
