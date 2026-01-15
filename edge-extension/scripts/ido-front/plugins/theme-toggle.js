@@ -22,65 +22,78 @@
 
   const DARK_THEME_STYLE_ID = 'ido-theme-toggle-dark-style';
   const DARK_THEME_CSS = `
-/* Dark theme overrides (applied when plugin adds ido-theme-dark on <html>/<body>) */
+/* ========================================
+   Dark Theme - Complete Rewrite
+   基于明亮主题结构重写，确保风格统一
+   ======================================== */
+
+/* CSS 变量覆盖 */
 :root.ido-theme-dark,
 body.ido-theme-dark {
-    /* Backgrounds */
-    --ido-color-bg-primary: #020617;   /* slate-950 */
-    --ido-color-bg-secondary: #0f172a; /* slate-900 */
-    --ido-color-bg-tertiary: #1e293b;  /* slate-800 */
-    --ido-color-bg-hover: #1e293b;     /* slate-800 */
-    --ido-color-bg-active: #334155;    /* slate-700 */
-    --ido-color-bg-elevated: #0f172a;  /* slate-900 */
+    /* 背景色 - 使用 slate 色系 */
+    --ido-color-bg-primary: #0f172a;    /* slate-900 - 主背景 */
+    --ido-color-bg-secondary: #1e293b;  /* slate-800 - 次级背景 */
+    --ido-color-bg-tertiary: #334155;   /* slate-700 - 第三级背景 */
+    --ido-color-bg-hover: #334155;      /* slate-700 - 悬停 */
+    --ido-color-bg-active: #475569;     /* slate-600 - 激活 */
+    --ido-color-bg-elevated: #1e293b;   /* slate-800 - 提升层 */
 
-    /* Text */
-    --ido-color-text-primary: #f1f5f9;  /* slate-100 */
-    --ido-color-text-secondary: #cbd5e1; /* slate-300 */
-    --ido-color-text-tertiary: #94a3b8;  /* slate-400 */
+    /* 文字色 */
+    --ido-color-text-primary: #f1f5f9;   /* slate-100 */
+    --ido-color-text-secondary: #94a3b8; /* slate-400 */
+    --ido-color-text-tertiary: #64748b;  /* slate-500 */
     --ido-color-text-disabled: #475569;  /* slate-600 */
     --ido-color-text-muted: #64748b;     /* slate-500 */
 
-    /* Borders */
-    --ido-color-border: #1e293b;        /* slate-800 */
-    --ido-color-border-hover: #334155;  /* slate-700 */
-    --ido-color-border-focus: #60a5fa;  /* blue-400 */
-    --ido-color-border-strong: #334155; /* slate-700 */
+    /* 边框色 */
+    --ido-color-border: #334155;         /* slate-700 */
+    --ido-color-border-hover: #475569;   /* slate-600 */
+    --ido-color-border-focus: #3b82f6;   /* blue-500 */
+    --ido-color-border-strong: #475569;  /* slate-600 */
 
-    /* Primary brand color - brighter for dark background */
-    --ido-color-primary: #60a5fa;        /* blue-400 */
-    --ido-color-primary-hover: #3b82f6;  /* blue-500 */
-    --ido-color-primary-active: #2563eb; /* blue-600 */
-    --ido-color-primary-tint: rgba(96, 165, 250, 0.15);
-    --ido-color-primary-tint-2: rgba(96, 165, 250, 0.25);
+    /* 主色 */
+    --ido-color-primary: #3b82f6;         /* blue-500 */
+    --ido-color-primary-hover: #2563eb;   /* blue-600 */
+    --ido-color-primary-active: #1d4ed8;  /* blue-700 */
+    --ido-color-primary-tint: rgba(59, 130, 246, 0.15);
+    --ido-color-primary-tint-2: rgba(59, 130, 246, 0.25);
 
-    /* Links */
-    --ido-color-link: #60a5fa;           /* blue-400 */
-    --ido-color-link-hover: #93c5fd;     /* blue-300 */
+    /* 链接 */
+    --ido-color-link: #60a5fa;            /* blue-400 */
+    --ido-color-link-hover: #93c5fd;      /* blue-300 */
 
-    /* Semantic Colors - Dark Theme */
-    --ido-color-success-tint: rgba(34, 197, 94, 0.2);
-    --ido-color-success-text: #4ade80;   /* green-400 */
-    --ido-color-warning-tint: rgba(251, 191, 36, 0.2);
-    --ido-color-warning-text: #fbbf24;   /* amber-400 */
-    --ido-color-danger-tint: rgba(248, 113, 113, 0.2);
-    --ido-color-danger-text: #f87171;    /* red-400 */
-    --ido-color-info-tint: rgba(96, 165, 250, 0.2);
-    --ido-color-info-text: #60a5fa;      /* blue-400 */
+    /* 语义色 */
+    --ido-color-success: #22c55e;
+    --ido-color-success-hover: #16a34a;
+    --ido-color-success-tint: rgba(34, 197, 94, 0.15);
+    --ido-color-success-text: #4ade80;
+    --ido-color-warning: #f59e0b;
+    --ido-color-warning-hover: #d97706;
+    --ido-color-warning-tint: rgba(245, 158, 11, 0.15);
+    --ido-color-warning-text: #fbbf24;
+    --ido-color-danger: #ef4444;
+    --ido-color-danger-hover: #dc2626;
+    --ido-color-danger-tint: rgba(239, 68, 68, 0.15);
+    --ido-color-danger-text: #f87171;
+    --ido-color-info: #06b6d4;
+    --ido-color-info-hover: #0891b2;
+    --ido-color-info-tint: rgba(6, 182, 212, 0.15);
+    --ido-color-info-text: #22d3ee;
 
-    /* Message Card Colors */
-    --card-bg-default: #0f172a;
-    --card-bg-edit: #1e293b;
-    --card-border: #1e293b;
-    --card-border-focus: #60a5fa;
-    --action-btn-bg: #1e293b;
-    --action-btn-hover: #334155;
-    --overlay-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    /* 消息卡片 */
+    --card-bg-default: #1e293b;
+    --card-bg-edit: #334155;
+    --card-border: #334155;
+    --card-border-focus: #3b82f6;
+    --action-btn-bg: #334155;
+    --action-btn-hover: #475569;
+    --overlay-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
 
-    /* Stats Bar Colors */
-    --stats-bg: #0f172a;
-    --stats-bg-hover: #1e293b;
+    /* 统计栏 */
+    --stats-bg: #1e293b;
+    --stats-bg-hover: #334155;
 
-    /* Code Block Colors (Dark theme) */
+    /* 代码块 */
     --code-bg: #0d1117;
     --code-header-bg: #161b22;
     --code-border: #30363d;
@@ -89,134 +102,235 @@ body.ido-theme-dark {
     --code-lang-color: #8b949e;
     --code-copy-hover-bg: rgba(255, 255, 255, 0.1);
 
-    /* Reasoning/Chain of Thought Colors */
-    --reasoning-toggle-bg: #1e293b;
-    --reasoning-toggle-bg-hover: #334155;
+    /* 推理/思考链 */
+    --reasoning-toggle-bg: #334155;
+    --reasoning-toggle-bg-hover: #475569;
     --reasoning-toggle-color: #94a3b8;
     --reasoning-toggle-color-hover: #f1f5f9;
-    --reasoning-content-bg: #0f172a;
-    --reasoning-content-border: #1e293b;
+    --reasoning-content-bg: #1e293b;
+    --reasoning-content-border: #334155;
     --reasoning-content-color: #94a3b8;
 
-    /* Table Colors */
-    --table-header-bg: #1e293b;
-    --table-row-bg: #0f172a;
-    --table-row-alt-bg: #1e293b;
-    --table-border: #334155;
-
-    /* Base page background & text (override tailwind body bg-light) */
-    background-color: #020617;
-    color: #f1f5f9;
+    /* 表格 */
+    --table-header-bg: #334155;
+    --table-row-bg: #1e293b;
+    --table-row-alt-bg: #334155;
+    --table-border: #475569;
 }
 
-/* Structural layout overrides for dark theme */
-/* 整体页面与主容器背景 */
+/* ======================================== 
+   全局基础覆盖
+   ======================================== */
+
 body.ido-theme-dark {
-    background-color: #020617 !important;
+    background-color: #0f172a !important;
+    color: #f1f5f9 !important;
 }
 
+/* 容器 */
 body.ido-theme-dark #app-container {
-    background-color: #020617 !important;
+    background-color: #0f172a !important;
 }
 
-/* 主视图和左右侧边栏背景与边框 */
-body.ido-theme-dark main,
-body.ido-theme-dark #left-panel,
-body.ido-theme-dark #right-panel {
-    background-color: var(--ido-color-bg-primary) !important;
-    border-color: var(--ido-color-border) !important;
+/* 主区域 */
+body.ido-theme-dark main {
+    background-color: #0f172a !important;
 }
 
-/* 左侧 sidebar 插槽区域 */
-body.ido-theme-dark #sidebar-header,
+/* ======================================== 
+   左侧面板 (历史记录)
+   ======================================== */
+
+body.ido-theme-dark #left-panel {
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
+}
+
+body.ido-theme-dark #sidebar-header {
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
+}
+
+body.ido-theme-dark #history-list {
+    background-color: #0f172a !important;
+}
+
 body.ido-theme-dark #slot-sidebar-top,
-body.ido-theme-dark #history-list,
 body.ido-theme-dark #slot-sidebar-bottom {
-    background-color: var(--ido-color-bg-primary) !important;
-    border-color: var(--ido-color-border) !important;
+    background-color: #0f172a !important;
 }
 
-/* 聊天区域背景 */
-body.ido-theme-dark #chat-stream {
-    background-color: var(--ido-color-bg-primary) !important;
+/* ======================================== 
+   右侧面板
+   ======================================== */
+
+body.ido-theme-dark #right-panel {
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
 }
 
-/* 输入区域整体背景与边框 */
-body.ido-theme-dark #input-area {
-    background-color: var(--ido-color-bg-secondary) !important;
-    border-top-color: var(--ido-color-border) !important;
-}
-
-/* 文本输入容器 */
-body.ido-theme-dark #input-area > .relative {
-    background-color: var(--ido-color-bg-primary) !important;
-    border-color: var(--ido-color-border) !important;
-}
-
-/* 输入框文字颜色 */
-body.ido-theme-dark #input-area textarea {
-    color: var(--ido-color-text-primary) !important;
-}
-
-body.ido-theme-dark #input-area textarea::placeholder {
-    color: var(--ido-color-text-tertiary) !important;
-}
-
-/* 顶部 Header 在暗色模式下使用深色半透明背景 */
-body.ido-theme-dark .ido-header {
-    background-color: rgba(15, 23, 42, 0.9) !important;
-}
-
-/* 发送按钮在暗色模式下使用主色 */
-body.ido-theme-dark #btn-send {
-    background-color: var(--ido-color-primary) !important;
-}
-
-/* 右侧面板默认容器（网络日志等） */
 body.ido-theme-dark #right-panel-default {
-    background-color: var(--ido-color-bg-primary) !important;
+    background-color: #0f172a !important;
 }
 
-/* Bottom sheet 内容背景 */
-body.ido-theme-dark #bottom-sheet-content {
-    background-color: var(--ido-color-bg-primary) !important;
+/* ======================================== 
+   顶部 Header
+   ======================================== */
+
+body.ido-theme-dark .ido-header {
+    background-color: rgba(15, 23, 42, 0.95) !important;
+    border-color: #334155 !important;
 }
 
-/* Form elements */
-body.ido-theme-dark .ido-form-input,
-body.ido-theme-dark .ido-form-textarea,
-body.ido-theme-dark .ido-form-select,
-body.ido-theme-dark .ido-textarea,
-body.ido-theme-dark textarea,
+/* ======================================== 
+   聊天区域
+   ======================================== */
+
+body.ido-theme-dark #chat-stream {
+    background-color: #0f172a !important;
+}
+
+/* ======================================== 
+   输入区域 - 统一风格
+   ======================================== */
+
+/* 整个输入区域容器 */
+body.ido-theme-dark #input-area {
+    background-color: #0f172a !important;
+    border-top-color: #334155 !important;
+}
+
+/* 工具栏 */
+body.ido-theme-dark #slot-input-top {
+    background-color: transparent !important;
+}
+
+/* 输入框外层容器 */
+body.ido-theme-dark #input-area > .relative {
+    background-color: #1e293b !important;
+    border-color: #334155 !important;
+}
+
+/* 输入框聚焦时 */
+body.ido-theme-dark #input-area > .relative:focus-within {
+    border-color: #3b82f6 !important;
+    box-shadow: none !important;
+}
+
+/* 输入框本身 */
+body.ido-theme-dark #user-input {
+    background-color: transparent !important;
+    color: #f1f5f9 !important;
+}
+
+body.ido-theme-dark #user-input::placeholder {
+    color: #64748b !important;
+}
+
+/* 发送按钮 */
+body.ido-theme-dark #btn-send {
+    background-color: #3b82f6 !important;
+}
+
+body.ido-theme-dark #btn-send:hover {
+    background-color: #2563eb !important;
+}
+
+/* 输入区域操作按钮 */
+body.ido-theme-dark #slot-input-actions-left,
+body.ido-theme-dark #slot-input-actions-right {
+    color: #94a3b8 !important;
+}
+
+/* ======================================== 
+   表单元素
+   ======================================== */
+
 body.ido-theme-dark input[type="text"],
 body.ido-theme-dark input[type="password"],
 body.ido-theme-dark input[type="email"],
 body.ido-theme-dark input[type="number"],
 body.ido-theme-dark input[type="url"],
+body.ido-theme-dark textarea,
 body.ido-theme-dark select {
-    background-color: var(--ido-color-bg-secondary) !important;
-    border-color: var(--ido-color-border) !important;
-    color: var(--ido-color-text-primary) !important;
+    background-color: #1e293b !important;
+    border-color: #334155 !important;
+    color: #f1f5f9 !important;
 }
 
-body.ido-theme-dark .ido-form-input:focus,
-body.ido-theme-dark .ido-form-textarea:focus,
-body.ido-theme-dark .ido-form-select:focus,
-body.ido-theme-dark .ido-textarea:focus,
-body.ido-theme-dark textarea:focus,
 body.ido-theme-dark input:focus,
+body.ido-theme-dark textarea:focus,
 body.ido-theme-dark select:focus {
-    border-color: var(--ido-color-primary) !important;
-    box-shadow: 0 0 0 3px var(--ido-color-primary-tint) !important;
+    border-color: #3b82f6 !important;
+    outline: none !important;
+    box-shadow: none !important;
 }
 
-body.ido-theme-dark textarea::placeholder,
-body.ido-theme-dark input::placeholder {
-    color: var(--ido-color-text-tertiary) !important;
+body.ido-theme-dark input::placeholder,
+body.ido-theme-dark textarea::placeholder {
+    color: #64748b !important;
 }
 
 body.ido-theme-dark label {
-    color: var(--ido-color-text-primary) !important;
+    color: #f1f5f9 !important;
+}
+
+/* ======================================== 
+   滚动条
+   ======================================== */
+
+body.ido-theme-dark ::-webkit-scrollbar-thumb {
+    background: #475569 !important;
+}
+
+body.ido-theme-dark ::-webkit-scrollbar-thumb:hover {
+    background: #64748b !important;
+}
+
+body.ido-theme-dark ::-webkit-scrollbar-track {
+    background: transparent !important;
+}
+
+/* ======================================== 
+   JSON 语法高亮
+   ======================================== */
+
+body.ido-theme-dark .json-key { color: #f472b6 !important; }
+body.ido-theme-dark .json-string { color: #4ade80 !important; }
+body.ido-theme-dark .json-number { color: #60a5fa !important; }
+body.ido-theme-dark .json-boolean { color: #c084fc !important; }
+body.ido-theme-dark .json-null { color: #64748b !important; }
+
+/* ======================================== 
+   Bottom Sheet
+   ======================================== */
+
+body.ido-theme-dark #bottom-sheet-content {
+    background-color: #0f172a !important;
+}
+
+/* ======================================== 
+   快速导航
+   ======================================== */
+
+body.ido-theme-dark .ido-quick-nav {
+    background-color: #1e293b !important;
+    border-color: #334155 !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+
+body.ido-theme-dark .ido-quick-nav__btn {
+    color: #94a3b8 !important;
+    border-color: #334155 !important;
+}
+
+body.ido-theme-dark .ido-quick-nav__btn:hover {
+    background-color: #334155 !important;
+    color: #3b82f6 !important;
+}
+
+body.ido-theme-dark .ido-quick-nav__btn:not(:last-child) {
+    border-bottom-color: #334155 !important;
 }
 `;
 
