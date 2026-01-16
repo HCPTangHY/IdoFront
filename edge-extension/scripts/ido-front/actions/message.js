@@ -1050,6 +1050,11 @@
                         context.removeMessageStreamingIndicator(assistantMessage.id);
                     }
                     
+                    // 停止思维链计时器
+                    if (context && context.finalizeStreamingMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                        context.finalizeStreamingMessage();
+                    }
+                    
                     // 更新消息内容为停止提示
                     assistantMessage.content = fullContent;
                     store.persist();

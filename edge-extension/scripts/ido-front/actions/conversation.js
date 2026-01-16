@@ -87,11 +87,21 @@
 
         const previousConvId = store.state.activeConversationId;
         
+        // 如果点击的已经是当前对话，无需重新执行选择逻辑
+        if (previousConvId === id) {
+            closeSidebarIfMobile();
+            return;
+        }
+        
         // 保存当前对话的 DOM 缓存（切换前）
-        if (previousConvId && previousConvId !== id) {
-            const chatStream = document.getElementById('chat-stream');
-            if (chatStream && window.IdoFront.virtualList) {
-                window.IdoFront.virtualList.saveToCache(previousConvId, chatStream);
+        if (previousConvId) {
+            try {
+                const chatStream = document.getElementById('chat-stream');
+                if (chatStream && window.IdoFront.virtualList) {
+                    window.IdoFront.virtualList.saveToCache(previousConvId, chatStream);
+                }
+            } catch (e) {
+                console.warn('[Conversation] Failed to save DOM cache:', e);
             }
         }
 
@@ -102,12 +112,19 @@
             store.state.activePersonaId = target.personaId;
         }
         
-        // 使用静默持久化，避免触发不必要的事件广播
-        store.persistSilent();
+        // 【修复】切换对话是用户的明确操作，使用立即持久化防止关闭扩展窗口时状态丢失
+        // persistImmediately 不会广播 updated 事件，符合避免不必要渲染的初衷
+        store.persistImmediately();
         
-        // syncUI 会统一处理 loading 状态和发送按钮状态
-        syncUI({ useCache: true });
-        updateHeader(target);
+        try {
+            // syncUI 会统一处理 loading 状态和发送按钮状态
+            syncUI({ useCache: true });
+            updateHeader(target);
+        } catch (e) {
+            console.error('[Conversation] Error during UI synchronization after selection:', e);
+            // 尝试恢复 UI 的基本状态
+            renderConversationList();
+        }
 
         if (context && context.events) {
             context.events.emit('chat:conversation-selected', { conversationId: id });
@@ -180,26 +197,42 @@
             const chatStream = document.getElementById('chat-stream');
             if (!chatStream) return;
             
+            // ★ 检查是否有正在生成的消息在当前活跃路径上
+            // 如果有，需要强制刷新以确保显示最新内容（可能在切换期间被更新）
+            const typingMsgId = store.state.typingMessageId;
+            const typingConvId = store.state.typingConversationId;
+            const activePath = store.getActivePath(active.id);
+            const hasActiveGenerationInPath = typingMsgId && 
+                typingConvId === active.id && 
+                activePath.some(m => m.id === typingMsgId);
+            
             // ★ 性能优化：尝试从缓存恢复
-            if (options.useCache && window.IdoFront.virtualList) {
+            // 但如果有正在生成的消息，跳过缓存以确保显示最新内容
+            if (options.useCache && !hasActiveGenerationInPath && window.IdoFront.virtualList) {
                 const restored = window.IdoFront.virtualList.restoreFromCache(
                     active.id,
                     chatStream,
                     rebindMessageEvents
                 );
                 if (restored) {
-                    // 缓存恢复成功，只需更新状态相关的 UI
-                    updateHeader(active);
-                    updateTypingState(active.id);
-                    renderConversationList();
-                    return;
+                    // 缓存恢复成功后，检查是否有消息内容需要同步
+                    // （可能在切换期间请求完成了）
+                    const needsRefresh = syncMessageContentFromStore(chatStream, activePath);
+                    if (needsRefresh) {
+                        // 内容不一致，失效缓存并继续执行全量重渲染
+                        window.IdoFront.virtualList.invalidateCache(active.id);
+                    } else {
+                        // 缓存有效，直接使用
+                        updateHeader(active);
+                        updateTypingState(active.id);
+                        renderConversationList();
+                        return;
+                    }
                 }
             }
             
-            // 使用活跃路径而非全部消息，以支持分支功能
-            const activePath = store.getActivePath(active.id);
-            
             // 性能优化：一次性构建 childrenMap，避免 getSiblings 对每条消息重复遍历 O(N²) -> O(N)
+            // 注意：activePath 已在前面获取
             const childrenMap = buildChildrenMap(active.messages);
             
             // 增量更新模式：只删除并重建 focusMessageId 之后的消息
@@ -323,6 +356,41 @@
         if (!options.skipConversationListUpdate) {
             renderConversationList();
         }
+    }
+
+    /**
+     * 同步 DOM 中的消息内容与 Store 中的最新数据
+     * 用于缓存恢复后检查是否有消息在切换期间被更新
+     * @param {HTMLElement} chatStream - 聊天流容器
+     * @param {Array} activePath - 当前活跃路径
+     * @returns {boolean} 是否有需要更新的内容（返回 true 表示需要全量重渲染）
+     */
+    function syncMessageContentFromStore(chatStream, activePath) {
+        if (!chatStream || !activePath || activePath.length === 0) return false;
+        
+        for (const msg of activePath) {
+            const msgEl = chatStream.querySelector(`[data-message-id="${msg.id}"]`);
+            if (!msgEl) continue;
+            
+            const contentEl = msgEl.querySelector('.message-content');
+            if (!contentEl) continue;
+            
+            // 获取 DOM 中显示的内容（纯文本）
+            const displayedContent = contentEl.textContent || '';
+            const storeContent = msg.content || '';
+            
+            // 如果内容不一致，需要重新渲染
+            // 使用长度差异作为快速检测（避免每次都做完整比较）
+            const needsUpdate = Math.abs(displayedContent.length - storeContent.length) > 10 ||
+                (storeContent.length > 0 && displayedContent.length === 0);
+            
+            if (needsUpdate) {
+                // 发现内容不一致，返回 true 表示需要全量重渲染
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     /**

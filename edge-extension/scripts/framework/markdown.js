@@ -72,8 +72,17 @@ const FrameworkMarkdown = (function() {
     function preprocessLatex(text) {
         if (typeof katex === 'undefined' || !text) return text;
 
+        const codeBlocks = [];
+        // 提取代码块并用占位符替换
+        // The regex matches both fenced code blocks (```...```) and inline code (`...`)
+        let processedText = text.replace(/(`{3,})[\s\S]*?\1|`[^`]*`/g, (match) => {
+            const placeholder = `__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length}__`;
+            codeBlocks.push(match);
+            return placeholder;
+        });
+
         // 块级公式 $$...$$
-        text = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, formula) => {
+        processedText = processedText.replace(/\$\$([\s\S]+?)\$\$/g, (match, formula) => {
             if (!isValidLatexContent(formula)) return match;
             try {
                 return '<div class="katex-display">' + katex.renderToString(formula.trim(), {
@@ -92,7 +101,7 @@ const FrameworkMarkdown = (function() {
         // 1. 前面不能是字母、数字或反斜杠（防止匹配 $10 和 $20）
         // 2. $ 后面不能紧跟空格，且结束的 $ 前面不能是空格（标准 Markdown 数学语法）
         // 3. 后面不能是字母或数字
-        text = text.replace(/(?<![\\a-zA-Z0-9])\$([^\s\$](?:[^\$]*[^\s\$])?)\$(?![a-zA-Z0-9])/g, (match, formula) => {
+        processedText = processedText.replace(/(?<![\\a-zA-Z0-9])\$([^\s\$](?:[^\$]*[^\s\$])?)\$(?![a-zA-Z0-9])/g, (match, formula) => {
             if (!isValidLatexContent(formula)) return match;
             try {
                 return katex.renderToString(formula.trim(), {
@@ -106,7 +115,14 @@ const FrameworkMarkdown = (function() {
             }
         });
 
-        return text;
+        // 恢复代码块
+        if (codeBlocks.length > 0) {
+            processedText = processedText.replace(/__CODE_BLOCK_PLACEHOLDER_(\d+)__/g, (match, index) => {
+                return codeBlocks[parseInt(index, 10)] || match;
+            });
+        }
+
+        return processedText;
     }
 
     /**
