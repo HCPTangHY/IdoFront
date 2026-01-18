@@ -993,8 +993,21 @@
 
                 // ⚠️ 不要把 base64 dataUrl 直接写进 Store（会在持久化时导致卡顿）
                 // 这里只暂存，等流式结束后统一外置化。
+                // 考虑到流式过程中附件可能是增量返回（如 Gemini 生图可能分多次返回），
+                // 我们需要合并并去重附件列表。
                 if (currentAttachments && currentAttachments.length > 0) {
-                    finalAssistantAttachments = currentAttachments;
+                    if (!finalAssistantAttachments) {
+                        finalAssistantAttachments = [...currentAttachments];
+                    } else {
+                        currentAttachments.forEach(newAtt => {
+                            const exists = finalAssistantAttachments.find(
+                                existing => existing.name === newAtt.name && existing.size === newAtt.size
+                            );
+                            if (!exists) {
+                                finalAssistantAttachments.push(newAtt);
+                            }
+                        });
+                    }
                 }
 
                 // metadata 也可能带 attachments，这里写入 Store 前先剥离
@@ -1017,8 +1030,8 @@
                         streaming: true,  // 标记为流式阶段
                         reasoningEnded: isReasoningSegmentEnded
                     };
-                    if (currentAttachments && currentAttachments.length > 0) {
-                        updatePayload.attachments = currentAttachments;
+                    if (finalAssistantAttachments && finalAssistantAttachments.length > 0) {
+                        updatePayload.attachments = finalAssistantAttachments; // 传递全量累计附件
                     }
                     context.updateLastMessage(updatePayload);
                 }
@@ -1050,9 +1063,27 @@
                         context.removeMessageStreamingIndicator(assistantMessage.id);
                     }
                     
-                    // 停止思维链计时器
-                    if (context && context.finalizeStreamingMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
-                        context.finalizeStreamingMessage();
+                    // 停止思维链计时器（直接通过 DOM 操作，避免状态不一致问题）
+                    try {
+                        const chatStream = document.getElementById('chat-stream');
+                        if (chatStream) {
+                            const msgCard = chatStream.querySelector(`[data-message-id="${assistantMessage.id}"]`);
+                            if (msgCard) {
+                                const reasoningBlock = msgCard.querySelector('.reasoning-block');
+                                if (reasoningBlock && reasoningBlock.dataset.timerId) {
+                                    const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
+                                    if (!Number.isNaN(timerId)) {
+                                        clearInterval(timerId);
+                                    }
+                                    delete reasoningBlock.dataset.timerId;
+                                    delete reasoningBlock.dataset.startTime;
+                                    delete reasoningBlock.dataset.accumulatedTime;
+                                    delete reasoningBlock.dataset.segmentStart;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('清理思维链计时器失败:', e);
                     }
                     
                     // 更新消息内容为停止提示
