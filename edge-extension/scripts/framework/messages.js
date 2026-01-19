@@ -986,11 +986,27 @@ const FrameworkMessages = (function() {
             contentSpan.textContent = text;
         }
 
-        // 处理附件
+        // 处理附件：如果是流式全量累加模式，需要重新渲染附件容器
         const currentAttachments = lastMsg.attachments;
         if (currentAttachments && currentAttachments.length > 0) {
-            const existingWrapper = container.querySelector('.ido-message__attachment-wrapper');
-            if (!existingWrapper) {
+            // 查找现有的附件容器
+            const existingAttachmentsContainer = container.querySelector('.ido-message__attachments');
+            
+            // 如果已存在附件，且附件数量改变了，需要重新渲染整个附件区域
+            if (existingAttachmentsContainer) {
+                const currentImgs = existingAttachmentsContainer.querySelectorAll('img');
+                const imageAttachments = currentAttachments.filter(a => a && a.type && a.type.startsWith('image/'));
+                
+                // 只有当图片数量变化时才重新渲染，避免闪烁
+                if (currentImgs.length !== imageAttachments.length) {
+                    existingAttachmentsContainer.remove();
+                    const attachmentsContainer = createAttachmentsContainer(currentAttachments);
+                    if (attachmentsContainer) {
+                        container.appendChild(attachmentsContainer);
+                    }
+                }
+            } else {
+                // 首次渲染附件
                 const attachmentsContainer = createAttachmentsContainer(currentAttachments);
                 if (attachmentsContainer) {
                     container.appendChild(attachmentsContainer);

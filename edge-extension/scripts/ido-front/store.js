@@ -113,9 +113,55 @@
                 this._registerBeforeUnload();
 
                 this._initialized = true;
+
+                // 延迟执行附件垃圾回收（清理未被引用的图片）
+                // 使用 setTimeout 避免阻塞初始化流程
+                setTimeout(() => {
+                    this._runAttachmentsGC();
+                }, 10000); // 启动后 10 秒执行
             })();
 
             return this._initPromise;
+        },
+
+        /**
+         * 收集当前所有活跃的附件引用并执行垃圾回收
+         * 清理未被任何消息引用的孤儿附件，释放存储空间
+         */
+        async _runAttachmentsGC() {
+            const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+            if (!attachmentsApi || typeof attachmentsApi.gc !== 'function') {
+                return;
+            }
+
+            try {
+                // 1. 遍历所有对话和消息，收集活跃的附件 ID
+                const activeIds = new Set();
+
+                for (const conv of this.state.conversations) {
+                    if (!conv || !conv.messages) continue;
+                    for (const msg of conv.messages) {
+                        if (!msg) continue;
+                        // 收集消息中的附件引用
+                        if (msg.attachments && Array.isArray(msg.attachments)) {
+                            for (const att of msg.attachments) {
+                                if (att && att.id) {
+                                    activeIds.add(att.id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. 执行垃圾回收
+                const result = await attachmentsApi.gc(activeIds);
+                
+                if (result.deleted > 0) {
+                    console.log(`[store] Attachments GC: cleaned ${result.deleted} orphaned file(s).`);
+                }
+            } catch (e) {
+                console.warn('[store] Attachments GC failed:', e);
+            }
         },
 
         /**

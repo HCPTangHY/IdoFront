@@ -259,6 +259,94 @@
         }
     }
 
+    /**
+     * 删除指定 ID 的附件
+     * @param {string} id - 附件 ID
+     */
+    async function deleteAttachment(id) {
+        const storage = getStorage();
+        if (!storage || typeof storage.deletePluginData !== 'function') {
+            return;
+        }
+        try {
+            await storage.deletePluginData(PLUGIN_ID, id);
+            // 同时清理 objectURL 缓存
+            const cachedUrl = objectUrlCache.get(id);
+            if (cachedUrl) {
+                try {
+                    URL.revokeObjectURL(cachedUrl);
+                } catch (e) {
+                    // ignore
+                }
+                objectUrlCache.delete(id);
+            }
+        } catch (e) {
+            console.warn('[attachments] deleteAttachment failed:', e);
+        }
+    }
+
+    /**
+     * 获取存储中所有附件的 ID 列表
+     * @returns {Promise<string[]>}
+     */
+    async function getAllStoredIds() {
+        const storage = getStorage();
+        if (!storage || typeof storage.getPluginDataKeys !== 'function') {
+            return [];
+        }
+        try {
+            return await storage.getPluginDataKeys(PLUGIN_ID);
+        } catch (e) {
+            console.warn('[attachments] getAllStoredIds failed:', e);
+            return [];
+        }
+    }
+
+    /**
+     * 垃圾回收：清理未被引用的附件
+     * @param {Set<string>} validIds - 当前 Store 中所有被引用的附件 ID 集合
+     * @returns {Promise<{deleted: number, errors: number}>} 清理结果统计
+     */
+    async function gc(validIds) {
+        if (!(validIds instanceof Set)) {
+            console.warn('[attachments] gc: validIds must be a Set');
+            return { deleted: 0, errors: 0 };
+        }
+
+        try {
+            // 1. 获取存储中所有的附件 ID
+            const allStoredIds = await getAllStoredIds();
+            
+            if (allStoredIds.length === 0) {
+                return { deleted: 0, errors: 0 };
+            }
+
+            let deleted = 0;
+            let errors = 0;
+
+            // 2. 找出那些不在 validIds 中的孤儿 ID 并删除
+            for (const id of allStoredIds) {
+                if (!validIds.has(id)) {
+                    try {
+                        await deleteAttachment(id);
+                        deleted++;
+                    } catch (e) {
+                        errors++;
+                    }
+                }
+            }
+
+            if (deleted > 0) {
+                console.log(`[attachments] GC complete: Removed ${deleted} orphaned attachment(s).`);
+            }
+
+            return { deleted, errors };
+        } catch (e) {
+            console.warn('[attachments] GC failed:', e);
+            return { deleted: 0, errors: 1 };
+        }
+    }
+
     function sanitizeRef(ref) {
         if (!ref || typeof ref !== 'object') return null;
         if (!ref.id) return null;
@@ -418,6 +506,9 @@
         getBlob,
         getDataUrl,
         getObjectUrl,
+        deleteAttachment,
+        getAllStoredIds,
+        gc,
         normalizeAttachmentForState,
         normalizeAttachmentsForState,
         resolveAttachmentsForPayload

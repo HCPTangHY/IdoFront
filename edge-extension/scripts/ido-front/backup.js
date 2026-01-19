@@ -1,0 +1,555 @@
+/**
+ * Backup & Export Module
+ * 数据备份、导出、导入功能
+ *
+ * 功能：
+ * 1. exportAll() - 完整备份（JSON 格式，含所有对话、设置、附件）
+ * 2. importAll(file) - 从备份文件恢复
+ * 3. exportConversationAsMarkdown(convId) - 单对话导出为 Markdown
+ * 4. exportConversationAsJSON(convId) - 单对话导出为 JSON
+ */
+(function () {
+    window.IdoFront = window.IdoFront || {};
+
+    const BACKUP_VERSION = 1;
+    const BACKUP_MAGIC = 'IdoFront_Backup';
+
+    /**
+     * 获取当前时间的格式化字符串（用于文件名）
+     */
+    function getTimestamp() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+    }
+
+    /**
+     * 触发文件下载
+     */
+    function downloadFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    /**
+     * 读取文件内容
+     */
+    function readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsText(file);
+        });
+    }
+
+    /**
+     * 收集所有活跃的附件 ID
+     */
+    function collectAllAttachmentIds(state) {
+        const ids = new Set();
+        if (!state || !state.conversations) return ids;
+
+        for (const conv of state.conversations) {
+            if (!conv || !conv.messages) continue;
+            for (const msg of conv.messages) {
+                if (!msg || !msg.attachments) continue;
+                for (const att of msg.attachments) {
+                    if (att && att.id) {
+                        ids.add(att.id);
+                    }
+                }
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 导出所有数据（完整备份）
+     * 包含：对话、面具、渠道设置、插件状态、所有附件
+     *
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.includeAttachments=true] - 是否包含附件（图片等）
+     * @param {Function} [options.onProgress] - 进度回调 (current, total, message)
+     * @returns {Promise<void>}
+     */
+    async function exportAll(options) {
+        const opts = options || {};
+        const includeAttachments = opts.includeAttachments !== false;
+        const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+
+        const store = window.IdoFront.store;
+        const attachmentsApi = window.IdoFront.attachments;
+
+        if (!store || !store.state) {
+            throw new Error('Store 未初始化');
+        }
+
+        // 1. 构建基础备份数据
+        const backup = {
+            _magic: BACKUP_MAGIC,
+            _version: BACKUP_VERSION,
+            _exportedAt: new Date().toISOString(),
+            _stats: {
+                conversationCount: store.state.conversations?.length || 0,
+                personaCount: store.state.personas?.length || 0,
+                channelCount: store.state.channels?.length || 0
+            },
+            // 核心数据
+            personas: store.state.personas || [],
+            activePersonaId: store.state.activePersonaId,
+            conversations: store.state.conversations || [],
+            activeConversationId: store.state.activeConversationId,
+            channels: store.state.channels || [],
+            pluginStates: store.state.pluginStates || {},
+            settings: store.state.settings || {},
+            // 附件数据（稍后填充）
+            attachments: {}
+        };
+
+        // 2. 导出附件
+        if (includeAttachments && attachmentsApi) {
+            const attachmentIds = collectAllAttachmentIds(store.state);
+            const total = attachmentIds.size;
+            let current = 0;
+
+            if (onProgress && total > 0) {
+                onProgress(0, total, '正在导出附件...');
+            }
+
+            for (const id of attachmentIds) {
+                try {
+                    const dataUrl = await attachmentsApi.getDataUrl(id);
+                    if (dataUrl) {
+                        backup.attachments[id] = dataUrl;
+                    }
+                } catch (e) {
+                    console.warn(`[backup] Failed to export attachment ${id}:`, e);
+                }
+                current++;
+                if (onProgress) {
+                    onProgress(current, total, `正在导出附件 (${current}/${total})...`);
+                }
+            }
+
+            backup._stats.attachmentCount = Object.keys(backup.attachments).length;
+        }
+
+        // 3. 序列化并下载
+        const json = JSON.stringify(backup, null, 2);
+        const filename = `IdoFront_Backup_${getTimestamp()}.json`;
+        downloadFile(json, filename, 'application/json');
+
+        console.log(`[backup] Exported: ${backup._stats.conversationCount} conversations, ${backup._stats.attachmentCount || 0} attachments`);
+
+        return backup._stats;
+    }
+
+    /**
+     * 从备份文件导入数据
+     *
+     * @param {File} file - 备份文件
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.merge=false] - 是否合并（true=合并，false=覆盖）
+     * @param {Function} [options.onProgress] - 进度回调
+     * @returns {Promise<Object>} 导入统计
+     */
+    async function importAll(file, options) {
+        const opts = options || {};
+        const merge = opts.merge === true;
+        const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+
+        const store = window.IdoFront.store;
+        const attachmentsApi = window.IdoFront.attachments;
+        const storage = window.IdoFront.storage;
+
+        if (!store || !store.state) {
+            throw new Error('Store 未初始化');
+        }
+
+        // 1. 读取并解析文件
+        if (onProgress) onProgress(0, 100, '正在读取文件...');
+
+        const content = await readFileAsText(file);
+        let backup;
+        try {
+            backup = JSON.parse(content);
+        } catch (e) {
+            throw new Error('无效的备份文件格式');
+        }
+
+        // 2. 验证备份文件
+        if (backup._magic !== BACKUP_MAGIC) {
+            throw new Error('不是有效的 IdoFront 备份文件');
+        }
+
+        if (backup._version > BACKUP_VERSION) {
+            throw new Error(`备份文件版本过高 (v${backup._version})，请升级应用后重试`);
+        }
+
+        if (onProgress) onProgress(10, 100, '正在验证数据...');
+
+        // 3. 导入附件
+        let attachmentImported = 0;
+        if (backup.attachments && attachmentsApi && storage) {
+            const attachmentEntries = Object.entries(backup.attachments);
+            const total = attachmentEntries.length;
+
+            for (let i = 0; i < attachmentEntries.length; i++) {
+                const [id, dataUrl] = attachmentEntries[i];
+                try {
+                    // 直接存储 dataUrl（attachments 模块会自动转换为 Blob）
+                    await storage.setPluginData(attachmentsApi.PLUGIN_ID, id, dataUrl);
+                    attachmentImported++;
+                } catch (e) {
+                    console.warn(`[backup] Failed to import attachment ${id}:`, e);
+                }
+
+                if (onProgress) {
+                    const progress = 10 + Math.floor((i / total) * 60);
+                    onProgress(progress, 100, `正在导入附件 (${i + 1}/${total})...`);
+                }
+            }
+        }
+
+        if (onProgress) onProgress(70, 100, '正在恢复数据...');
+
+        // 4. 恢复 state 数据
+        if (merge) {
+            // 合并模式：追加对话和面具，不覆盖现有数据
+            const existingConvIds = new Set(store.state.conversations.map(c => c.id));
+            const existingPersonaIds = new Set(store.state.personas.map(p => p.id));
+
+            // 追加不存在的对话
+            for (const conv of (backup.conversations || [])) {
+                if (!existingConvIds.has(conv.id)) {
+                    store.state.conversations.push(conv);
+                }
+            }
+
+            // 追加不存在的面具
+            for (const persona of (backup.personas || [])) {
+                if (!existingPersonaIds.has(persona.id)) {
+                    store.state.personas.push(persona);
+                }
+            }
+        } else {
+            // 覆盖模式：完全替换
+            if (backup.personas) store.state.personas = backup.personas;
+            if (backup.activePersonaId) store.state.activePersonaId = backup.activePersonaId;
+            if (backup.conversations) store.state.conversations = backup.conversations;
+            if (backup.activeConversationId) store.state.activeConversationId = backup.activeConversationId;
+            if (backup.channels) store.state.channels = backup.channels;
+            if (backup.pluginStates) store.state.pluginStates = backup.pluginStates;
+            if (backup.settings) store.state.settings = { ...store.state.settings, ...backup.settings };
+        }
+
+        if (onProgress) onProgress(90, 100, '正在保存...');
+
+        // 5. 持久化并刷新 UI
+        store.persistImmediately();
+
+        if (onProgress) onProgress(100, 100, '导入完成');
+
+        const stats = {
+            conversationsImported: backup.conversations?.length || 0,
+            personasImported: backup.personas?.length || 0,
+            attachmentsImported: attachmentImported,
+            mode: merge ? 'merge' : 'overwrite'
+        };
+
+        console.log('[backup] Import complete:', stats);
+
+        return stats;
+    }
+
+    /**
+     * 导出单个对话为 Markdown
+     * 只导出当前活跃路径（忽略其他分支）
+     *
+     * @param {string} [convId] - 对话 ID，不传则使用当前活跃对话
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.includeMetadata=true] - 是否包含元信息（时间、模型等）
+     * @param {boolean} [options.includeImages=false] - 是否包含图片（base64 内嵌）
+     * @returns {Promise<void>}
+     */
+    async function exportConversationAsMarkdown(convId, options) {
+        const opts = options || {};
+        const includeMetadata = opts.includeMetadata !== false;
+        const includeImages = opts.includeImages === true;
+
+        const store = window.IdoFront.store;
+        const attachmentsApi = window.IdoFront.attachments;
+
+        if (!store || !store.state) {
+            throw new Error('Store 未初始化');
+        }
+
+        const targetId = convId || store.state.activeConversationId;
+        const conv = store.state.conversations.find(c => c.id === targetId);
+        if (!conv) {
+            throw new Error('对话不存在');
+        }
+
+        // 获取活跃路径
+        const activePath = store.getActivePath(targetId);
+        if (activePath.length === 0) {
+            throw new Error('对话为空');
+        }
+
+        // 构建 Markdown
+        const lines = [];
+
+        // 标题
+        lines.push(`# ${conv.title || '对话'}`);
+        lines.push('');
+
+        // 元信息
+        if (includeMetadata) {
+            lines.push(`> 导出时间: ${new Date().toLocaleString()}`);
+            lines.push(`> 消息数量: ${activePath.length}`);
+            if (conv.selectedModel) {
+                lines.push(`> 模型: ${conv.selectedModel}`);
+            }
+            lines.push('');
+            lines.push('---');
+            lines.push('');
+        }
+
+        // 消息内容
+        for (const msg of activePath) {
+            const role = msg.role === 'user' ? '👤 用户' : '🤖 助手';
+            const time = msg.createdAt ? new Date(msg.createdAt).toLocaleString() : '';
+
+            lines.push(`## ${role}`);
+            if (includeMetadata && time) {
+                lines.push(`*${time}*`);
+            }
+            lines.push('');
+
+            // 处理附件
+            if (msg.attachments && msg.attachments.length > 0) {
+                for (const att of msg.attachments) {
+                    if (att.type && att.type.startsWith('image/')) {
+                        if (includeImages && attachmentsApi) {
+                            try {
+                                const dataUrl = await attachmentsApi.getDataUrl(att.id);
+                                if (dataUrl) {
+                                    lines.push(`![${att.name || 'image'}](${dataUrl})`);
+                                    lines.push('');
+                                }
+                            } catch (e) {
+                                lines.push(`*[图片: ${att.name || att.id}]*`);
+                                lines.push('');
+                            }
+                        } else {
+                            lines.push(`*[图片: ${att.name || att.id}]*`);
+                            lines.push('');
+                        }
+                    } else {
+                        lines.push(`*[附件: ${att.name || att.id}]*`);
+                        lines.push('');
+                    }
+                }
+            }
+
+            // 消息正文
+            lines.push(msg.content || '');
+            lines.push('');
+            lines.push('---');
+            lines.push('');
+        }
+
+        // 下载
+        const markdown = lines.join('\n');
+        const safeTitle = (conv.title || 'conversation').replace(/[<>:"/\\|?*]/g, '_').slice(0, 50);
+        const filename = `${safeTitle}_${getTimestamp()}.md`;
+        downloadFile(markdown, filename, 'text/markdown; charset=utf-8');
+
+        console.log(`[backup] Exported conversation as Markdown: ${activePath.length} messages`);
+    }
+
+    /**
+     * 导出单个对话为 JSON（含附件）
+     *
+     * @param {string} [convId] - 对话 ID
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.includeAttachments=true] - 是否包含附件
+     * @param {boolean} [options.activePathOnly=false] - 是否只导出活跃路径
+     * @returns {Promise<void>}
+     */
+    async function exportConversationAsJSON(convId, options) {
+        const opts = options || {};
+        const includeAttachments = opts.includeAttachments !== false;
+        const activePathOnly = opts.activePathOnly === true;
+
+        const store = window.IdoFront.store;
+        const attachmentsApi = window.IdoFront.attachments;
+
+        if (!store || !store.state) {
+            throw new Error('Store 未初始化');
+        }
+
+        const targetId = convId || store.state.activeConversationId;
+        const conv = store.state.conversations.find(c => c.id === targetId);
+        if (!conv) {
+            throw new Error('对话不存在');
+        }
+
+        // 决定导出哪些消息
+        let messages;
+        if (activePathOnly) {
+            messages = store.getActivePath(targetId);
+        } else {
+            messages = conv.messages || [];
+        }
+
+        // 构建导出数据
+        const exportData = {
+            _magic: BACKUP_MAGIC,
+            _version: BACKUP_VERSION,
+            _type: 'conversation',
+            _exportedAt: new Date().toISOString(),
+            conversation: {
+                ...conv,
+                messages: messages
+            },
+            attachments: {}
+        };
+
+        // 导出附件
+        if (includeAttachments && attachmentsApi) {
+            for (const msg of messages) {
+                if (!msg.attachments) continue;
+                for (const att of msg.attachments) {
+                    if (att.id && !exportData.attachments[att.id]) {
+                        try {
+                            const dataUrl = await attachmentsApi.getDataUrl(att.id);
+                            if (dataUrl) {
+                                exportData.attachments[att.id] = dataUrl;
+                            }
+                        } catch (e) {
+                            console.warn(`[backup] Failed to export attachment ${att.id}:`, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 下载
+        const json = JSON.stringify(exportData, null, 2);
+        const safeTitle = (conv.title || 'conversation').replace(/[<>:"/\\|?*]/g, '_').slice(0, 50);
+        const filename = `${safeTitle}_${getTimestamp()}.json`;
+        downloadFile(json, filename, 'application/json');
+
+        console.log(`[backup] Exported conversation as JSON: ${messages.length} messages, ${Object.keys(exportData.attachments).length} attachments`);
+    }
+
+    /**
+     * 导入单个对话
+     *
+     * @param {File} file - JSON 文件
+     * @returns {Promise<Object>} 导入的对话对象
+     */
+    async function importConversation(file) {
+        const store = window.IdoFront.store;
+        const attachmentsApi = window.IdoFront.attachments;
+        const storage = window.IdoFront.storage;
+
+        if (!store || !store.state) {
+            throw new Error('Store 未初始化');
+        }
+
+        const content = await readFileAsText(file);
+        let data;
+        try {
+            data = JSON.parse(content);
+        } catch (e) {
+            throw new Error('无效的 JSON 文件');
+        }
+
+        if (data._magic !== BACKUP_MAGIC || data._type !== 'conversation') {
+            throw new Error('不是有效的对话导出文件');
+        }
+
+        const conv = data.conversation;
+        if (!conv || !conv.id) {
+            throw new Error('对话数据无效');
+        }
+
+        // 导入附件
+        if (data.attachments && storage && attachmentsApi) {
+            for (const [id, dataUrl] of Object.entries(data.attachments)) {
+                try {
+                    await storage.setPluginData(attachmentsApi.PLUGIN_ID, id, dataUrl);
+                } catch (e) {
+                    console.warn(`[backup] Failed to import attachment ${id}:`, e);
+                }
+            }
+        }
+
+        // 检查是否已存在同 ID 的对话
+        const existingIndex = store.state.conversations.findIndex(c => c.id === conv.id);
+        if (existingIndex !== -1) {
+            // 生成新 ID 避免冲突
+            const utils = window.IdoFront.utils;
+            const oldId = conv.id;
+            conv.id = utils ? utils.createId('conv') : `conv-${Date.now()}`;
+
+            // 更新消息中的引用（如果有 activeBranchMap）
+            if (conv.activeBranchMap && conv.activeBranchMap[oldId]) {
+                conv.activeBranchMap[conv.id] = conv.activeBranchMap[oldId];
+                delete conv.activeBranchMap[oldId];
+            }
+        }
+
+        // 绑定到当前面具
+        conv.personaId = store.state.activePersonaId;
+
+        // 添加到对话列表
+        store.state.conversations.unshift(conv);
+        store.state.activeConversationId = conv.id;
+        store.persistImmediately();
+
+        console.log(`[backup] Imported conversation: ${conv.title}`);
+
+        return conv;
+    }
+
+    /**
+     * 获取备份信息（不下载，只返回统计）
+     */
+    function getBackupStats() {
+        const store = window.IdoFront.store;
+        if (!store || !store.state) return null;
+
+        const attachmentIds = collectAllAttachmentIds(store.state);
+
+        return {
+            conversationCount: store.state.conversations?.length || 0,
+            personaCount: store.state.personas?.length || 0,
+            channelCount: store.state.channels?.length || 0,
+            attachmentCount: attachmentIds.size,
+            messageCount: store.state.conversations?.reduce((sum, c) => sum + (c.messages?.length || 0), 0) || 0
+        };
+    }
+
+    // 暴露 API
+    window.IdoFront.backup = {
+        exportAll,
+        importAll,
+        exportConversationAsMarkdown,
+        exportConversationAsJSON,
+        importConversation,
+        getBackupStats,
+        BACKUP_VERSION
+    };
+
+})();

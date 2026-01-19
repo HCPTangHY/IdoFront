@@ -24,6 +24,7 @@
         'idb-storage.js',  // IndexedDB 存储层（store.js 依赖）
         'attachments.js',  // 附件外置化（Blob 存储 / 引用）
         'store.js',
+        'backup.js',       // 数据备份/导出/导入
         'virtual-list.js', // 虚拟列表/DOM缓存管理（性能优化）
         'runtime.js',      // Runtime: 统一对外暴露 store 等核心能力
         'network-logger.js',
@@ -80,6 +81,7 @@
         'settings/persona-settings.js',
         'settings/plugin-settings.js',
         'settings/ai-service-settings.js',
+        'settings/data-settings.js',    // 数据管理（备份/导出/导入）
         'settings/settings-manager.js',
         
         // 5. 主入口（依赖所有模块）

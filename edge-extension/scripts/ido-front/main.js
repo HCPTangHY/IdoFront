@@ -28,6 +28,7 @@
         const pluginLoader = window.IdoFront.pluginLoader;
         const titleGenerator = window.IdoFront.titleGenerator;
         const aiServiceSettings = window.IdoFront.aiServiceSettings;
+        const dataSettings = window.IdoFront.dataSettings;
 
         if (conversationActions && conversationActions.init) {
             conversationActions.init(context, store);
@@ -60,6 +61,11 @@
         
         if (settingsManager && settingsManager.init) {
             settingsManager.init(context, store);
+        }
+        
+        // 数据管理设置（在 settingsManager 之后初始化以注册标签页）
+        if (dataSettings && dataSettings.init) {
+            dataSettings.init(context, store);
         }
         
         // AI 服务设置需要在 settingsManager 之后初始化
