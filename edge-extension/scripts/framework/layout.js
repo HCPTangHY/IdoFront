@@ -392,11 +392,17 @@ const FrameworkLayout = (function() {
         ui.bottomSheetBackdrop.style.opacity = '';
         ui.bottomSheet.style.transform = '';
 
+        // 先显示元素（初始状态）
         ui.bottomSheetBackdrop.classList.remove('hidden');
         ui.bottomSheet.classList.remove('hidden');
 
-        ui.bottomSheetBackdrop.classList.add('ido-bottom-sheet-backdrop--visible');
-        ui.bottomSheet.classList.add('ido-bottom-sheet--visible');
+        // 等待浏览器渲染初始状态后再添加动画类
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                ui.bottomSheetBackdrop.classList.add('ido-bottom-sheet-backdrop--visible');
+                ui.bottomSheet.classList.add('ido-bottom-sheet--visible');
+            });
+        });
     }
 
     function hideBottomSheet() {

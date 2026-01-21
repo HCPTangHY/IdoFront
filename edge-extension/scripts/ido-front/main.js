@@ -18,6 +18,12 @@
         // 1. 初始化 Store（异步）
         await store.init();
         
+        // 1.5 初始化工具注册中心
+        const toolRegistry = window.IdoFront.toolRegistry;
+        if (toolRegistry && toolRegistry.init) {
+            toolRegistry.init();
+        }
+        
         // 2. 初始化各功能模块
         const conversationActions = window.IdoFront.conversationActions;
         const messageActions = window.IdoFront.messageActions;
@@ -29,6 +35,7 @@
         const titleGenerator = window.IdoFront.titleGenerator;
         const aiServiceSettings = window.IdoFront.aiServiceSettings;
         const dataSettings = window.IdoFront.dataSettings;
+        const mcpSettings = window.IdoFront.mcpSettings;
 
         if (conversationActions && conversationActions.init) {
             conversationActions.init(context, store);
@@ -71,6 +78,11 @@
         // AI 服务设置需要在 settingsManager 之后初始化
         if (aiServiceSettings && aiServiceSettings.init) {
             aiServiceSettings.init(store, context);
+        }
+        
+        // MCP 服务设置
+        if (mcpSettings && mcpSettings.init) {
+            mcpSettings.init(context, store);
         }
 
         // 3. 同步初始 UI

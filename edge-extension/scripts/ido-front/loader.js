@@ -28,6 +28,10 @@
         'virtual-list.js', // 虚拟列表/DOM缓存管理（性能优化）
         'runtime.js',      // Runtime: 统一对外暴露 store 等核心能力
         'network-logger.js',
+        'tools/tool-registry.js',      // 工具注册中心（MCP/原生工具）
+        'tools/tool-call-types.js',     // 工具调用数据结构
+        'tools/tool-call-renderer.js',  // 工具调用 UI 渲染
+        'tools/mcp-client.js',          // MCP 协议客户端
         'channels/channel-registry.js',
         
         // 2. 混合格式插件支持（声明式渲染 + Comlink 通信）
@@ -82,6 +86,7 @@
         'settings/plugin-settings.js',
         'settings/ai-service-settings.js',
         'settings/data-settings.js',    // 数据管理（备份/导出/导入）
+        'settings/mcp-settings.js',     // MCP 服务管理
         'settings/settings-manager.js',
         
         // 5. 主入口（依赖所有模块）

@@ -251,6 +251,7 @@ const FrameworkMessages = (function() {
         let stats = null;
         let branchInfo = null;
         let createdAt = null;
+        let toolCalls = null;  // 工具调用
 
         // 累计计时所需的额外字段
         let reasoningAccumulatedTime = null;
@@ -268,6 +269,7 @@ const FrameworkMessages = (function() {
             stats = textOrObj.stats || null;
             branchInfo = textOrObj.branchInfo || null;
             createdAt = textOrObj.createdAt || null;
+            toolCalls = textOrObj.toolCalls || null;  // 工具调用
             if (textOrObj.id) id = textOrObj.id;
         }
 
@@ -327,6 +329,17 @@ const FrameworkMessages = (function() {
         }
         contentDiv.appendChild(contentSpan);
         container.appendChild(contentDiv);
+
+        // 工具调用（在正文之后显示）
+        if (toolCalls && toolCalls.length > 0) {
+            const toolCallRenderer = window.IdoFront && window.IdoFront.toolCallRenderer;
+            if (toolCallRenderer) {
+                const toolCallsEl = toolCallRenderer.render(toolCalls);
+                if (toolCallsEl) {
+                    container.appendChild(toolCallsEl);
+                }
+            }
+        }
 
         // 附件预览
         if (attachments && attachments.length > 0) {
@@ -820,15 +833,193 @@ const FrameworkMessages = (function() {
         }
     }
 
+    // ========== 定向更新（按 messageId） ==========
+    const pendingUpdatesById = new Map();
+    const rafPendingById = new Set();
+
+    function findMessageIndexById(messageId) {
+        if (!messageId) return -1;
+        return state.messages.findIndex(m => m && m.id === messageId);
+    }
+
+    function getMessageCardById(messageId) {
+        if (!messageId) return null;
+        const ui = getUI();
+        return ui.chatStream.querySelector(`[data-message-id="${messageId}"]`);
+    }
+
+    function performUIUpdateOnTarget(message, card, update) {
+        if (!message || !card || !update) return;
+
+        const container = card.querySelector('.ido-message__container');
+        if (!container) return;
+
+        const { text, reasoning, toolCalls, streaming, reasoningEnded } = update;
+
+        let reasoningBlock = container.querySelector('.reasoning-block');
+        let toolCallsContainer = container.querySelector('.tool-calls-container');
+        let contentSpan = container.querySelector('.message-content');
+
+        if (!contentSpan) {
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'ido-message__content';
+            contentSpan = document.createElement('div');
+            contentSpan.className = 'message-content markdown-body';
+            contentDiv.appendChild(contentSpan);
+            container.appendChild(contentDiv);
+        }
+
+        // 处理思维链
+        if (reasoning) {
+            if (!reasoningBlock) {
+                reasoningBlock = document.createElement('div');
+                reasoningBlock.className = 'reasoning-block';
+
+                const toggle = document.createElement('div');
+                toggle.className = 'reasoning-toggle';
+                toggle.innerHTML = '<span class="material-symbols-outlined text-[16px]">psychology</span><span>思维链</span><span class="reasoning-timer">0.0s</span><span class="material-symbols-outlined text-[16px] ml-auto transition-transform duration-200">expand_more</span>';
+
+                const timerSpan = toggle.querySelector('.reasoning-timer');
+                const startTime = Date.now();
+                const timerId = setInterval(() => {
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    timerSpan.textContent = elapsed.toFixed(1) + 's';
+                }, 100);
+
+                reasoningBlock.dataset.timerId = timerId;
+                reasoningBlock.dataset.startTime = startTime;
+
+                toggle.onclick = (e) => {
+                    const content = e.currentTarget.nextElementSibling;
+                    const icon = e.currentTarget.querySelector('.material-symbols-outlined:last-child');
+                    content.classList.toggle('open');
+                    if (content.classList.contains('open')) {
+                        icon.style.transform = 'rotate(180deg)';
+                    } else {
+                        icon.style.transform = 'rotate(0deg)';
+                    }
+                };
+
+                const content = document.createElement('div');
+                content.className = 'reasoning-content markdown-body';
+
+                reasoningBlock.appendChild(toggle);
+                reasoningBlock.appendChild(content);
+
+                const contentDiv = contentSpan.parentElement;
+                container.insertBefore(reasoningBlock, contentDiv);
+            }
+
+            const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
+            if (reasoningContentDiv && markdown) {
+                markdown.renderSync(reasoningContentDiv, reasoning);
+                reasoningContentDiv.removeAttribute('data-needs-markdown');
+            }
+        }
+
+        // 思维链计时器控制逻辑（支持多段）
+        if (reasoningBlock) {
+            const hasTimer = !!reasoningBlock.dataset.timerId;
+
+            if (reasoningEnded && hasTimer) {
+                const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
+                if (!Number.isNaN(timerId)) {
+                    clearInterval(timerId);
+                }
+                delete reasoningBlock.dataset.timerId;
+                if (reasoningBlock.dataset.startTime) {
+                    const startTime = parseInt(reasoningBlock.dataset.startTime, 10);
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    reasoningBlock.dataset.accumulatedTime = elapsed;
+                }
+            } else if (!reasoningEnded && reasoning && !hasTimer) {
+                const prevAccumulated = parseFloat(reasoningBlock.dataset.accumulatedTime) || 0;
+                const toggle = reasoningBlock.querySelector('.reasoning-toggle');
+                const timerSpan = toggle && toggle.querySelector('.reasoning-timer');
+
+                if (timerSpan) {
+                    const startTime = Date.now();
+                    const timerId = setInterval(() => {
+                        const newElapsed = prevAccumulated + (Date.now() - startTime) / 1000;
+                        timerSpan.textContent = newElapsed.toFixed(1) + 's';
+                    }, 100);
+
+                    reasoningBlock.dataset.timerId = timerId;
+                    reasoningBlock.dataset.startTime = startTime;
+                }
+            }
+        }
+
+        // 更新正文
+        if (contentSpan && message.role !== 'user' && text && markdown) {
+            markdown.renderSync(contentSpan, text);
+            contentSpan.removeAttribute('data-needs-markdown');
+        } else if (contentSpan) {
+            contentSpan.textContent = text;
+        }
+
+        // 处理工具调用
+        if (toolCalls && toolCalls.length > 0) {
+            const toolCallRenderer = window.IdoFront && window.IdoFront.toolCallRenderer;
+            if (toolCallRenderer && !toolCallsContainer) {
+                toolCallsContainer = toolCallRenderer.render(toolCalls);
+                if (toolCallsContainer) {
+                    const contentDiv = contentSpan ? contentSpan.parentElement : null;
+                    if (contentDiv && contentDiv.nextSibling) {
+                        container.insertBefore(toolCallsContainer, contentDiv.nextSibling);
+                    } else {
+                        container.appendChild(toolCallsContainer);
+                    }
+                }
+            }
+        }
+
+        // 处理附件（沿用现有逻辑）
+        const currentAttachments = message.attachments;
+        if (currentAttachments && currentAttachments.length > 0) {
+            const existingAttachmentsContainer = container.querySelector('.ido-message__attachments');
+
+            if (existingAttachmentsContainer) {
+                const currentImgs = existingAttachmentsContainer.querySelectorAll('img');
+                const imageAttachments = currentAttachments.filter(a => a && a.type && a.type.startsWith('image/'));
+
+                if (currentImgs.length !== imageAttachments.length) {
+                    existingAttachmentsContainer.remove();
+                    const attachmentsContainer = createAttachmentsContainer(currentAttachments);
+                    if (attachmentsContainer) {
+                        container.appendChild(attachmentsContainer);
+                    }
+                }
+            } else {
+                const attachmentsContainer = createAttachmentsContainer(currentAttachments);
+                if (attachmentsContainer) {
+                    container.appendChild(attachmentsContainer);
+                }
+            }
+        }
+
+        // 滚动（仅流式时）
+        if (streaming) {
+            const ui = getUI();
+            const stream = ui.chatStream;
+            const isNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 100;
+            if (isNearBottom) {
+                stream.scrollTop = stream.scrollHeight;
+            }
+        }
+    }
+
     /**
-     * 更新最后一条消息
+     * 更新指定消息
      */
-    function updateLastMessage(textOrObj) {
-        if (state.messages.length === 0) return;
+    function updateMessageById(messageId, textOrObj) {
+        const idx = findMessageIndexById(messageId);
+        if (idx < 0) return;
 
         let text = textOrObj;
         let reasoning = null;
         let attachments;
+        let toolCalls = null;
         let streaming = false;
         let reasoningEnded = false;
 
@@ -838,20 +1029,72 @@ const FrameworkMessages = (function() {
             if (Object.prototype.hasOwnProperty.call(textOrObj, 'attachments')) {
                 attachments = textOrObj.attachments;
             }
+            if (Object.prototype.hasOwnProperty.call(textOrObj, 'toolCalls')) {
+                toolCalls = textOrObj.toolCalls;
+            }
             streaming = !!textOrObj.streaming;
             reasoningEnded = !!textOrObj.reasoningEnded;
         }
 
-        const lastMsg = state.messages[state.messages.length - 1];
-        lastMsg.text = text;
+        const msg = state.messages[idx];
+        msg.text = text;
         if (reasoning !== null) {
-            lastMsg.reasoning = reasoning;
+            msg.reasoning = reasoning;
         }
         if (typeof attachments !== 'undefined') {
-            lastMsg.attachments = attachments;
+            msg.attachments = attachments;
+        }
+        if (toolCalls !== null) {
+            msg.toolCalls = toolCalls;
         }
 
-        pendingUpdate = { text, reasoning, streaming, reasoningEnded };
+        pendingUpdatesById.set(messageId, { text, reasoning, toolCalls, streaming, reasoningEnded });
+
+        if (!rafPendingById.has(messageId)) {
+            rafPendingById.add(messageId);
+            requestAnimationFrame(() => {
+                const update = pendingUpdatesById.get(messageId);
+                pendingUpdatesById.delete(messageId);
+                rafPendingById.delete(messageId);
+                const card = getMessageCardById(messageId);
+                if (card && update) {
+                    performUIUpdateOnTarget(msg, card, update);
+                }
+            });
+        }
+    }
+
+    /**
+     * 更新最后一条消息
+     */
+    function updateLastMessage(textOrObj) {
+        if (state.messages.length === 0) return;
+
+        const lastMsg = state.messages[state.messages.length - 1];
+        updateMessageById(lastMsg.id, textOrObj);
+
+        // 保留旧的 pendingUpdate 机制：保证 finalizeStreamingMessage 行为不变
+        let text = textOrObj;
+        let reasoning = null;
+        let attachments;
+        let toolCalls = null;
+        let streaming = false;
+        let reasoningEnded = false;
+
+        if (typeof textOrObj === 'object' && textOrObj !== null) {
+            text = textOrObj.content || '';
+            reasoning = textOrObj.reasoning || null;
+            if (Object.prototype.hasOwnProperty.call(textOrObj, 'attachments')) {
+                attachments = textOrObj.attachments;
+            }
+            if (Object.prototype.hasOwnProperty.call(textOrObj, 'toolCalls')) {
+                toolCalls = textOrObj.toolCalls;
+            }
+            streaming = !!textOrObj.streaming;
+            reasoningEnded = !!textOrObj.reasoningEnded;
+        }
+
+        pendingUpdate = { text, reasoning, toolCalls, streaming, reasoningEnded };
 
         if (!rafUpdatePending) {
             rafUpdatePending = true;
@@ -869,7 +1112,7 @@ const FrameworkMessages = (function() {
     function performUIUpdate(update) {
         if (!update) return;
 
-        const { text, reasoning, streaming, reasoningEnded } = update;
+        const { text, reasoning, toolCalls, streaming, reasoningEnded } = update;
         const lastMsg = state.messages[state.messages.length - 1];
 
         const lastCard = getLastMessageCard();
@@ -879,6 +1122,7 @@ const FrameworkMessages = (function() {
         if (!container) return;
 
         let reasoningBlock = container.querySelector('.reasoning-block');
+        let toolCallsContainer = container.querySelector('.tool-calls-container');
         let contentSpan = container.querySelector('.message-content');
 
         if (!contentSpan) {
@@ -986,6 +1230,25 @@ const FrameworkMessages = (function() {
             contentSpan.textContent = text;
         }
 
+        // 处理工具调用（在正文之后、附件之前）
+        if (toolCalls && toolCalls.length > 0) {
+            const toolCallRenderer = window.IdoFront && window.IdoFront.toolCallRenderer;
+            if (toolCallRenderer && !toolCallsContainer) {
+                // 首次创建工具调用容器
+                toolCallsContainer = toolCallRenderer.render(toolCalls);
+                if (toolCallsContainer) {
+                    // 插入到正文之后
+                    const contentDiv = contentSpan ? contentSpan.parentElement : null;
+                    if (contentDiv && contentDiv.nextSibling) {
+                        container.insertBefore(toolCallsContainer, contentDiv.nextSibling);
+                    } else {
+                        container.appendChild(toolCallsContainer);
+                    }
+                }
+            }
+            // 工具调用状态更新由 toolCallRenderer.updateUI 单独处理
+        }
+
         // 处理附件：如果是流式全量累加模式，需要重新渲染附件容器
         const currentAttachments = lastMsg.attachments;
         if (currentAttachments && currentAttachments.length > 0) {
@@ -1048,6 +1311,106 @@ const FrameworkMessages = (function() {
         } else {
             const newStatsBar = createStatsBar(stats);
             statsBar.innerHTML = newStatsBar.innerHTML;
+        }
+    }
+
+    function finalizeStreamingMessageById(messageId, stats) {
+        const ui = getUI();
+        if (!messageId) return;
+
+        // 应用该消息的待更新（如果有）
+        const pending = pendingUpdatesById.get(messageId);
+        if (pending) {
+            pendingUpdatesById.delete(messageId);
+            const idx = findMessageIndexById(messageId);
+            const msg = idx >= 0 ? state.messages[idx] : null;
+            const card = getMessageCardById(messageId);
+            if (msg && card) {
+                performUIUpdateOnTarget(msg, card, pending);
+            }
+        }
+
+        const card = ui.chatStream.querySelector(`[data-message-id="${messageId}"]`);
+        if (!card) return;
+
+        const container = card.querySelector('.ido-message__container');
+        if (!container) return;
+
+        const idx = findMessageIndexById(messageId);
+        const msgState = idx >= 0 ? state.messages[idx] : null;
+
+        // 停止思维链计时器（如果还有运行中的）
+        const reasoningBlock = container.querySelector('.reasoning-block');
+        if (reasoningBlock && reasoningBlock.dataset.timerId) {
+            const timerId = parseInt(reasoningBlock.dataset.timerId, 10);
+            if (!Number.isNaN(timerId)) {
+                clearInterval(timerId);
+            }
+            delete reasoningBlock.dataset.timerId;
+            delete reasoningBlock.dataset.startTime;
+            delete reasoningBlock.dataset.accumulatedTime;
+            delete reasoningBlock.dataset.segmentStart;
+        }
+
+        // 从 Store 获取最终时长并更新 UI
+        try {
+            const store = window.IdoFront && window.IdoFront.store;
+            if (store) {
+                const conv = store.getActiveConversation && store.getActiveConversation();
+                if (conv) {
+                    const storeMsg = conv.messages.find(m => m.id === messageId);
+                    if (storeMsg && storeMsg.reasoningDuration !== undefined) {
+                        const toggle = reasoningBlock && reasoningBlock.querySelector('.reasoning-toggle');
+                        const timerSpan = toggle && toggle.querySelector('.reasoning-timer');
+                        if (timerSpan) {
+                            timerSpan.textContent = storeMsg.reasoningDuration.toFixed(1) + 's';
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+
+        // 渲染思维链 Markdown
+        const reasoningContent = container.querySelector('.reasoning-content[data-needs-markdown="true"]');
+        if (reasoningContent && markdown) {
+            const reasoningText = reasoningContent.textContent || '';
+            if (reasoningText) {
+                markdown.renderSync(reasoningContent, reasoningText);
+            }
+            reasoningContent.removeAttribute('data-needs-markdown');
+        }
+
+        // 渲染正文 Markdown
+        const contentSpan = container.querySelector('.message-content[data-needs-markdown="true"]');
+        if (contentSpan && markdown) {
+            const contentText = contentSpan.textContent || '';
+            if (contentText) {
+                markdown.renderSync(contentSpan, contentText);
+            }
+            contentSpan.removeAttribute('data-needs-markdown');
+        }
+
+        // 移除该消息的流式指示器
+        removeMessageStreamingIndicator(messageId);
+        const strayIndicators = container.querySelectorAll('.message-streaming-indicator');
+        strayIndicators.forEach(indicator => indicator.remove());
+
+        // 渲染统计栏
+        if (stats) {
+            updateMessageStats(messageId, stats);
+        }
+
+        // 确保附件被渲染
+        if (msgState && msgState.attachments && msgState.attachments.length > 0) {
+            const existingWrapper = container.querySelector('.ido-message__attachment-wrapper');
+            if (!existingWrapper) {
+                const attachmentsContainer = createAttachmentsContainer(msgState.attachments);
+                if (attachmentsContainer) {
+                    container.appendChild(attachmentsContainer);
+                }
+            }
         }
     }
 
@@ -1178,7 +1541,9 @@ const FrameworkMessages = (function() {
         clearMessages,
         addMessage,
         updateLastMessage,
+        updateMessageById,
         finalizeStreamingMessage,
+        finalizeStreamingMessageById,
         renderAllPendingMarkdown,
         addLoadingIndicator,
         removeLoadingIndicator,

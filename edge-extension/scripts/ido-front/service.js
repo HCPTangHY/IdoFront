@@ -125,10 +125,17 @@
 
     const service = window.IdoFront.service = window.IdoFront.service || {};
 
-    // 存储当前活跃的请求控制器
+    // 多请求控制器：支持并行请求与按 ID 取消
+    const requestControllers = new Map(); // requestId -> AbortController
     let currentAbortController = null;
+    let currentRequestId = null;
 
-    service.callAI = async function(messages = [], channel, onUpdate) {
+    function createRequestId() {
+        return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    // options: { requestId?: string, setAsCurrent?: boolean }
+    service.callAI = async function(messages = [], channel, onUpdate, options) {
         const originalChannel = ensureChannel(channel);
         const { adapter, entry } = resolveAdapter(originalChannel, 'call');
         const effectiveChannel = applyDefaults(originalChannel, entry);
@@ -137,9 +144,18 @@
         // 这些头无法通过 fetch 设置，需要通过 declarativeNetRequest 在网络层修改
         await setupForbiddenHeaderRules(effectiveChannel);
 
-        // 创建新的 AbortController
-        currentAbortController = new AbortController();
-        const signal = currentAbortController.signal;
+        const opt = options && typeof options === 'object' ? options : {};
+        const requestId = opt.requestId || createRequestId();
+        const setAsCurrent = opt.setAsCurrent !== false;
+
+        const controller = new AbortController();
+        const signal = controller.signal;
+
+        requestControllers.set(requestId, controller);
+        if (setAsCurrent) {
+            currentAbortController = controller;
+            currentRequestId = requestId;
+        }
 
         // 收集所有待执行的更新 Promise，确保在 return 前全部完成
         const pendingUpdates = [];
@@ -164,19 +180,37 @@
             const result = await adapter.call(messages, effectiveChannel, safeOnUpdate, signal);
             return result;
         } finally {
-            // 等待所有 onUpdate 回调执行完毕，确保 UI 状态与返回结果同步
             if (pendingUpdates.length > 0) {
                 await Promise.all(pendingUpdates);
             }
-            // 清理当前控制器引用
-            if (currentAbortController && currentAbortController.signal === signal) {
+
+            requestControllers.delete(requestId);
+            if (currentAbortController === controller) {
                 currentAbortController = null;
+                currentRequestId = null;
             }
         }
     };
 
-    // 取消当前请求
+    // 取消指定请求
+    service.abortRequest = function(requestId) {
+        if (!requestId) return false;
+        const controller = requestControllers.get(requestId);
+        if (!controller) return false;
+        controller.abort();
+        requestControllers.delete(requestId);
+        if (currentAbortController === controller) {
+            currentAbortController = null;
+            currentRequestId = null;
+        }
+        return true;
+    };
+
+    // 取消当前请求（最近一次 setAsCurrent 的请求）
     service.abortCurrentRequest = function() {
+        if (currentRequestId) {
+            return service.abortRequest(currentRequestId);
+        }
         if (currentAbortController) {
             currentAbortController.abort();
             currentAbortController = null;
@@ -186,8 +220,11 @@
     };
 
     // 检查是否有活跃的请求
-    service.hasActiveRequest = function() {
-        return currentAbortController !== null;
+    service.hasActiveRequest = function(requestId) {
+        if (requestId) {
+            return requestControllers.has(requestId);
+        }
+        return requestControllers.size > 0;
     };
 
     service.fetchModels = async function(channel) {

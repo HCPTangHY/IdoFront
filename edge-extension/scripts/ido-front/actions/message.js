@@ -51,6 +51,474 @@
         return activePath.some(m => m.id === messageId);
     }
 
+    async function buildMessagesPayloadWithToolTurns(conv, excludeMessageId, channelConfig) {
+        const activePersona = store.getActivePersona();
+        const messagesPayload = [];
+
+        if (activePersona && activePersona.systemPrompt) {
+            messagesPayload.push({ role: 'system', content: activePersona.systemPrompt });
+        }
+
+        if (activePersona && activePersona.contextMessages && activePersona.contextMessages.length > 0) {
+            activePersona.contextMessages.forEach(msg => {
+                messagesPayload.push({ role: msg.role, content: msg.content });
+            });
+        }
+
+        const activePath = store.getActivePath(conv.id);
+        const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+        const attachmentDataUrlCache = new Map();
+        const toolCallTypes = window.IdoFront.toolCallTypes;
+
+        const isGemini = channelConfig && (channelConfig.type === 'gemini' || channelConfig.type === 'gemini-deep-research');
+
+        for (const m of activePath) {
+            if (!m || m.id === excludeMessageId) continue;
+
+            // 不持久化/不透传历史中的 tool 消息（旧数据兼容：避免重复 functionResponse）
+            if (m.role === 'tool') continue;
+
+            const msg = { role: m.role, content: m.content };
+
+            // 附件：从 store 的轻量引用解析为 dataUrl
+            const rawAttachments = Array.isArray(m.attachments) && m.attachments.length > 0
+                ? m.attachments
+                : (m.metadata && Array.isArray(m.metadata.attachments) ? m.metadata.attachments : null);
+
+            if (rawAttachments && rawAttachments.length > 0) {
+                if (!msg.metadata) msg.metadata = {};
+
+                if (attachmentsApi && typeof attachmentsApi.resolveAttachmentsForPayload === 'function') {
+                    // eslint-disable-next-line no-await-in-loop
+                    const payloadAttachments = await attachmentsApi.resolveAttachmentsForPayload(rawAttachments, { cache: attachmentDataUrlCache });
+                    if (payloadAttachments && payloadAttachments.length > 0) {
+                        msg.metadata.attachments = payloadAttachments;
+                    }
+                } else {
+                    msg.metadata.attachments = rawAttachments;
+                }
+            }
+
+            // 透传渠道 metadata（如 Gemini 的 thoughtSignature）
+            if (m.metadata) {
+                const meta = { ...m.metadata };
+                if (meta.attachments) delete meta.attachments;
+                msg.metadata = { ...(msg.metadata || {}), ...meta };
+            }
+
+            // Gemini：把 toolCalls 展开为 functionCall + functionResponse（必须成对出现）
+            // 为了避免“历史不完整”导致 Gemini 报错：只有当 toolCalls 全部完成时才展开。
+            if (isGemini && m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+                const completed = !!(toolCallTypes && toolCallTypes.allCompleted({ toolCalls: m.toolCalls }));
+                if (completed) {
+                    msg.functionCalls = m.toolCalls.map(tc => ({ name: tc.name, args: tc.args || {} }));
+                    messagesPayload.push(msg);
+
+                    const toolResponses = m.toolCalls.map(tc => ({
+                        name: tc.name,
+                        response: tc.status === toolCallTypes.Status.SUCCESS
+                            ? { result: tc.result }
+                            : { error: tc.error || 'Tool execution failed' }
+                    }));
+
+                    messagesPayload.push({ role: 'tool', toolResponses });
+                    continue;
+                }
+                // 未完成：只发送文本/附件/metadata，不发送 functionCall，避免历史断裂
+            }
+
+            messagesPayload.push(msg);
+        }
+
+        return messagesPayload;
+    }
+
+    async function continueAfterToolCalls(conv, channelConfig, fromAssistantMessage) {
+        const toolCallTypes = window.IdoFront.toolCallTypes;
+        const toolRegistry = window.IdoFront.toolRegistry;
+        const toolCallRenderer = window.IdoFront.toolCallRenderer;
+
+        if (!toolCallTypes || !toolRegistry) return;
+
+        const maxTurns = 6;
+        let parent = fromAssistantMessage;
+        let lastTypingMessageId = null;
+
+        try {
+            for (let turn = 0; turn < maxTurns; turn++) {
+            // 创建新消息作为后续模型回复
+            const nextAssistant = {
+                id: utils.createId('msg_a'),
+                role: 'assistant',
+                content: '',
+                createdAt: Date.now(),
+                timestamp: new Date().toISOString(),
+                modelName: parent.modelName,
+                channelName: parent.channelName
+            };
+
+            store.addMessageToConversation(conv.id, nextAssistant, parent.id);
+
+            if (context && context.addMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
+                context.addMessage('ai', {
+                    content: '',
+                    id: nextAssistant.id,
+                    modelName: nextAssistant.modelName,
+                    channelName: nextAssistant.channelName
+                });
+            }
+
+            // 标记当前正在生成（避免外层 finally 清理状态）
+            store.state.isTyping = true;
+            store.state.typingConversationId = conv.id;
+            store.state.typingMessageId = nextAssistant.id;
+            lastTypingMessageId = nextAssistant.id;
+            store.persist();
+
+            // 发送按钮进入 loading（仅当前活跃路径）
+            if (context && context.setSendButtonLoading && shouldRenderUI(conv.id, nextAssistant.id)) {
+                context.setSendButtonLoading(true);
+            }
+
+            // ========== 流式生成后续消息 ==========
+            const requestStartTime = Date.now();
+            let firstTokenTime = null;
+            let firstContentTime = null;
+            let streamEnded = false;
+            let fullContent = '';
+            let fullReasoning = null;
+            let finalAssistantAttachments = null;
+
+            // 绑定流式指示器到该条消息
+            let loadingId = null;
+            let loadingAttached = false;
+            if (context && shouldRenderUI(conv.id, nextAssistant.id) && context.addLoadingIndicator && context.attachLoadingIndicatorToMessage) {
+                loadingId = context.addLoadingIndicator();
+                loadingAttached = context.attachLoadingIndicatorToMessage(loadingId, nextAssistant.id);
+                if (!loadingAttached && context.removeLoadingIndicator) {
+                    context.removeLoadingIndicator(loadingId);
+                    loadingId = null;
+                }
+            }
+
+            const onUpdate = (data) => {
+                if (streamEnded) return;
+                if (store.state.typingMessageId !== nextAssistant.id) return;
+
+                let currentContent = '';
+                let currentReasoning = null;
+                let currentMetadata = null;
+
+                if (typeof data === 'string') {
+                    currentContent = data;
+                } else if (typeof data === 'object' && data !== null) {
+                    currentContent = data.content || '';
+                    currentReasoning = data.reasoning || null;
+                    currentMetadata = data.metadata || null;
+                }
+
+                if (!firstTokenTime && (currentContent || currentReasoning)) {
+                    firstTokenTime = Date.now();
+                }
+
+                // 思维链计时（复用主流程逻辑）
+                const currentReasoningLength = currentReasoning ? currentReasoning.length : 0;
+                const prevReasoningLength = nextAssistant._prevReasoningLength || 0;
+                const hasNewReasoning = currentReasoningLength > prevReasoningLength;
+
+                if (hasNewReasoning && !nextAssistant.reasoningSegmentStart) {
+                    nextAssistant.reasoningSegmentStart = Date.now();
+                    if (nextAssistant.reasoningAccumulatedTime === undefined) {
+                        nextAssistant.reasoningAccumulatedTime = 0;
+                    }
+                }
+
+                if (currentReasoningLength > prevReasoningLength) {
+                    nextAssistant._prevReasoningLength = currentReasoningLength;
+                }
+
+                if (currentContent && nextAssistant.reasoningSegmentStart) {
+                    const segmentDuration = (Date.now() - nextAssistant.reasoningSegmentStart) / 1000;
+                    nextAssistant.reasoningAccumulatedTime = (nextAssistant.reasoningAccumulatedTime || 0) + segmentDuration;
+                    delete nextAssistant.reasoningSegmentStart;
+                }
+
+                if (!firstContentTime && currentContent) {
+                    firstContentTime = Date.now();
+                }
+
+                fullContent = currentContent;
+                fullReasoning = currentReasoning;
+
+                // 附件：只用于 UI 展示，避免写入 Store（base64）
+                let currentAttachments = null;
+                if (data && Array.isArray(data.attachments)) {
+                    currentAttachments = data.attachments;
+                } else if (currentMetadata && Array.isArray(currentMetadata.attachments)) {
+                    currentAttachments = currentMetadata.attachments;
+                }
+
+                if (currentAttachments && currentAttachments.length > 0) {
+                    if (!finalAssistantAttachments) {
+                        finalAssistantAttachments = [...currentAttachments];
+                    } else {
+                        currentAttachments.forEach(newAtt => {
+                            const exists = finalAssistantAttachments.find(
+                                existing => existing.name === newAtt.name && existing.size === newAtt.size
+                            );
+                            if (!exists) {
+                                finalAssistantAttachments.push(newAtt);
+                            }
+                        });
+                    }
+                }
+
+                nextAssistant.content = fullContent;
+                if (fullReasoning) {
+                    nextAssistant.reasoning = fullReasoning;
+                }
+
+                if (currentMetadata) {
+                    const meta = { ...currentMetadata };
+                    if (Array.isArray(meta.attachments)) delete meta.attachments;
+                    nextAssistant.metadata = meta;
+                }
+
+                if (context && context.updateLastMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
+                    const isReasoningSegmentEnded = !!currentContent && !nextAssistant.reasoningSegmentStart;
+                    const updatePayload = {
+                        content: fullContent,
+                        reasoning: fullReasoning,
+                        streaming: true,
+                        reasoningEnded: isReasoningSegmentEnded
+                    };
+                    if (finalAssistantAttachments && finalAssistantAttachments.length > 0) {
+                        updatePayload.attachments = finalAssistantAttachments;
+                    }
+                    context.updateLastMessage(updatePayload);
+                }
+            };
+
+            // 构建 payload：包含历史中的 tool call / tool result turn
+            const messagesPayload = await buildMessagesPayloadWithToolTurns(conv, nextAssistant.id, channelConfig);
+
+            let response = null;
+            try {
+                const continuationConfig = { ...channelConfig, stream: true };
+                response = await service.callAI(messagesPayload, continuationConfig, onUpdate);
+            } catch (apiError) {
+                if (apiError && apiError.name === 'AbortError') {
+                    streamEnded = true;
+                    fullContent = '✋ 已停止生成';
+                    nextAssistant.content = fullContent;
+                    store.persist();
+
+                    if (context && context.updateLastMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
+                        context.updateLastMessage({ content: fullContent });
+                    }
+
+                    // 停止后直接结束本轮
+                    parent = nextAssistant;
+                    break;
+                }
+                throw apiError;
+            } finally {
+                streamEnded = true;
+
+                if (context && context.removeMessageStreamingIndicator && shouldRenderUI(conv.id, nextAssistant.id)) {
+                    context.removeMessageStreamingIndicator(nextAssistant.id);
+                }
+
+                // 如果未成功附着（仍存在独立 loading bubble），需要移除
+                if (loadingId && !loadingAttached && context && context.removeLoadingIndicator) {
+                    context.removeLoadingIndicator(loadingId);
+                }
+            }
+
+            const requestEndTime = Date.now();
+            const totalDuration = (requestEndTime - requestStartTime) / 1000;
+            let generationTime = null;
+            if (firstContentTime) {
+                generationTime = (requestEndTime - firstContentTime) / 1000;
+            } else if (firstTokenTime) {
+                generationTime = (requestEndTime - firstTokenTime) / 1000;
+            }
+
+            const usage = response?.usage || null;
+            let tps = null;
+            if (usage && usage.completion_tokens && generationTime && generationTime > 0) {
+                tps = usage.completion_tokens / generationTime;
+            } else if (usage && usage.completion_tokens && totalDuration > 0) {
+                tps = usage.completion_tokens / totalDuration;
+            }
+
+            const stats = {
+                duration: totalDuration,
+                ttft: firstTokenTime ? (firstTokenTime - requestStartTime) / 1000 : null,
+                ttfc: firstContentTime ? (firstContentTime - requestStartTime) / 1000 : null,
+                generationTime: generationTime,
+                usage: usage,
+                tps: tps
+            };
+
+            // 从最终响应中兜底获取内容/思维链/附件
+            const choice = response?.choices?.[0];
+            const responseToolCalls = choice?.message?.tool_calls || null;
+
+            if (!fullContent) {
+                fullContent = choice?.message?.content || '';
+                fullReasoning = choice?.message?.reasoning_content || null;
+                if (fullContent) nextAssistant.content = fullContent;
+                if (fullReasoning) nextAssistant.reasoning = fullReasoning;
+            }
+
+            // 处理 reasoningDuration（沿用主流程的累计逻辑）
+            if (nextAssistant.reasoningSegmentStart) {
+                const lastSegmentDuration = (Date.now() - nextAssistant.reasoningSegmentStart) / 1000;
+                nextAssistant.reasoningAccumulatedTime = (nextAssistant.reasoningAccumulatedTime || 0) + lastSegmentDuration;
+                delete nextAssistant.reasoningSegmentStart;
+            }
+            if (nextAssistant.reasoningAccumulatedTime !== undefined && nextAssistant.reasoningAccumulatedTime > 0) {
+                nextAssistant.reasoningDuration = nextAssistant.reasoningAccumulatedTime;
+                delete nextAssistant.reasoningAccumulatedTime;
+            }
+
+            // 保存 stats
+            nextAssistant.stats = stats;
+
+            // 附件外置化：写入 Store 的引用
+            const finalFromResponse = choice?.message?.attachments || null;
+            const attachmentsToPersist = (finalAssistantAttachments && finalAssistantAttachments.length > 0)
+                ? finalAssistantAttachments
+                : (finalFromResponse && Array.isArray(finalFromResponse) ? finalFromResponse : null);
+
+            if (attachmentsToPersist && attachmentsToPersist.length > 0) {
+                const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+                if (attachmentsApi && typeof attachmentsApi.normalizeAttachmentsForState === 'function') {
+                    try {
+                        const normalized = await attachmentsApi.normalizeAttachmentsForState(attachmentsToPersist, { source: 'assistant' });
+                        if (normalized && Array.isArray(normalized.attachments) && normalized.attachments.length > 0) {
+                            nextAssistant.attachments = normalized.attachments;
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+            }
+
+            // 保存 metadata（剥离 attachments）
+            const metadata = choice?.message?.metadata || null;
+            if (metadata) {
+                const meta = { ...metadata };
+                if (Array.isArray(meta.attachments)) delete meta.attachments;
+                nextAssistant.metadata = meta;
+            }
+
+            // 最终持久化
+            store.persist();
+
+            if (context && shouldRenderUI(conv.id, nextAssistant.id)) {
+                const updatePayload = {
+                    content: nextAssistant.content,
+                    reasoning: nextAssistant.reasoning || null,
+                    attachments: nextAssistant.attachments || null
+                };
+
+                if (typeof context.updateMessageById === 'function') {
+                    context.updateMessageById(nextAssistant.id, updatePayload);
+                } else if (typeof context.updateLastMessage === 'function') {
+                    context.updateLastMessage(updatePayload);
+                }
+
+                if (typeof context.finalizeStreamingMessageById === 'function') {
+                    context.finalizeStreamingMessageById(nextAssistant.id, stats);
+                } else if (typeof context.finalizeStreamingMessage === 'function') {
+                    context.finalizeStreamingMessage(stats);
+                }
+            }
+
+            // 没有新的工具调用：结束循环
+            if (!responseToolCalls || responseToolCalls.length === 0) {
+                parent = nextAssistant;
+                break;
+            }
+
+            // 记录新的工具调用，并在这一条消息内执行
+            const toolCalls = toolCallTypes.createFromResponse(responseToolCalls);
+            // 补充 displayName（用于 UI 展示）
+            if (toolRegistry && typeof toolRegistry.resolve === 'function') {
+                toolCalls.forEach(tc => {
+                    const def = toolRegistry.resolve(tc.name);
+                    if (def && def.name) {
+                        tc.displayName = def.name;
+                    }
+                });
+            }
+            nextAssistant.toolCalls = toolCalls;
+            store.persist();
+
+            // 工具开始执行时，停止该条消息的“流式三点”指示器
+            if (context && context.removeMessageStreamingIndicator && shouldRenderUI(conv.id, nextAssistant.id)) {
+                context.removeMessageStreamingIndicator(nextAssistant.id);
+            }
+
+            if (context && context.updateLastMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
+                context.updateLastMessage({ content: nextAssistant.content || '', toolCalls });
+            }
+
+            for (const tc of toolCalls) {
+                toolCallTypes.updateStatus(tc, 'running');
+                if (toolCallRenderer && shouldRenderUI(conv.id, nextAssistant.id)) {
+                    toolCallRenderer.updateUI(nextAssistant.id, tc.id, { status: 'running' });
+                }
+
+                try {
+                    const result = await toolRegistry.execute(tc.name, tc.args);
+                    if (result.success) {
+                        toolCallTypes.updateStatus(tc, 'success', result.result);
+                    } else {
+                        toolCallTypes.updateStatus(tc, 'error', null, result.error);
+                    }
+                } catch (e) {
+                    toolCallTypes.updateStatus(tc, 'error', null, e.message);
+                }
+
+                if (toolCallRenderer && shouldRenderUI(conv.id, nextAssistant.id)) {
+                    toolCallRenderer.updateUI(nextAssistant.id, tc.id, {
+                        status: tc.status,
+                        result: tc.result,
+                        error: tc.error,
+                        duration: tc.duration
+                    });
+                }
+            }
+
+            store.persist();
+            parent = nextAssistant;
+        }
+        } finally {
+            // 清理 typing 状态（仅当本函数仍是最新生成）
+            if (lastTypingMessageId && store.state.typingMessageId === lastTypingMessageId) {
+                store.state.isTyping = false;
+                store.state.typingConversationId = null;
+                store.state.typingMessageId = null;
+                store.persist();
+            }
+
+            // 恢复发送按钮状态
+            if (context && context.setSendButtonLoading) {
+                const activeConv = store.getActiveConversation();
+                if (activeConv && store.state.typingMessageId) {
+                    const activePath = store.getActivePath(activeConv.id);
+                    const stillGenerating = activePath.some(m => m.id === store.state.typingMessageId);
+                    context.setSendButtonLoading(stillGenerating);
+                } else {
+                    context.setSendButtonLoading(false);
+                }
+            }
+        }
+    }
+
     /**
      * 发送消息
      */
@@ -640,6 +1108,8 @@
 
         // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
         let streamEnded = false;
+        // 当模型返回 tool_calls 时，需要提前 finalize 这条消息的流式 UI（否则会一直“思考中”）
+        let finalizedBeforeTools = false;
         
         // 设置发送按钮为加载状态
         // 和 loading 一样，只有消息在活跃路径上时才禁用发送按钮
@@ -742,78 +1212,11 @@
         // Get active persona settings
         const activePersona = store.getActivePersona();
         
-        // Build messages payload with persona context
-        let messagesPayload = [];
-        
-        // 1. Add system prompt if exists
-        if (activePersona && activePersona.systemPrompt) {
-            messagesPayload.push({
-                role: 'system',
-                content: activePersona.systemPrompt
-            });
-        }
-        
-        // 2. Add context messages (fake dialogues) if exists
-        if (activePersona && activePersona.contextMessages && activePersona.contextMessages.length > 0) {
-            activePersona.contextMessages.forEach(msg => {
-                messagesPayload.push({
-                    role: msg.role,
-                    content: msg.content
-                });
-            });
-        }
-        
-        // 3. Add actual conversation messages - 使用活跃路径而非全部消息
-        // 这确保了在分支模式下只发送当前选中路径的消息给 AI
-        // 注意：排除当前正在生成的 assistant 消息（它刚被创建，内容为空）
+        // Build messages payload with persona context（包含 tool call / tool result turn）
+        const messagesPayload = await buildMessagesPayloadWithToolTurns(conv, assistantMessage.id, channel);
+
+        // 用于请求日志（精简版），仍然基于活跃路径
         const activePath = store.getActivePath(conv.id);
-        const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
-        const attachmentDataUrlCache = new Map();
-
-        for (const m of activePath) {
-            if (!m || m.id === assistantMessage.id) continue;
-
-            const msg = {
-                role: m.role,
-                content: m.content
-            };
-
-            // 传递附件给渠道适配器：
-            // Store 中仅保存轻量引用（无 dataUrl），这里按需解析为 dataUrl 供渠道使用。
-            const rawAttachments = Array.isArray(m.attachments) && m.attachments.length > 0
-                ? m.attachments
-                : (m.metadata && Array.isArray(m.metadata.attachments) ? m.metadata.attachments : null);
-
-            if (rawAttachments && rawAttachments.length > 0) {
-                if (!msg.metadata) msg.metadata = {};
-
-                if (attachmentsApi && typeof attachmentsApi.resolveAttachmentsForPayload === 'function') {
-                    // eslint-disable-next-line no-await-in-loop
-                    const payloadAttachments = await attachmentsApi.resolveAttachmentsForPayload(rawAttachments, { cache: attachmentDataUrlCache });
-                    if (payloadAttachments && payloadAttachments.length > 0) {
-                        msg.metadata.attachments = payloadAttachments;
-                    }
-                } else {
-                    // fallback：直接透传（可能不包含 dataUrl）
-                    msg.metadata.attachments = rawAttachments;
-                }
-            }
-
-            // 传递渠道特有的 metadata（如 Gemini 的 thoughtSignature）
-            if (m.metadata) {
-                const meta = { ...m.metadata };
-                // 避免把 store 里的 attachments 引用合并回去覆盖 payloadAttachments
-                if (meta.attachments) {
-                    delete meta.attachments;
-                }
-                msg.metadata = {
-                    ...(msg.metadata || {}),
-                    ...meta
-                };
-            }
-
-            messagesPayload.push(msg);
-        }
         
                 // Log Request（使用精简版，避免将大量 base64 附件写入日志导致卡顿）
                 const sanitizedMessages = [];
@@ -1020,20 +1423,23 @@
                 }
                 
                 // 仅当在活跃路径上时才更新 UI
-                if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
-                    // 判断当前思维链段是否结束：有正文内容且没有进行中的思维链段
+                if (shouldRenderUI(conv.id, assistantMessage.id)) {
                     const isReasoningSegmentEnded = !!currentContent && !assistantMessage.reasoningSegmentStart;
-                    
                     const updatePayload = {
                         content: fullContent,
                         reasoning: fullReasoning,
-                        streaming: true,  // 标记为流式阶段
+                        streaming: true,
                         reasoningEnded: isReasoningSegmentEnded
                     };
                     if (finalAssistantAttachments && finalAssistantAttachments.length > 0) {
-                        updatePayload.attachments = finalAssistantAttachments; // 传递全量累计附件
+                        updatePayload.attachments = finalAssistantAttachments;
                     }
-                    context.updateLastMessage(updatePayload);
+
+                    if (context && typeof context.updateMessageById === 'function') {
+                        context.updateMessageById(assistantMessage.id, updatePayload);
+                    } else if (context && typeof context.updateLastMessage === 'function') {
+                        context.updateLastMessage(updatePayload);
+                    }
                 }
                 // 流式更新时不持久化，避免频繁的 IndexedDB 写入
             };
@@ -1160,10 +1566,12 @@
             };
             
             // 处理非流式响应或流式完成
+            const choice = response.choices?.[0];
+            const responseToolCalls = choice?.message?.tool_calls || null;
+            
             if (!fullContent) {
                 // 非流式模式：从响应中提取内容
-                const choice = response.choices?.[0];
-                fullContent = choice?.message?.content || '无内容响应';
+                fullContent = choice?.message?.content || '';
                 fullReasoning = choice?.message?.reasoning_content || null;
                 const metadata = choice?.message?.metadata || null;
                 const attachments = choice?.message?.attachments
@@ -1183,6 +1591,125 @@
                 if (attachments && Array.isArray(attachments) && attachments.length > 0) {
                     finalAssistantAttachments = attachments;
                 }
+            }
+            
+            // ========== 工具调用处理 ==========
+            if (responseToolCalls && responseToolCalls.length > 0) {
+                const toolCallTypes = window.IdoFront.toolCallTypes;
+                const toolRegistry = window.IdoFront.toolRegistry;
+                const toolCallRenderer = window.IdoFront.toolCallRenderer;
+                
+                if (toolCallTypes && toolRegistry) {
+                    // 创建工具调用记录
+                    const toolCalls = toolCallTypes.createFromResponse(responseToolCalls);
+                    // 补充 displayName（用于 UI 展示）
+                    if (toolRegistry && typeof toolRegistry.resolve === 'function') {
+                        toolCalls.forEach(tc => {
+                            const def = toolRegistry.resolve(tc.name);
+                            if (def && def.name) {
+                                tc.displayName = def.name;
+                            }
+                        });
+                    }
+                    assistantMessage.toolCalls = toolCalls;
+
+                    // ========== 提前结束该条消息的流式 UI（思维链计时/三点） ==========
+                    if (!finalizedBeforeTools) {
+                        // 停止接收后续流式更新
+                        streamEnded = true;
+
+                        // 结束最后一段思维链计时
+                        if (assistantMessage.reasoningSegmentStart) {
+                            const lastSegmentDuration = (Date.now() - assistantMessage.reasoningSegmentStart) / 1000;
+                            assistantMessage.reasoningAccumulatedTime = (assistantMessage.reasoningAccumulatedTime || 0) + lastSegmentDuration;
+                            delete assistantMessage.reasoningSegmentStart;
+                        }
+                        if (assistantMessage.reasoningAccumulatedTime !== undefined && assistantMessage.reasoningAccumulatedTime > 0) {
+                            assistantMessage.reasoningDuration = assistantMessage.reasoningAccumulatedTime;
+                            delete assistantMessage.reasoningAccumulatedTime;
+                        }
+
+                        // 工具开始执行时，停止该条消息的“流式三点”指示器
+                        if (context && context.removeMessageStreamingIndicator && shouldRenderUI(conv.id, assistantMessage.id)) {
+                            context.removeMessageStreamingIndicator(assistantMessage.id);
+                        }
+                        // 如果 loading 没有成功附着到消息，移除独立 loading bubble
+                        if (loadingId && context && context.removeLoadingIndicator) {
+                            context.removeLoadingIndicator(loadingId);
+                            loadingId = null;
+                        }
+
+                        assistantMessage.stats = stats;
+                        store.persist();
+
+                        // finalizeStreamingMessage 只作用于“最后一条 UI 消息”，优先使用按 messageId 的版本
+                        if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+                            if (typeof context.finalizeStreamingMessageById === 'function') {
+                                context.finalizeStreamingMessageById(assistantMessage.id, stats);
+                            } else if (typeof context.finalizeStreamingMessage === 'function') {
+                                context.finalizeStreamingMessage(stats);
+                            }
+                        }
+
+                        finalizedBeforeTools = true;
+                    }
+
+                    // 更新 UI 显示工具调用
+                    if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                        context.updateLastMessage({
+                            content: fullContent,
+                            toolCalls: toolCalls
+                        });
+                    }
+                    
+                    // 依次执行每个工具
+                    for (const tc of toolCalls) {
+                        // 更新状态为执行中
+                        toolCallTypes.updateStatus(tc, 'running');
+                        if (toolCallRenderer && shouldRenderUI(conv.id, assistantMessage.id)) {
+                            toolCallRenderer.updateUI(assistantMessage.id, tc.id, { status: 'running' });
+                        }
+                        
+                        try {
+                            // 执行工具
+                            const result = await toolRegistry.execute(tc.name, tc.args);
+                            
+                            if (result.success) {
+                                toolCallTypes.updateStatus(tc, 'success', result.result);
+                            } else {
+                                toolCallTypes.updateStatus(tc, 'error', null, result.error);
+                            }
+                        } catch (execError) {
+                            toolCallTypes.updateStatus(tc, 'error', null, execError.message);
+                        }
+                        
+                        // 更新 UI
+                        if (toolCallRenderer && shouldRenderUI(conv.id, assistantMessage.id)) {
+                            toolCallRenderer.updateUI(assistantMessage.id, tc.id, {
+                                status: tc.status,
+                                result: tc.result,
+                                error: tc.error,
+                                duration: tc.duration
+                            });
+                        }
+                    }
+                    
+                    // 持久化工具调用结果
+                    store.persist();
+                    
+                    // ========== 工具调用完成后：用新消息承接后续模型回复 ==========
+                    try {
+                        await continueAfterToolCalls(conv, channelConfig, assistantMessage);
+                    } catch (e) {
+                        console.warn('[MessageActions] continueAfterToolCalls failed:', e);
+                    }
+                }
+            }
+            
+            // 如果没有内容且没有工具调用，显示默认提示
+            if (!fullContent && (!responseToolCalls || responseToolCalls.length === 0)) {
+                fullContent = '无内容响应';
+                assistantMessage.content = fullContent;
             }
             
             {
@@ -1229,7 +1756,8 @@
                 store.persistImmediately();
                 
                 // 流式更新完成，解析 Markdown（仅在活跃路径上时）
-                if (context && context.finalizeStreamingMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
+                // 如果已在 tool_calls 阶段提前 finalize，则不要再对“最后一条消息”调用 finalize（会误伤后续消息）
+                if (!finalizedBeforeTools && context && context.finalizeStreamingMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
                     context.finalizeStreamingMessage(stats);
                 }
                 

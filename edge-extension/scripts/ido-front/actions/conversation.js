@@ -418,6 +418,11 @@
      * @param {boolean} [asyncMarkdown=false] - 是否使用异步 Markdown 渲染
      */
     function renderSingleMessage(msg, container, childrenMap, asyncMarkdown) {
+        // 工具响应消息不在对话流中直接渲染（结果会显示在对应 assistant 的 toolCalls 块里）
+        if (!msg || msg.hidden || msg.role === 'tool') {
+            return;
+        }
+
         const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
         const payload = {
             content: msg.content,
@@ -442,6 +447,11 @@
         // 添加附件信息
         if (msg.attachments) {
             payload.attachments = msg.attachments;
+        }
+        
+        // 添加工具调用信息
+        if (msg.toolCalls && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0) {
+            payload.toolCalls = msg.toolCalls;
         }
         
         // AI 消息：添加模型名和渠道名

@@ -79,15 +79,16 @@
     function saveToCache(convId, chatStream) {
         if (!convId || !chatStream) return;
 
-        // 克隆当前所有消息到 DocumentFragment
+        // 直接移动当前所有消息到 DocumentFragment（保留事件处理器）
+        // 不使用 cloneNode，因为克隆不会保留事件处理器
         const fragment = document.createDocumentFragment();
-        const messages = chatStream.querySelectorAll('[data-message-id]');
+        const messages = Array.from(chatStream.querySelectorAll('[data-message-id]'));
         
         const messageIds = [];
         messages.forEach(msg => {
             messageIds.push(msg.dataset.messageId);
-            // 克隆节点（包含事件处理器不会被克隆，需要重新绑定）
-            fragment.appendChild(msg.cloneNode(true));
+            // 直接移动节点到 fragment，保留所有事件处理器
+            fragment.appendChild(msg);
         });
 
         messageCache.set(convId, {
@@ -104,12 +105,18 @@
      * 从缓存恢复消息 DOM
      * @param {string} convId - 对话 ID
      * @param {HTMLElement} chatStream - 聊天流容器
-     * @param {Function} rebindEvents - 重新绑定事件的回调
+     * @param {Function} rebindEvents - 重新绑定事件的回调（现在主要用于分支切换器）
      * @returns {boolean} 是否成功恢复
      */
     function restoreFromCache(convId, chatStream, rebindEvents) {
         const cached = messageCache.get(convId);
         if (!cached) return false;
+
+        // 检查 fragment 是否为空（节点可能已被移走）
+        if (!cached.fragment.firstChild) {
+            messageCache.delete(convId);
+            return false;
+        }
 
         // 验证缓存是否仍然有效（消息 ID 列表是否匹配）
         const store = window.IdoFront?.store;
@@ -135,20 +142,28 @@
         // 清空当前内容
         chatStream.innerHTML = '';
 
-        // 恢复缓存的 DOM（需要重新克隆以避免污染缓存）
-        cached.fragment.childNodes.forEach(node => {
-            chatStream.appendChild(node.cloneNode(true));
-        });
+        // 直接移动缓存中的节点到 chatStream（保留所有事件处理器）
+        // 不使用 cloneNode，这样按钮的 onclick 等事件都能保留
+        while (cached.fragment.firstChild) {
+            chatStream.appendChild(cached.fragment.firstChild);
+        }
 
         // 恢复滚动位置
         chatStream.scrollTop = cached.scrollTop;
 
-        // 重新绑定事件处理器
+        // 由于使用移动而非克隆，大部分事件处理器已保留
+        // 但分支切换器的事件可能需要更新（因为分支信息可能变化）
         if (typeof rebindEvents === 'function') {
             rebindEvents(chatStream);
         }
 
-        touchCache(convId);
+        // 移除缓存条目（节点已被移走，fragment 现在为空）
+        messageCache.delete(convId);
+        const idx = cacheAccessOrder.indexOf(convId);
+        if (idx !== -1) {
+            cacheAccessOrder.splice(idx, 1);
+        }
+
         return true;
     }
 

@@ -105,7 +105,9 @@
             // 消息
             addMessage: (...args) => messages.addMessage(...args),
             updateLastMessage: (...args) => messages.updateLastMessage(...args),
+            updateMessageById: (...args) => messages.updateMessageById(...args),
             finalizeStreamingMessage: (...args) => messages.finalizeStreamingMessage(...args),
+            finalizeStreamingMessageById: (...args) => messages.finalizeStreamingMessageById(...args),
             renderAllPendingMarkdown: (...args) => messages.renderAllPendingMarkdown(...args),
             clearMessages: (...args) => messages.clearMessages(...args),
             addLoadingIndicator: (...args) => messages.addLoadingIndicator(...args),

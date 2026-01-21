@@ -23,9 +23,6 @@
         // 排除 gemini-3-pro-image 系列（图像生成模型不支持思考功能）
         levelModelPattern: 'gemini-3(?!.*-pro-image)'
     };
-    
-    // 全局规则缓存
-    let cachedGlobalRules = null;
 
     // thinkingBudget 预设选项（用于数值模式）
     const BUDGET_PRESETS = [
@@ -45,93 +42,128 @@
         { value: 'high', label: '高', description: '深度思考，追求最佳结果', color: '#2563eb', bars: 4 }
     ];
 
-    /**
-     * 从 Framework.storage 加载全局思考规则
-     * @returns {Object} 全局思考规则
-     */
-    function loadGlobalThinkingRules() {
-        if (cachedGlobalRules) return cachedGlobalRules;
-        
+    // ========== Gemini Image Generation Configuration ==========
+    
+    // 图像生成模型匹配规则存储键
+    const IMAGE_GEN_RULES_STORAGE_KEY = 'ido.gemini.imageGenRules';
+    
+    // 默认图像生成模型匹配规则
+    const DEFAULT_IMAGE_GEN_RULES = {
+        // 支持图像生成的模型匹配规则
+        imageModelPattern: 'gemini-.*-image|imagen',
+        // 支持 imageSize (2K/4K) 的模型匹配规则 (Gemini 3 Pro Image)
+        imageSizeModelPattern: 'gemini-3.*-image'
+    };
+    
+    // 宽高比选项
+    const ASPECT_RATIO_OPTIONS = [
+        { value: '1:1', label: '1:1', description: '正方形', icon: 'crop_square' },
+        { value: '16:9', label: '16:9', description: '横向宽屏', icon: 'crop_16_9' },
+        { value: '9:16', label: '9:16', description: '纵向竖屏', icon: 'crop_9_16' },
+        { value: '4:3', label: '4:3', description: '横向标准', icon: 'crop_landscape' },
+        { value: '3:4', label: '3:4', description: '纵向标准', icon: 'crop_portrait' },
+        { value: '3:2', label: '3:2', description: '横向照片', icon: 'crop_landscape' },
+        { value: '2:3', label: '2:3', description: '纵向照片', icon: 'crop_portrait' },
+        { value: '21:9', label: '21:9', description: '超宽屏', icon: 'panorama' }
+    ];
+    
+    // 图片大小选项（仅 Gemini 3 Pro Image 支持）
+    const IMAGE_SIZE_OPTIONS = [
+        { value: '1K', label: '1K', description: '标准分辨率' },
+        { value: '2K', label: '2K', description: '高清分辨率' },
+        { value: '4K', label: '4K', description: '超高清分辨率' }
+    ];
+    
+    // 响应模态选项
+    const RESPONSE_MODALITY_OPTIONS = [
+        { value: 'default', label: '默认', description: '文本和图片', icon: 'auto_awesome' },
+        { value: 'image', label: '仅图片', description: '只返回图片', icon: 'image' }
+    ];
+    
+    // ========== 通用规则加载/保存/匹配工具 ==========
+    const rulesCache = {};
+    
+    function loadRules(storageKey, defaults) {
+        if (rulesCache[storageKey]) return rulesCache[storageKey];
         try {
-            if (typeof Framework !== 'undefined' && Framework.storage) {
-                const saved = Framework.storage.getItem(THINKING_RULES_STORAGE_KEY);
-                if (saved && typeof saved === 'object') {
-                    cachedGlobalRules = {
-                        budgetModelPattern: saved.budgetModelPattern || DEFAULT_THINKING_RULES.budgetModelPattern,
-                        levelModelPattern: saved.levelModelPattern || DEFAULT_THINKING_RULES.levelModelPattern
-                    };
-                    return cachedGlobalRules;
+            const saved = Framework?.storage?.getItem(storageKey);
+            if (saved && typeof saved === 'object') {
+                rulesCache[storageKey] = { ...defaults };
+                for (const key of Object.keys(defaults)) {
+                    rulesCache[storageKey][key] = saved[key] || defaults[key];
                 }
+                return rulesCache[storageKey];
             }
-        } catch (e) {
-            console.warn('[GeminiChannel] Failed to load global thinking rules:', e);
-        }
-        
-        return { ...DEFAULT_THINKING_RULES };
+        } catch (e) { /* ignore */ }
+        return { ...defaults };
+    }
+    
+    function saveRules(storageKey, rules) {
+        try {
+            Framework?.storage?.setItem(storageKey, rules);
+            rulesCache[storageKey] = { ...rules };
+        } catch (e) { /* ignore */ }
+    }
+    
+    function matchModel(modelName, pattern) {
+        if (!modelName || !pattern) return false;
+        try { return new RegExp(pattern, 'i').test(modelName); }
+        catch (e) { return false; }
+    }
+    
+    // 图像生成规则
+    const loadImageGenRules = () => loadRules(IMAGE_GEN_RULES_STORAGE_KEY, DEFAULT_IMAGE_GEN_RULES);
+    const saveImageGenRules = (rules) => saveRules(IMAGE_GEN_RULES_STORAGE_KEY, rules);
+    const supportsImageGeneration = (model) => matchModel(model, loadImageGenRules().imageModelPattern);
+    const supportsImageSize = (model) => matchModel(model, loadImageGenRules().imageSizeModelPattern);
+    
+    /**
+     * 获取会话的图像生成配置
+     */
+    function getImageGenConfig(conv) {
+        if (!conv) return { aspectRatio: 'auto', imageSize: '1K', responseModality: 'default' };
+        const geminiMeta = conv.metadata?.gemini || {};
+        return {
+            aspectRatio: geminiMeta.imageAspectRatio || 'auto',
+            imageSize: geminiMeta.imageSize || '1K',
+            responseModality: geminiMeta.responseModality || 'default'
+        };
     }
     
     /**
-     * 保存全局思考规则到 Framework.storage
-     * @param {Object} rules - 思考规则
+     * 设置会话的图像宽高比
      */
-    function saveGlobalThinkingRules(rules) {
-        try {
-            if (typeof Framework !== 'undefined' && Framework.storage) {
-                Framework.storage.setItem(THINKING_RULES_STORAGE_KEY, rules);
-                cachedGlobalRules = { ...rules };
-            }
-        } catch (e) {
-            console.warn('[GeminiChannel] Failed to save global thinking rules:', e);
-        }
-    }
-
     /**
-     * 获取思考规则配置（优先使用全局配置）
-     * @param {Object} channelConfig - 渠道配置对象（可选，用于未来扩展渠道级覆盖）
-     * @returns {Object} 思考规则配置
+     * 通用 Gemini 元数据设置器
+     * @param {Object} store - Store 实例
+     * @param {string} convId - 会话 ID
+     * @param {string} key - 元数据键名
+     * @param {*} value - 值
+     * @param {Object} [options] - 选项 { silent: boolean }
      */
-    function getThinkingRules(channelConfig) {
-        // 加载全局规则
-        return loadGlobalThinkingRules();
+    function setGeminiMeta(store, convId, key, value, options) {
+        if (!store || !convId) return;
+        const conv = store.state.conversations.find(c => c.id === convId);
+        if (!conv) return;
+        
+        if (!conv.metadata) conv.metadata = {};
+        if (!conv.metadata.gemini) conv.metadata.gemini = {};
+        conv.metadata.gemini[key] = value;
+        
+        const persistFn = options?.silent ? store.persistSilent : store.persist;
+        if (typeof persistFn === 'function') persistFn.call(store);
     }
+    
+    // 图像生成设置器
+    const setImageAspectRatio = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageAspectRatio', val, opts);
+    const setImageSize = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageSize', val, opts);
+    const setResponseModality = (store, convId, val, opts) => setGeminiMeta(store, convId, 'responseModality', val, opts);
 
-    /**
-     * 判断模型是否使用 thinkingBudget 模式（数值预算）
-     * @param {string} modelName - 模型名称
-     * @param {Object} channelConfig - 渠道配置
-     * @returns {boolean}
-     */
-    function useBudgetMode(modelName, channelConfig) {
-        if (!modelName) return false;
-        const rules = getThinkingRules(channelConfig);
-        if (!rules.budgetModelPattern) return false;
-        try {
-            const regex = new RegExp(rules.budgetModelPattern, 'i');
-            return regex.test(modelName);
-        } catch (e) {
-            console.warn('[GeminiChannel] Invalid budget model pattern:', rules.budgetModelPattern, e);
-            return false;
-        }
-    }
-
-    /**
-     * 判断模型是否使用 thinkingLevel 模式（等级选择）
-     * @param {string} modelName - 模型名称
-     * @param {Object} channelConfig - 渠道配置
-     * @returns {boolean}
-     */
-    function useLevelMode(modelName, channelConfig) {
-        if (!modelName) return false;
-        const rules = getThinkingRules(channelConfig);
-        if (!rules.levelModelPattern) return false;
-        try {
-            const regex = new RegExp(rules.levelModelPattern, 'i');
-            return regex.test(modelName);
-        } catch (e) {
-            console.warn('[GeminiChannel] Invalid level model pattern:', rules.levelModelPattern, e);
-            return false;
-        }
-    }
+    // 思考规则
+    const loadGlobalThinkingRules = () => loadRules(THINKING_RULES_STORAGE_KEY, DEFAULT_THINKING_RULES);
+    const saveGlobalThinkingRules = (rules) => saveRules(THINKING_RULES_STORAGE_KEY, rules);
+    const useBudgetMode = (model) => matchModel(model, loadGlobalThinkingRules().budgetModelPattern);
+    const useLevelMode = (model) => matchModel(model, loadGlobalThinkingRules().levelModelPattern);
 
     /**
      * 判断模型是否支持思考功能
@@ -157,130 +189,53 @@
         };
     }
 
-    /**
-     * 设置会话的 Gemini 思考预算 (Gemini 2.5)
-     * @param {Object} store - Store 实例
-     * @param {string} convId - 会话 ID
-     * @param {number} budget - 思考预算
-     */
-    function setThinkingBudget(store, convId, budget) {
-        if (!store || !convId) return;
-        const conv = store.state.conversations.find(c => c.id === convId);
-        if (!conv) return;
-        
-        if (!conv.metadata) conv.metadata = {};
-        if (!conv.metadata.gemini) conv.metadata.gemini = {};
-        conv.metadata.gemini.thinkingBudget = budget;
-        
-        if (typeof store.persist === 'function') {
-            store.persist();
-        }
-    }
+    // 思考设置器
+    const setThinkingBudget = (store, convId, val) => setGeminiMeta(store, convId, 'thinkingBudget', val);
+    const setThinkingLevel = (store, convId, val) => setGeminiMeta(store, convId, 'thinkingLevel', val);
+    
+    // 工具设置器
+    const setCodeExecution = (store, convId, val, opts) => setGeminiMeta(store, convId, 'codeExecution', val, opts);
+    const setGoogleSearch = (store, convId, val, opts) => setGeminiMeta(store, convId, 'googleSearch', val, opts);
+    const setUrlContext = (store, convId, val, opts) => setGeminiMeta(store, convId, 'urlContext', val, opts);
+    const setYouTubeVideo = (store, convId, val, opts) => setGeminiMeta(store, convId, 'youtubeVideo', val, opts);
+    
+    // Getter 辅助函数
+    const getGeminiMeta = (conv, key, defaultVal = false) => conv?.metadata?.gemini?.[key] ?? defaultVal;
+    const getCodeExecutionConfig = (conv) => !!getGeminiMeta(conv, 'codeExecution');
+    const getGoogleSearchConfig = (conv) => !!getGeminiMeta(conv, 'googleSearch');
+    const getUrlContextConfig = (conv) => !!getGeminiMeta(conv, 'urlContext');
+    const getYouTubeVideoConfig = (conv) => !!getGeminiMeta(conv, 'youtubeVideo');
 
     /**
-     * 设置会话的 Gemini 思考等级 (Gemini 3)
-     * @param {Object} store - Store 实例
-     * @param {string} convId - 会话 ID
-     * @param {string} level - 思考等级
+     * 处理 URL Context Metadata
+     * @param {Object} urlContextMetadata - Gemini API 返回的 URL context 元数据
+     * @returns {Object|null} 处理后的 URL 上下文信息
      */
-    function setThinkingLevel(store, convId, level) {
-        if (!store || !convId) return;
-        const conv = store.state.conversations.find(c => c.id === convId);
-        if (!conv) return;
+    function processUrlContextMetadata(urlContextMetadata) {
+        if (!urlContextMetadata) return null;
         
-        if (!conv.metadata) conv.metadata = {};
-        if (!conv.metadata.gemini) conv.metadata.gemini = {};
-        conv.metadata.gemini.thinkingLevel = level;
+        // 支持 camelCase (urlMetadata) 和 snake_case (url_metadata)
+        const urlMetadata = urlContextMetadata.urlMetadata || urlContextMetadata.url_metadata || [];
         
-        if (typeof store.persist === 'function') {
-            store.persist();
-        }
-    }
-
-    /**
-     * 获取会话的 Gemini 代码执行配置
-     * @param {Object} conv - 会话对象
-     * @returns {boolean} 是否启用代码执行
-     */
-    function getCodeExecutionConfig(conv) {
-        if (!conv) return false;
-        const geminiMeta = conv.metadata?.gemini || {};
-        return !!geminiMeta.codeExecution;
-    }
-
-    /**
-     * 获取会话的 Gemini Google Search 配置
-     * @param {Object} conv - 会话对象
-     * @returns {boolean} 是否启用 Google Search
-     */
-    function getGoogleSearchConfig(conv) {
-        if (!conv) return false;
-        const geminiMeta = conv.metadata?.gemini || {};
-        return !!geminiMeta.googleSearch;
-    }
-
-    /**
-     * 设置会话的 Gemini Google Search 开关
-     * @param {Object} store - Store 实例
-     * @param {string} convId - 会话 ID
-     * @param {boolean} enabled - 是否启用
-     * @param {Object} [options] - 选项
-     * @param {boolean} [options.silent=false] - 是否静默模式（不触发事件广播）
-     */
-    function setGoogleSearch(store, convId, enabled, options) {
-        if (!store || !convId) return;
-        const conv = store.state.conversations.find(c => c.id === convId);
-        if (!conv) return;
+        if (!urlMetadata.length) return null;
         
-        if (!conv.metadata) conv.metadata = {};
-        if (!conv.metadata.gemini) conv.metadata.gemini = {};
-        conv.metadata.gemini.googleSearch = enabled;
+        const urls = urlMetadata.map(meta => {
+            // 支持 camelCase 和 snake_case
+            const retrievedUrl = meta.retrievedUrl || meta.retrieved_url;
+            const status = meta.urlRetrievalStatus || meta.url_retrieval_status;
+            
+            return {
+                url: retrievedUrl,
+                status: status,
+                success: status === 'URL_RETRIEVAL_STATUS_SUCCESS'
+            };
+        });
         
-        // 使用静默持久化避免触发全局 UI 更新
-        if (options && options.silent) {
-            if (typeof store.persistSilent === 'function') {
-                store.persistSilent();
-            }
-        } else {
-            if (typeof store.persist === 'function') {
-                store.persist();
-            }
-        }
-    }
-
-    /**
-     * 设置会话的 Gemini 代码执行开关
-     * @param {Object} store - Store 实例
-     * @param {string} convId - 会话 ID
-     * @param {boolean} enabled - 是否启用
-     */
-    /**
-     * 设置会话的 Gemini 代码执行开关
-     * @param {Object} store - Store 实例
-     * @param {string} convId - 会话 ID
-     * @param {boolean} enabled - 是否启用
-     * @param {Object} [options] - 选项
-     * @param {boolean} [options.silent=false] - 是否静默模式（不触发事件广播）
-     */
-    function setCodeExecution(store, convId, enabled, options) {
-        if (!store || !convId) return;
-        const conv = store.state.conversations.find(c => c.id === convId);
-        if (!conv) return;
-        
-        if (!conv.metadata) conv.metadata = {};
-        if (!conv.metadata.gemini) conv.metadata.gemini = {};
-        conv.metadata.gemini.codeExecution = enabled;
-        
-        // 使用静默持久化避免触发全局 UI 更新
-        if (options && options.silent) {
-            if (typeof store.persistSilent === 'function') {
-                store.persistSilent();
-            }
-        } else {
-            if (typeof store.persist === 'function') {
-                store.persist();
-            }
-        }
+        return {
+            urls: urls,
+            successCount: urls.filter(u => u.success).length,
+            totalCount: urls.length
+        };
     }
 
     /**
@@ -357,13 +312,14 @@
         };
     }
 
-     // Helper: Convert Gemini parts to displayable content, reasoning, attachments and thoughtSignature
+     // Helper: Convert Gemini parts to displayable content, reasoning, attachments, thoughtSignature and functionCalls
     function partsToContent(parts) {
-        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null, thoughtSignature: null };
+        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null, thoughtSignature: null, functionCalls: null };
         
         let content = '';
         let reasoning = '';
         const attachments = [];
+        const functionCalls = [];
         let imageIndex = 1;
         let thoughtSignature = null;
         
@@ -375,6 +331,15 @@
                 } else {
                     content += part.text;
                 }
+            }
+            
+            // Handle function call from AI
+            const functionCall = part.functionCall || part.function_call;
+            if (functionCall) {
+                functionCalls.push({
+                    name: functionCall.name,
+                    args: functionCall.args || {}
+                });
             }
             // Handle executable code from code execution tool
             // Support both camelCase (JS SDK) and snake_case (REST API) formats
@@ -442,7 +407,8 @@
             content,
             reasoning: reasoning || null,
             attachments: attachments.length > 0 ? attachments : null,
-            thoughtSignature: thoughtSignature
+            thoughtSignature: thoughtSignature,
+            functionCalls: functionCalls.length > 0 ? functionCalls : null
         };
     }
 
@@ -482,10 +448,46 @@
         return warnings[finishReason] || `⚠️ 生成异常终止 (${finishReason})`;
     }
 
+    /**
+     * 检测并提取文本中的 YouTube URL
+     * @param {string} text - 输入文本
+     * @returns {Object} { urls: string[], cleanedText: string }
+     */
+    function extractYouTubeUrls(text) {
+        if (!text) return { urls: [], cleanedText: text };
+        
+        // YouTube URL 匹配正则
+        // 支持: youtube.com/watch?v=, youtu.be/, youtube.com/embed/, m.youtube.com/watch?v=
+        const youtubeRegex = /(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[^\s]*)?/gi;
+        
+        const urls = [];
+        let match;
+        
+        while ((match = youtubeRegex.exec(text)) !== null) {
+            // 标准化 URL 格式
+            const videoId = match[1];
+            const fullUrl = match[0];
+            urls.push({
+                original: fullUrl,
+                normalized: `https://www.youtube.com/watch?v=${videoId}`,
+                videoId: videoId
+            });
+        }
+        
+        // 从文本中移除 YouTube URL（保留其他内容）
+        let cleanedText = text.replace(youtubeRegex, '').trim();
+        // 清理多余的空格
+        cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+        
+        return { urls, cleanedText };
+    }
+
     // Helper: Convert message to Gemini format
-    function convertMessages(messages) {
+    // options: { youtubeVideo: boolean } - 是否启用 YouTube 视频处理
+    function convertMessages(messages, options = {}) {
         const contents = [];
         let systemInstruction = undefined;
+        const enableYouTube = options.youtubeVideo || false;
 
         for (const msg of messages) {
             if (msg.role === 'system') {
@@ -493,6 +495,27 @@
                 systemInstruction = {
                     parts: [{ text: msg.content || '' }]
                 };
+            } else if (msg.role === 'tool') {
+                // 工具响应消息 - 转换为 Gemini 的 functionResponse 格式
+                const parts = [];
+                
+                if (msg.toolResponses && Array.isArray(msg.toolResponses)) {
+                    for (const tr of msg.toolResponses) {
+                        parts.push({
+                            functionResponse: {
+                                name: tr.name,
+                                response: tr.response
+                            }
+                        });
+                    }
+                }
+                
+                if (parts.length > 0) {
+                    contents.push({
+                        role: 'user',  // Gemini 中工具响应用 user role
+                        parts: parts
+                    });
+                }
             } else {
                 const role = msg.role === 'assistant' ? 'model' : 'user';
                 
@@ -549,14 +572,56 @@
                     }
                 }
                 
-                // 2. 添加文本内容（可能为空，Gemini 允许纯图片消息）
+                // 2. 处理文本内容
                 if (msg.content) {
-                    const part = { text: msg.content };
-                    // thought_signature 与 text 平级
-                    if (thoughtSig) {
-                        part.thought_signature = thoughtSig;
+                    let textContent = msg.content;
+                    
+                    // 如果启用了 YouTube 视频功能，检测并转换 YouTube URL
+                    if (enableYouTube && role === 'user') {
+                        const { urls, cleanedText } = extractYouTubeUrls(msg.content);
+                        
+                        // 为每个 YouTube URL 创建 fileData part
+                        for (const urlInfo of urls) {
+                            const videoPart = {
+                                fileData: {
+                                    fileUri: urlInfo.normalized,
+                                    mimeType: 'video/*'
+                                }
+                            };
+                            if (thoughtSig) {
+                                videoPart.thought_signature = thoughtSig;
+                            }
+                            parts.push(videoPart);
+                        }
+                        
+                        textContent = cleanedText;
                     }
-                    parts.push(part);
+                    
+                    // 添加文本部分（如果还有内容）
+                    if (textContent) {
+                        const part = { text: textContent };
+                        // thought_signature 与 text 平级
+                        if (thoughtSig) {
+                            part.thought_signature = thoughtSig;
+                        }
+                        parts.push(part);
+                    }
+                }
+                
+                // 3. 处理 function calls（仅 assistant/model 消息）
+                if (role === 'model' && msg.functionCalls && Array.isArray(msg.functionCalls)) {
+                    for (const fc of msg.functionCalls) {
+                        const part = {
+                            functionCall: {
+                                name: fc.name,
+                                args: fc.args || {}
+                            }
+                        };
+                        if (thoughtSig) {
+                            part.thought_signature = thoughtSig;
+                        }
+                        parts.push(part);
+                    }
                 }
                 
                 // 只有当 parts 非空时才添加到 contents
@@ -609,7 +674,24 @@
                 url += '?alt=sse';
             }
 
-            const { contents, systemInstruction } = convertMessages(messages);
+            // 获取当前会话的 gemini 配置（需要在 convertMessages 之前获取，因为需要传递 youtubeVideo 选项）
+            let geminiMeta = {};
+            try {
+                const store = window.IdoFront && window.IdoFront.store;
+                if (store && typeof store.getActiveConversation === 'function') {
+                    const conv = store.getActiveConversation();
+                    if (conv && conv.metadata && conv.metadata.gemini) {
+                        geminiMeta = conv.metadata.gemini;
+                    }
+                }
+            } catch (e) {
+                console.warn('[GeminiChannel] Failed to get conversation metadata:', e);
+            }
+
+            // 转换消息，传递 YouTube 视频选项
+            const { contents, systemInstruction } = convertMessages(messages, {
+                youtubeVideo: !!geminiMeta.youtubeVideo
+            });
 
             const body = {
                 contents: contents
@@ -626,19 +708,6 @@
             if (config.maxTokens !== undefined) generationConfig.maxOutputTokens = parseInt(config.maxTokens);
 
             // Thinking Config - 根据模型规则添加思考配置
-            // 直接从 store 获取当前会话的 gemini 配置
-            let geminiMeta = {};
-            try {
-                const store = window.IdoFront && window.IdoFront.store;
-                if (store && typeof store.getActiveConversation === 'function') {
-                    const conv = store.getActiveConversation();
-                    if (conv && conv.metadata && conv.metadata.gemini) {
-                        geminiMeta = conv.metadata.gemini;
-                    }
-                }
-            } catch (e) {
-                console.warn('[GeminiChannel] Failed to get conversation metadata:', e);
-            }
             
             const thinkingConfig = {};
             
@@ -665,11 +734,44 @@
                 generationConfig.thinkingConfig = thinkingConfig;
             }
             
+            // Image Generation Config - 图像生成配置
+            if (supportsImageGeneration(model, config)) {
+                // 响应模态配置
+                const responseModality = geminiMeta.responseModality || 'default';
+                if (responseModality === 'image') {
+                    generationConfig.responseModalities = ['Image'];
+                } else {
+                    // 默认返回文本和图片
+                    generationConfig.responseModalities = ['Text', 'Image'];
+                }
+                
+                // 图像配置
+                const imageConfig = {};
+                
+                // 宽高比：auto 表示不传参数，让模型自动决定
+                const aspectRatio = geminiMeta.imageAspectRatio || 'auto';
+                if (aspectRatio && aspectRatio !== 'auto') {
+                    imageConfig.aspectRatio = aspectRatio;
+                }
+                
+                // 图像大小（仅 Gemini 3 Pro Image 支持）：1K 是默认值，不传参数
+                if (supportsImageSize(model, config)) {
+                    const imageSize = geminiMeta.imageSize || '1K';
+                    if (imageSize && imageSize !== '1K') {
+                        imageConfig.imageSize = imageSize;
+                    }
+                }
+                
+                if (Object.keys(imageConfig).length > 0) {
+                    generationConfig.imageConfig = imageConfig;
+                }
+            }
+            
             if (Object.keys(generationConfig).length > 0) {
                 body.generationConfig = generationConfig;
             }
 
-            // Tools Config - 代码执行和 Google Search
+            // Tools Config - 代码执行、Google Search、URL Context 和自定义工具
             const tools = [];
             if (geminiMeta.codeExecution) {
                 tools.push({ codeExecution: {} });
@@ -677,6 +779,19 @@
             if (geminiMeta.googleSearch) {
                 tools.push({ google_search: {} });
             }
+            if (geminiMeta.urlContext) {
+                tools.push({ url_context: {} });
+            }
+            
+            // 添加 MCP/自定义工具（来自 toolRegistry）
+            const toolRegistry = window.IdoFront.toolRegistry;
+            if (toolRegistry && geminiMeta.enableTools !== false) {
+                const customTools = toolRegistry.toGeminiFormat();
+                if (customTools && customTools.length > 0) {
+                    tools.push(...customTools);
+                }
+            }
+            
             if (tools.length > 0) {
                 body.tools = tools;
             }
@@ -733,6 +848,7 @@
                     let lastFinishReason = null;
                     let streamUsageMetadata = null; // 流式响应中的 usage 信息
                     let lastGroundingMetadata = null; // 流式响应中的 grounding 信息
+                    let lastUrlContextMetadata = null; // 流式响应中的 URL context 信息
 
                     try {
                         while (true) {
@@ -764,6 +880,13 @@
                                         // 提取 groundingMetadata
                                         if (candidate?.groundingMetadata) {
                                             lastGroundingMetadata = candidate.groundingMetadata;
+                                        }
+                                        
+                                        // 提取 urlContextMetadata
+                                        // 支持 camelCase (urlContextMetadata) 和 snake_case (url_context_metadata)
+                                        const urlCtxMeta = candidate?.urlContextMetadata || candidate?.url_context_metadata;
+                                        if (urlCtxMeta) {
+                                            lastUrlContextMetadata = urlCtxMeta;
                                         }
                                         
                                         // 检测 finishReason - Gemini 的流式结束标志
@@ -825,7 +948,7 @@
                         throw streamError;
                     }
 
-                    let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, functionCalls } = partsToContent(accumulatedParts);
                     
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
@@ -835,6 +958,12 @@
                         content = groundingResult.content;
                         citations = groundingResult.citations;
                         searchQueries = groundingResult.searchQueries;
+                    }
+                    
+                    // 处理 URL Context Metadata
+                    let urlContextInfo = null;
+                    if (lastUrlContextMetadata) {
+                        urlContextInfo = processUrlContextMetadata(lastUrlContextMetadata);
                     }
                     
                     // 处理非正常结束的情况，添加警告提示
@@ -850,11 +979,13 @@
                                 content: content,
                                 reasoning_content: reasoning,
                                 attachments: attachments,
+                                tool_calls: functionCalls,  // AI 请求的工具调用
                                 metadata: {
                                     gemini: {
                                         thoughtSignature: extractedSignature || lastThoughtSignature,
                                         citations: citations,
-                                        searchQueries: searchQueries
+                                        searchQueries: searchQueries,
+                                        urlContext: urlContextInfo
                                     }
                                 }
                             },
@@ -882,7 +1013,9 @@
                     const finishReason = candidate?.finishReason;
                     const usageMetadata = data.usageMetadata;
                     const groundingMetadata = candidate?.groundingMetadata;
-                    let { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(parts);
+                    // 支持 camelCase 和 snake_case
+                    const urlContextMetadata = candidate?.urlContextMetadata || candidate?.url_context_metadata;
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, functionCalls } = partsToContent(parts);
                     
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
@@ -892,6 +1025,12 @@
                         content = groundingResult.content;
                         citations = groundingResult.citations;
                         searchQueries = groundingResult.searchQueries;
+                    }
+                    
+                    // 处理 URL Context Metadata
+                    let urlContextInfo = null;
+                    if (urlContextMetadata) {
+                        urlContextInfo = processUrlContextMetadata(urlContextMetadata);
                     }
                     
                     // 处理非正常结束的情况，添加警告提示
@@ -907,11 +1046,13 @@
                                 content: content,
                                 reasoning_content: reasoning,
                                 attachments: attachments,
+                                tool_calls: functionCalls,  // AI 请求的工具调用
                                 metadata: {
                                     gemini: {
                                         thoughtSignature: extractedSignature || thoughtSignature,
                                         citations: citations,
-                                        searchQueries: searchQueries
+                                        searchQueries: searchQueries,
+                                        urlContext: urlContextInfo
                                     }
                                 }
                             },
@@ -1087,173 +1228,76 @@
             const store = getStore();
             if (!store) return;
             
+            const { h, sheetHeader, cardItem } = window.IdoUI;
             const model = conv.selectedModel;
             const isBudgetMode = useBudgetMode(model, channelConfig);
+            const thinkingCfg = getThinkingConfig(conv);
             
             showBottomSheet((sheetContainer) => {
-                // Header
-                const header = document.createElement('div');
-                header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+                const header = sheetHeader({
+                    title: isBudgetMode ? '思考预算设置' : '思考等级设置',
+                    onClose: hideBottomSheet
+                });
                 
-                const title = document.createElement('h3');
-                title.className = 'text-lg font-semibold text-gray-800';
-                title.textContent = isBudgetMode ? '思考预算设置' : '思考等级设置';
-                
-                const closeBtn = document.createElement('button');
-                closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
-                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
-                closeBtn.onclick = () => hideBottomSheet();
-                
-                header.appendChild(title);
-                header.appendChild(closeBtn);
-                
-                // Body (可滚动区域)
-                const body = document.createElement('div');
-                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-4';
-                
-                // Footer (固定在底部)
-                const footer = document.createElement('div');
-                footer.className = 'px-6 py-4 border-t border-gray-100 bg-gray-50 flex-shrink-0 hidden';
-                
-                const thinkingCfg = getThinkingConfig(conv);
+                const body = h('div.flex-1.overflow-y-auto.px-6.py-4.space-y-2');
+                const footer = h('div.px-6.py-4.border-t.border-gray-100.bg-gray-50.flex-shrink-0.hidden');
 
                 if (isBudgetMode) {
-                    // ========== Budget 模式 UI ==========
-                    let currentBudget = thinkingCfg.budget;
+                    const currentBudget = thinkingCfg.budget;
                     footer.classList.remove('hidden');
                     
-                    // 1. 预设列表（采用卡片样式）
                     const budgetOptions = [
-                        { value: 0, label: '关闭', description: '关闭思考功能', bars: 0, icon: 'block' },
+                        { value: 0, label: '关闭', description: '关闭思考功能', icon: 'block' },
                         { value: 1024, label: '最小', description: '1024 tokens - 基础思考', bars: 1 },
                         { value: 4096, label: '低', description: '4096 tokens - 轻度思考', bars: 2 },
                         { value: 16384, label: '中', description: '16384 tokens - 适中思考', bars: 3 },
                         { value: 32768, label: '高', description: '32768 tokens - 深度思考', bars: 4 },
-                        { value: -1, label: '自动', description: '由模型动态决定思考深度', bars: 0, icon: 'magic_button' }
+                        { value: -1, label: '自动', description: '由模型动态决定思考深度', icon: 'magic_button' }
                     ];
 
                     budgetOptions.forEach(opt => {
-                        const item = document.createElement('div');
-                        const isActive = currentBudget === opt.value;
-                        
-                        item.className = `p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 mb-2 ${
-                            isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
-                        }`;
-                        
-                        const visual = document.createElement('div');
-                        visual.className = 'flex gap-0.5 items-end h-5 w-8 flex-shrink-0';
-                        if (opt.icon) {
-                            visual.innerHTML = `<span class="material-symbols-outlined text-gray-400 text-[20px]">${opt.icon}</span>`;
-                        } else {
-                            for(let i=1; i<=4; i++) {
-                                const bar = document.createElement('div');
-                                bar.className = 'w-1.5 rounded-t-sm transition-all';
-                                bar.style.height = `${(i/4)*100}%`;
-                                bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
-                                visual.appendChild(bar);
+                        body.appendChild(cardItem({
+                            active: currentBudget === opt.value,
+                            visual: opt.icon ? { icon: opt.icon } : { bars: opt.bars },
+                            label: opt.label,
+                            description: opt.description,
+                            onClick: () => {
+                                setThinkingBudget(store, conv.id, opt.value);
+                                hideBottomSheet();
+                                updateThinkingControls();
                             }
-                        }
-                        
-                        const info = document.createElement('div');
-                        info.className = 'flex-1';
-                        const label = document.createElement('div');
-                        label.className = `text-sm font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
-                        label.textContent = opt.label;
-                        const desc = document.createElement('div');
-                        desc.className = 'text-[10px] text-gray-500';
-                        desc.textContent = opt.description;
-                        info.appendChild(label);
-                        info.appendChild(desc);
-                        
-                        item.appendChild(visual);
-                        item.appendChild(info);
-                        if (isActive) {
-                            const check = document.createElement('span');
-                            check.className = 'material-symbols-outlined text-blue-500 text-[20px]';
-                            check.textContent = 'check_circle';
-                            item.appendChild(check);
-                        }
-                        
-                        item.onclick = () => {
-                            setThinkingBudget(store, conv.id, opt.value);
-                            hideBottomSheet();
-                            updateThinkingControls();
-                        };
-                        body.appendChild(item);
+                        }));
                     });
 
-                    // 2. 自定义滑块 (移至 Footer)
-                    footer.innerHTML = '<div class="text-xs font-medium text-gray-500 mb-3">自定义 Token 预算</div>';
-                    
-                    const slider = document.createElement('input');
-                    slider.type = 'range';
-                    slider.min = '0';
-                    slider.max = '32768';
-                    slider.step = '128';
-                    slider.value = currentBudget > 0 ? currentBudget : 16384;
-                    slider.className = 'w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600';
-                    
-                    const sliderVal = document.createElement('div');
-                    sliderVal.className = 'text-center text-blue-600 font-mono font-bold mt-2';
-                    sliderVal.textContent = currentBudget > 0 ? currentBudget : '---';
-
-                    slider.oninput = () => {
-                        sliderVal.textContent = slider.value;
-                    };
-                    slider.onchange = () => {
-                        setThinkingBudget(store, conv.id, parseInt(slider.value));
-                        updateThinkingControls();
-                    };
-
+                    // 自定义滑块
+                    footer.appendChild(h('div.text-xs.font-medium.text-gray-500.mb-3', '自定义 Token 预算'));
+                    const sliderVal = h('div.text-center.text-blue-600.font-mono.font-bold.mt-2', 
+                        currentBudget > 0 ? String(currentBudget) : '---');
+                    const slider = h('input', {
+                        type: 'range', min: '0', max: '32768', step: '128',
+                        value: currentBudget > 0 ? currentBudget : 16384,
+                        class: 'w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600',
+                        oninput: (e) => { sliderVal.textContent = e.target.value; },
+                        onchange: (e) => {
+                            setThinkingBudget(store, conv.id, parseInt(e.target.value));
+                            updateThinkingControls();
+                        }
+                    });
                     footer.appendChild(slider);
                     footer.appendChild(sliderVal);
-
                 } else {
-                    // ========== Level 模式 UI ==========
                     LEVEL_OPTIONS.forEach(opt => {
-                        const item = document.createElement('div');
-                        const isActive = opt.value === thinkingCfg.level;
-                        
-                        item.className = `p-4 rounded-xl border-2 cursor-pointer transition-all flex items-center gap-4 ${
-                            isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-100 hover:border-gray-200 bg-white'
-                        }`;
-                        
-                        const visual = document.createElement('div');
-                        visual.className = 'flex gap-0.5 items-end h-6 w-8 flex-shrink-0';
-                        for(let i=1; i<=4; i++) {
-                            const bar = document.createElement('div');
-                            bar.className = 'w-1.5 rounded-t-sm transition-all';
-                            bar.style.height = `${(i/4)*100}%`;
-                            bar.style.backgroundColor = i <= opt.bars ? (isActive ? '#3b82f6' : '#cbd5e1') : '#f1f5f9';
-                            visual.appendChild(bar);
-                        }
-                        
-                        const info = document.createElement('div');
-                        info.className = 'flex-1';
-                        const label = document.createElement('div');
-                        label.className = `font-bold ${isActive ? 'text-blue-700' : 'text-gray-700'}`;
-                        label.textContent = opt.label;
-                        const desc = document.createElement('div');
-                        desc.className = 'text-xs text-gray-500 mt-0.5';
-                        desc.textContent = opt.description;
-                        info.appendChild(label);
-                        info.appendChild(desc);
-                        
-                        item.appendChild(visual);
-                        item.appendChild(info);
-                        if (isActive) {
-                            const check = document.createElement('span');
-                            check.className = 'material-symbols-outlined text-blue-500';
-                            check.textContent = 'check_circle';
-                            item.appendChild(check);
-                        }
-                        
-                        item.onclick = () => {
-                            setThinkingLevel(store, conv.id, opt.value);
-                            hideBottomSheet();
-                            updateThinkingControls();
-                        };
-                        body.appendChild(item);
+                        body.appendChild(cardItem({
+                            active: opt.value === thinkingCfg.level,
+                            visual: { bars: opt.bars },
+                            label: opt.label,
+                            description: opt.description,
+                            onClick: () => {
+                                setThinkingLevel(store, conv.id, opt.value);
+                                hideBottomSheet();
+                                updateThinkingControls();
+                            }
+                        }));
                     });
                 }
                 
@@ -1282,66 +1326,21 @@
             const store = getStore();
             if (!store) return;
             
+            const { h, sheetHeader, switchItem } = window.IdoUI;
+            
             showBottomSheet((sheetContainer) => {
-                // Header
-                const header = document.createElement('div');
-                header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+                const header = sheetHeader({ title: '工具设置', onClose: hideBottomSheet });
+                const body = h('div.flex-1.overflow-y-auto.px-6.py-4.space-y-6');
                 
-                const title = document.createElement('h3');
-                title.className = 'text-lg font-semibold text-gray-800';
-                title.textContent = '工具设置';
-                
-                const closeBtn = document.createElement('button');
-                closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
-                closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
-                closeBtn.onclick = () => hideBottomSheet();
-                
-                header.appendChild(title);
-                header.appendChild(closeBtn);
-                
-                // Body
-                const body = document.createElement('div');
-                body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-6';
-                
-                // 代码执行开关
-                const codeExecItem = document.createElement('div');
-                codeExecItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
-                
-                const info = document.createElement('div');
-                info.className = 'flex-1 pr-4';
-                const label = document.createElement('div');
-                label.className = 'font-bold text-gray-800';
-                label.textContent = '代码执行 (Code Execution)';
-                const desc = document.createElement('div');
-                desc.className = 'text-xs text-gray-500 mt-1';
-                desc.textContent = '允许模型生成并运行 Python 代码以解决复杂问题。';
-                info.appendChild(label);
-                info.appendChild(desc);
-                
-                const isEnabled = getCodeExecutionConfig(conv);
-                
-                // 使用 DeclarativeComponents 的开关样式
-                const switchLabel = document.createElement('label');
-                switchLabel.className = 'ido-form-switch';
-                const switchInput = document.createElement('input');
-                switchInput.type = 'checkbox';
-                switchInput.className = 'ido-form-switch__input';
-                switchInput.checked = isEnabled;
-                const slider = document.createElement('div');
-                slider.className = 'ido-form-switch__slider';
-                
-                switchInput.onchange = () => {
-                    setCodeExecution(store, conv.id, switchInput.checked);
-                    updateThinkingControls();
-                };
-                
-                switchLabel.appendChild(switchInput);
-                switchLabel.appendChild(slider);
-                
-                codeExecItem.appendChild(info);
-                codeExecItem.appendChild(switchLabel);
-                
-                body.appendChild(codeExecItem);
+                body.appendChild(switchItem({
+                    label: '代码执行 (Code Execution)',
+                    description: '允许模型生成并运行 Python 代码以解决复杂问题。',
+                    checked: getCodeExecutionConfig(conv),
+                    onChange: (checked) => {
+                        setCodeExecution(store, conv.id, checked);
+                        updateThinkingControls();
+                    }
+                }));
                 
                 sheetContainer.appendChild(header);
                 sheetContainer.appendChild(body);
@@ -1350,87 +1349,48 @@
 
         function updateThinkingControls() {
             const wrapper = getThinkingWrapper();
-            if (!wrapper) {
-                return;
-            }
+            if (!wrapper) return;
             
             const store = getStore();
-            if (!store || !store.getActiveConversation) {
-                wrapper.style.display = 'none';
-                return;
-            }
-
-            const conv = store.getActiveConversation();
-            if (!conv) {
+            const conv = store?.getActiveConversation?.();
+            const model = conv?.selectedModel;
+            const channelConfig = conv ? getChannelConfig(store, conv) : null;
+            
+            // 隐藏条件：无会话、无模型、非 Gemini 渠道、或不支持思考
+            if (!model || channelConfig?.type !== 'gemini' || !supportsThinking(model, channelConfig)) {
                 wrapper.style.display = 'none';
                 return;
             }
             
-            // 获取选中的模型名称
-            const model = conv.selectedModel;
-            if (!model) {
-                wrapper.style.display = 'none';
-                return;
-            }
-
-            // 获取渠道配置
-            const channelConfig = getChannelConfig(store, conv);
-            
-            // 检查渠道类型 - 如果没有渠道配置或不是 Gemini 渠道，隐藏
-            if (!channelConfig || channelConfig.type !== 'gemini') {
-                wrapper.style.display = 'none';
-                return;
-            }
-            
-            // 检查模型是否支持思考功能或代码执行
-            const hasThinking = supportsThinking(model, channelConfig);
-            const hasTools = true; // Gemini 渠道通常都支持 tools
-            
-            if (!hasThinking && !hasTools) {
-                wrapper.style.display = 'none';
-                return;
-            }
-
-            // 显示控件
             wrapper.style.display = 'flex';
-
-            const thinkingCfg = getThinkingConfig(conv);
-            
-            // 获取容器内的元素
             const budgetBtnEl = wrapper.querySelector('[data-gemini-budget-btn]');
             const levelGroupEl = wrapper.querySelector('[data-gemini-level-group]');
-
-            // 更新思考控件
-            if (!hasThinking) {
-                if (budgetBtnEl) budgetBtnEl.style.display = 'none';
-                if (levelGroupEl) levelGroupEl.style.display = 'none';
-            } else {
-                if (useBudgetMode(model, channelConfig)) {
-                // Budget 模式：显示单个按钮，隐藏三按钮组
-                if (budgetBtnEl) {
-                    budgetBtnEl.style.display = 'inline-flex';
-                    const budget = thinkingCfg.budget;
-                    const preset = BUDGET_PRESETS.find(p => p.value === budget);
-                    budgetBtnEl.textContent = preset ? preset.label : `${budget}`;
-                }
-                if (levelGroupEl) {
-                    levelGroupEl.style.display = 'none';
-                }
-            } else if (useLevelMode(model, channelConfig)) {
-                // Level 模式：显示单个按钮，点击打开 BottomSheet
-                if (budgetBtnEl) {
-                    budgetBtnEl.style.display = 'inline-flex';
-                    const level = thinkingCfg.level;
-                    const opt = LEVEL_OPTIONS.find(o => o.value === level) || LEVEL_OPTIONS[1];
+            if (levelGroupEl) levelGroupEl.style.display = 'none';
+            
+            if (budgetBtnEl) {
+                budgetBtnEl.style.display = 'inline-flex';
+                const thinkingCfg = getThinkingConfig(conv);
+                if (useBudgetMode(model)) {
+                    const preset = BUDGET_PRESETS.find(p => p.value === thinkingCfg.budget);
+                    budgetBtnEl.textContent = preset?.label || `${thinkingCfg.budget}`;
+                } else {
+                    const opt = LEVEL_OPTIONS.find(o => o.value === thinkingCfg.level) || LEVEL_OPTIONS[1];
                     budgetBtnEl.textContent = opt.label;
                 }
-                if (levelGroupEl) {
-                    levelGroupEl.style.display = 'none';
-                }
-            }
             }
         }
 
+        /**
+         * 更新所有 Gemini 渠道控件
+         */
+        function updateAllGeminiControls() {
+            updateThinkingControls();
+            // 图像生成控件会在 renderImageGenSettings 中定义
+            if (typeof updateImageGenControls === 'function') {
+                updateImageGenControls();
+            }
+        }
+        
         /**
          * 确保 store 事件监听器已注册
          * 如果 store 尚未就绪，会延迟重试
@@ -1440,10 +1400,10 @@
             
             const store = getStore();
             if (store && store.events && typeof store.events.on === 'function') {
-                store.events.on('updated', updateThinkingControls);
+                store.events.on('updated', updateAllGeminiControls);
                 storeEventRegistered = true;
                 // 注册成功后立即更新一次
-                setTimeout(() => updateThinkingControls(), 0);
+                setTimeout(() => updateAllGeminiControls(), 0);
             } else {
                 // Store 尚未就绪，延迟重试（最多重试 50 次，约 5 秒）
                 if (!ensureStoreEventRegistered.retryCount) {
@@ -1464,7 +1424,7 @@
                 // 监听模式切换事件，确保在聊天模式下更新
                 Framework.events.on('mode:changed', (data) => {
                     if (data && data.mode === 'chat') {
-                        setTimeout(() => updateThinkingControls(), 50);
+                        setTimeout(() => updateAllGeminiControls(), 50);
                     }
                 });
             }
@@ -1475,90 +1435,215 @@
          * 抽取为独立函数，使用与 OpenAI 渠道相同的数组格式注册
          */
         function renderThinkingBudget() {
-            // 每次渲染时也尝试注册事件（防止 init 时 store 未就绪）
             ensureStoreEventRegistered();
+            const { h } = window.IdoUI;
             
-            const wrapper = document.createElement('div');
-            wrapper.id = WRAPPER_ID;
-            wrapper.className = 'flex items-center gap-2';
-            wrapper.style.display = 'none'; // 初始隐藏，由 updateThinkingControls 控制
-            wrapper.style.order = '1'; // 核心渠道参数，排在左侧
-
-            // 思考控件组
-            const controlGroup = document.createElement('div');
-            controlGroup.className = 'flex items-center gap-1';
-
-            const label = document.createElement('span');
-            label.className = 'text-[10px] text-gray-400';
-            label.textContent = '思考';
-            controlGroup.appendChild(label);
-
-            // ===== Budget 模式的按钮（点击打开 BottomSheet）=====
-            const budgetBtn = document.createElement('button');
-            budgetBtn.type = 'button';
-            budgetBtn.className = 'px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors';
-            budgetBtn.setAttribute('data-gemini-budget-btn', 'true');
-            budgetBtn.textContent = '自动';
-            budgetBtn.style.display = 'none'; // 初始隐藏
-
-            budgetBtn.onclick = (e) => {
-                e.stopPropagation();
-                
-                const store = getStore();
-                if (!store || !store.getActiveConversation) return;
-                
-                const conv = store.getActiveConversation();
-                if (!conv) return;
-
-                const channelConfig = getChannelConfig(store, conv);
-                showThinkingBottomSheet(conv, channelConfig);
-            };
-            
-            controlGroup.appendChild(budgetBtn);
-
-            // ===== Level 模式的四按钮组（minimal/low/medium/high）=====
-            const levelGroup = document.createElement('div');
-            levelGroup.className = 'flex items-center gap-px bg-gray-100 rounded p-px';
-            levelGroup.setAttribute('data-gemini-level-group', 'true');
-            levelGroup.style.display = 'none'; // 初始隐藏
-
-            const createLevelBtn = (opt) => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors font-medium';
-                btn.textContent = opt.label;
-                btn.title = `思考等级：${opt.description}`;
-                btn.onclick = () => {
+            // Budget 模式按钮
+            const budgetBtn = h('button', {
+                type: 'button',
+                class: 'px-2 py-0.5 text-[10px] rounded border border-gray-300 bg-white hover:border-blue-400 text-gray-700 font-medium transition-colors',
+                'data-gemini-budget-btn': 'true',
+                text: '自动',
+                style: { display: 'none' },
+                onclick: (e) => {
+                    e.stopPropagation();
                     const store = getStore();
-                    if (!store || !store.getActiveConversation) return;
-                    const conv = store.getActiveConversation();
+                    const conv = store?.getActiveConversation?.();
                     if (!conv) return;
-
-                    setThinkingLevel(store, conv.id, opt.value);
-                    updateThinkingControls();
-                };
-                return btn;
-            };
-
-            // 根据 LEVEL_OPTIONS 动态创建按钮
-            const buttonRefs = {};
-            LEVEL_OPTIONS.forEach(opt => {
-                const btn = createLevelBtn(opt);
-                buttonRefs[opt.value] = btn;
-                levelGroup.appendChild(btn);
+                    showThinkingBottomSheet(conv, getChannelConfig(store, conv));
+                }
             });
-
-            // 缓存按钮引用
+            
+            // Level 模式按钮组
+            const buttonRefs = {};
+            const levelGroup = h('div', {
+                class: 'flex items-center gap-px bg-gray-100 rounded p-px',
+                'data-gemini-level-group': 'true',
+                style: { display: 'none' }
+            }, LEVEL_OPTIONS.map(opt => {
+                const btn = h('button', {
+                    type: 'button',
+                    class: 'px-1.5 py-0.5 rounded text-[10px] border cursor-pointer transition-colors font-medium',
+                    text: opt.label,
+                    title: `思考等级：${opt.description}`,
+                    onclick: () => {
+                        const store = getStore();
+                        const conv = store?.getActiveConversation?.();
+                        if (!conv) return;
+                        setThinkingLevel(store, conv.id, opt.value);
+                        updateThinkingControls();
+                    }
+                });
+                buttonRefs[opt.value] = btn;
+                return btn;
+            }));
             levelState.buttons = buttonRefs;
-
-            controlGroup.appendChild(levelGroup);
-            wrapper.appendChild(controlGroup);
-
-            // 延迟调用 updateThinkingControls，确保元素已添加到 DOM
+            
+            const wrapper = h('div', {
+                id: WRAPPER_ID,
+                class: 'flex items-center gap-2',
+                style: { display: 'none', order: '1' }
+            }, [
+                h('div.flex.items-center.gap-1', [
+                    h('span.text-\[10px\].text-gray-400', '思考'),
+                    budgetBtn,
+                    levelGroup
+                ])
+            ]);
+            
             setTimeout(() => updateThinkingControls(), 0);
             setTimeout(() => updateThinkingControls(), 100);
-            setTimeout(() => updateThinkingControls(), 300);
+            return wrapper;
+        }
 
+        // ========== 图像生成设置 UI ==========
+        const IMAGE_GEN_WRAPPER_ID = 'core-gemini-image-gen-wrapper';
+        
+        /**
+         * 获取图像生成控件的 wrapper 元素
+         */
+        function getImageGenWrapper() {
+            return document.getElementById(IMAGE_GEN_WRAPPER_ID);
+        }
+        
+        /**
+         * 显示图像生成设置底部弹窗
+         */
+        function showImageGenBottomSheet(conv, channelConfig) {
+            const store = getStore();
+            if (!store) return;
+            
+            const { h, icon: uiIcon, section, sheetHeader } = window.IdoUI;
+            const model = conv.selectedModel;
+            const hasImageSize = supportsImageSize(model, channelConfig);
+            
+            showBottomSheet((sheetContainer) => {
+                const header = sheetHeader({ title: '图像生成设置', onClose: hideBottomSheet });
+                
+                const body = h('div.flex-1.overflow-y-auto.px-6.py-4.space-y-6');
+                const imageGenCfg = getImageGenConfig(conv);
+                let currentConfig = { ...imageGenCfg };
+                
+                // 通用选项渲染器
+                const renderOptions = (container, options, configKey, setter, { columns = 4, allowDeselect = false, layout = 'vertical' } = {}) => {
+                    container.innerHTML = '';
+                    options.forEach(opt => {
+                        const isActive = opt.value === currentConfig[configKey];
+                        const isHorizontal = layout === 'horizontal';
+                        
+                        const baseClass = `cursor-pointer transition-all border-2 rounded-${isHorizontal ? 'xl' : 'lg'}`;
+                        const activeClass = isActive ? 'border-purple-500 bg-purple-50' : 'border-gray-100 hover:border-gray-200 bg-white';
+                        const layoutClass = isHorizontal ? 'p-3 flex items-center gap-3' : 'p-2 text-center';
+                        
+                        const item = h('div', { class: `${baseClass} ${activeClass} ${layoutClass}` });
+                        
+                        if (opt.icon) {
+                            item.appendChild(uiIcon(opt.icon, `text-[${isHorizontal ? '24' : '20'}px] ${isActive ? 'text-purple-600' : 'text-gray-400'}`));
+                        }
+                        
+                        if (isHorizontal) {
+                            const info = h('div.flex-1', [
+                                h('div', { class: `font-medium ${isActive ? 'text-purple-700' : 'text-gray-700'}` }, opt.label),
+                                opt.description && h('div.text-\[10px\].text-gray-500', opt.description)
+                            ].filter(Boolean));
+                            item.appendChild(info);
+                            if (isActive) item.appendChild(uiIcon('check_circle', 'text-purple-500 text-[20px]'));
+                        } else {
+                            item.appendChild(h('div', { class: `text-xs font-medium mt-1 ${isActive ? 'text-purple-700' : 'text-gray-600'}` }, opt.label || opt.value));
+                        }
+                        
+                        item.onclick = () => {
+                            const newValue = (allowDeselect && isActive) ? 'auto' : opt.value;
+                            currentConfig[configKey] = newValue;
+                            setter(store, conv.id, newValue, { silent: true });
+                            renderOptions(container, options, configKey, setter, { columns, allowDeselect, layout });
+                            updateImageGenControls();
+                        };
+                        
+                        container.appendChild(item);
+                    });
+                };
+                
+                // 1. 输出类型
+                const modalityGrid = h('div.grid.grid-cols-2.gap-3');
+                renderOptions(modalityGrid, RESPONSE_MODALITY_OPTIONS, 'responseModality', setResponseModality, { layout: 'horizontal' });
+                body.appendChild(section({ label: '输出类型', children: modalityGrid }));
+                
+                // 2. 宽高比（可取消）
+                const aspectGrid = h('div.grid.grid-cols-4.gap-2');
+                renderOptions(aspectGrid, ASPECT_RATIO_OPTIONS, 'aspectRatio', setImageAspectRatio, { allowDeselect: true });
+                body.appendChild(section({ label: '宽高比', hint: '不选择 = 自动', children: aspectGrid }));
+                
+                // 3. 图像分辨率（仅特定模型）
+                if (hasImageSize) {
+                    const sizeGrid = h('div.grid.grid-cols-3.gap-3');
+                    renderOptions(sizeGrid, IMAGE_SIZE_OPTIONS, 'imageSize', setImageSize, { layout: 'horizontal' });
+                    body.appendChild(section({ label: '图像分辨率', children: sizeGrid }));
+                }
+                
+                sheetContainer.appendChild(header);
+                sheetContainer.appendChild(body);
+            });
+        }
+        
+        /**
+         * 更新图像生成控件的显示状态
+         */
+        function updateImageGenControls() {
+            const wrapper = getImageGenWrapper();
+            if (!wrapper) return;
+            
+            const store = getStore();
+            const conv = store?.getActiveConversation?.();
+            const model = conv?.selectedModel;
+            const channelConfig = conv ? getChannelConfig(store, conv) : null;
+            
+            if (!model || channelConfig?.type !== 'gemini' || !supportsImageGeneration(model)) {
+                wrapper.style.display = 'none';
+                return;
+            }
+            
+            wrapper.style.display = 'flex';
+            const btnEl = wrapper.querySelector('[data-gemini-imagegen-btn]');
+            if (btnEl) {
+                const ratio = getImageGenConfig(conv).aspectRatio;
+                btnEl.innerHTML = `<span class="material-symbols-outlined text-[12px]">aspect_ratio</span> ${ratio === 'auto' ? '自动' : ratio}`;
+            }
+        }
+        
+        /**
+         * 渲染图像生成设置控件
+         */
+        function renderImageGenSettings() {
+            const { h } = window.IdoUI;
+            
+            const settingsBtn = h('button', {
+                type: 'button',
+                class: 'px-2 py-0.5 text-[10px] rounded border border-purple-300 bg-purple-50 hover:border-purple-400 text-purple-700 font-medium transition-colors flex items-center gap-1',
+                'data-gemini-imagegen-btn': 'true',
+                html: '<span class="material-symbols-outlined text-[12px]">aspect_ratio</span> 自动',
+                onclick: (e) => {
+                    e.stopPropagation();
+                    const store = getStore();
+                    const conv = store?.getActiveConversation?.();
+                    if (!conv) return;
+                    showImageGenBottomSheet(conv, getChannelConfig(store, conv));
+                }
+            });
+            
+            const wrapper = h('div', {
+                id: IMAGE_GEN_WRAPPER_ID,
+                class: 'flex items-center gap-2',
+                style: { display: 'none', order: '2' }
+            }, [
+                h('div.flex.items-center.gap-1', [
+                    h('span.text-\[10px\].text-gray-400', '图像'),
+                    settingsBtn
+                ])
+            ]);
+            
+            setTimeout(() => updateImageGenControls(), 0);
+            setTimeout(() => updateImageGenControls(), 100);
             return wrapper;
         }
 
@@ -1568,7 +1653,8 @@
             registerBundle('core-gemini-channel-ui', {
                 slots: {
                     [SLOTS.INPUT_TOP]: [
-                        { id: 'gemini-thinking-budget', render: renderThinkingBudget }
+                        { id: 'gemini-thinking-budget', render: renderThinkingBudget },
+                        { id: 'gemini-image-gen-settings', render: renderImageGenSettings }
                     ]
                 },
                 init: function() {
@@ -1644,6 +1730,60 @@
                 setGoogleSearch(store, conv.id, enabled, { silent: true });
             }
         });
+        
+        // URL Context 工具
+        window.IdoFront.inputTools.register({
+            id: 'gemini-url-context',
+            icon: 'link',
+            label: 'URL 上下文',
+            description: '允许模型访问消息中提供的 URL 内容来增强回答',
+            shouldShow: (ctx) => {
+                // 仅在 Gemini 渠道时显示
+                if (!ctx.activeChannel) return false;
+                return ctx.activeChannel.type === 'gemini';
+            },
+            getState: () => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return false;
+                const conv = store.getActiveConversation();
+                return getUrlContextConfig(conv);
+            },
+            setState: (enabled) => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return;
+                const conv = store.getActiveConversation();
+                if (!conv) return;
+                // 使用静默模式，避免触发全局 UI 更新导致卡顿
+                setUrlContext(store, conv.id, enabled, { silent: true });
+            }
+        });
+        
+        // YouTube 视频工具
+        window.IdoFront.inputTools.register({
+            id: 'gemini-youtube-video',
+            icon: 'smart_display',
+            label: 'YouTube 视频',
+            description: '自动识别消息中的 YouTube 链接并分析视频内容',
+            shouldShow: (ctx) => {
+                // 仅在 Gemini 渠道时显示
+                if (!ctx.activeChannel) return false;
+                return ctx.activeChannel.type === 'gemini';
+            },
+            getState: () => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return false;
+                const conv = store.getActiveConversation();
+                return getYouTubeVideoConfig(conv);
+            },
+            setState: (enabled) => {
+                const store = getStore();
+                if (!store || !store.getActiveConversation) return;
+                const conv = store.getActiveConversation();
+                if (!conv) return;
+                // 使用静默模式，避免触发全局 UI 更新导致卡顿
+                setYouTubeVideo(store, conv.id, enabled, { silent: true });
+            }
+        });
     }
     
     /**
@@ -1653,69 +1793,23 @@
         const store = getStore();
         if (!store) return;
         
+        const { h, sheetHeader, switchItem } = window.IdoUI;
+        
         Framework.showBottomSheet((sheetContainer) => {
-            // Header
-            const header = document.createElement('div');
-            header.className = 'px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0 bg-white';
+            const header = sheetHeader({ title: 'Gemini 工具设置', onClose: () => Framework.hideBottomSheet() });
+            const body = h('div.flex-1.overflow-y-auto.px-6.py-4.space-y-6');
             
-            const title = document.createElement('h3');
-            title.className = 'text-lg font-semibold text-gray-800';
-            title.textContent = 'Gemini 工具设置';
-            
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'text-gray-400 hover:text-gray-600 transition-colors';
-            closeBtn.innerHTML = '<span class="material-symbols-outlined text-[24px]">close</span>';
-            closeBtn.onclick = () => Framework.hideBottomSheet();
-            
-            header.appendChild(title);
-            header.appendChild(closeBtn);
-            
-            // Body
-            const body = document.createElement('div');
-            body.className = 'flex-1 overflow-y-auto px-6 py-4 space-y-6';
-            
-            // 代码执行开关
-            const codeExecItem = document.createElement('div');
-            codeExecItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
-            
-            const info = document.createElement('div');
-            info.className = 'flex-1 pr-4';
-            const label = document.createElement('div');
-            label.className = 'font-bold text-gray-800';
-            label.textContent = '代码执行 (Code Execution)';
-            const desc = document.createElement('div');
-            desc.className = 'text-xs text-gray-500 mt-1';
-            desc.textContent = '允许模型生成并运行 Python 代码以解决复杂问题，如数据分析、数学计算、图表绘制等。';
-            info.appendChild(label);
-            info.appendChild(desc);
-            
-            const isEnabled = getCodeExecutionConfig(conv);
-            
-            // 使用 DeclarativeComponents 的开关样式
-            const switchLabel = document.createElement('label');
-            switchLabel.className = 'ido-form-switch';
-            const switchInput = document.createElement('input');
-            switchInput.type = 'checkbox';
-            switchInput.className = 'ido-form-switch__input';
-            switchInput.checked = isEnabled;
-            const slider = document.createElement('div');
-            slider.className = 'ido-form-switch__slider';
-            
-            switchInput.onchange = () => {
-                setCodeExecution(store, conv.id, switchInput.checked);
-                // 刷新工具按钮状态
-                if (window.IdoFront.inputTools && window.IdoFront.inputTools.refresh) {
-                    window.IdoFront.inputTools.refresh();
+            body.appendChild(switchItem({
+                label: '代码执行 (Code Execution)',
+                description: '允许模型生成并运行 Python 代码以解决复杂问题，如数据分析、数学计算、图表绘制等。',
+                checked: getCodeExecutionConfig(conv),
+                onChange: (checked) => {
+                    setCodeExecution(store, conv.id, checked);
+                    if (window.IdoFront?.inputTools?.refresh) {
+                        window.IdoFront.inputTools.refresh();
+                    }
                 }
-            };
-            
-            switchLabel.appendChild(switchInput);
-            switchLabel.appendChild(slider);
-            
-            codeExecItem.appendChild(info);
-            codeExecItem.appendChild(switchLabel);
-            
-            body.appendChild(codeExecItem);
+            }));
             
             sheetContainer.appendChild(header);
             sheetContainer.appendChild(body);
@@ -1734,13 +1828,11 @@
      * 注册 Gemini 思考规则设置分区到通用设置
      */
     function registerGeminiThinkingSettingsSection() {
-        if (!window.IdoFront || !window.IdoFront.settingsManager ||
-            typeof window.IdoFront.settingsManager.registerGeneralSection !== 'function') {
-            return;
-        }
+        const sm = window.IdoFront?.settingsManager;
+        if (!sm?.registerGeneralSection) return;
         
         try {
-            const sm = window.IdoFront.settingsManager;
+            const { h, formInput } = window.IdoUI;
             sm.registerGeneralSection({
                 id: 'gemini-thinking',
                 title: 'Gemini 思考功能',
@@ -1749,73 +1841,37 @@
                 order: 20,
                 render: function(container) {
                     container.innerHTML = '';
-                    
-                    // 加载当前规则
                     const rules = loadGlobalThinkingRules();
                     
-                    // Budget 模式规则输入框
-                    const budgetGroup = document.createElement('div');
-                    budgetGroup.className = 'ido-form-group';
+                    container.appendChild(formInput({
+                        label: '数值预算模式 (thinkingBudget)',
+                        hint: '匹配的模型将显示数值预算滑槽（适用于 Gemini 2.5 系列）',
+                        value: rules.budgetModelPattern,
+                        placeholder: 'gemini-2\\.5|gemini-2-5',
+                        onChange: (val) => {
+                            const r = loadGlobalThinkingRules();
+                            r.budgetModelPattern = val || DEFAULT_THINKING_RULES.budgetModelPattern;
+                            saveGlobalThinkingRules(r);
+                        }
+                    }));
                     
-                    const budgetLabel = document.createElement('div');
-                    budgetLabel.className = 'ido-form-label';
-                    budgetLabel.textContent = '数值预算模式 (thinkingBudget)';
-                    budgetGroup.appendChild(budgetLabel);
-                    
-                    const budgetHint = document.createElement('div');
-                    budgetHint.className = 'text-[10px] text-gray-500 mb-1';
-                    budgetHint.textContent = '匹配的模型将显示数值预算滑槽（适用于 Gemini 2.5 系列）';
-                    budgetGroup.appendChild(budgetHint);
-                    
-                    const budgetInput = document.createElement('input');
-                    budgetInput.type = 'text';
-                    budgetInput.className = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors font-mono';
-                    budgetInput.value = rules.budgetModelPattern;
-                    budgetInput.placeholder = 'gemini-2\\.5|gemini-2-5';
-                    
-                    budgetInput.onchange = () => {
-                        const currentRules = loadGlobalThinkingRules();
-                        currentRules.budgetModelPattern = budgetInput.value || DEFAULT_THINKING_RULES.budgetModelPattern;
-                        saveGlobalThinkingRules(currentRules);
-                    };
-                    
-                    budgetGroup.appendChild(budgetInput);
-                    container.appendChild(budgetGroup);
-                    
-                    // Level 模式规则输入框
-                    const levelGroup = document.createElement('div');
-                    levelGroup.className = 'ido-form-group mt-3';
-                    
-                    const levelLabel = document.createElement('div');
-                    levelLabel.className = 'ido-form-label';
-                    levelLabel.textContent = '等级选择模式 (thinkingLevel)';
-                    levelGroup.appendChild(levelLabel);
-                    
-                    const levelHint = document.createElement('div');
-                    levelHint.className = 'text-[10px] text-gray-500 mb-1';
-                    levelHint.textContent = '匹配的模型将显示 Low/High 等级选择（适用于 Gemini 3 系列）';
-                    levelGroup.appendChild(levelHint);
-                    
-                    const levelInput = document.createElement('input');
-                    levelInput.type = 'text';
-                    levelInput.className = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors font-mono';
-                    levelInput.value = rules.levelModelPattern;
-                    levelInput.placeholder = 'gemini-3';
-                    
-                    levelInput.onchange = () => {
-                        const currentRules = loadGlobalThinkingRules();
-                        currentRules.levelModelPattern = levelInput.value || DEFAULT_THINKING_RULES.levelModelPattern;
-                        saveGlobalThinkingRules(currentRules);
-                    };
-                    
-                    levelGroup.appendChild(levelInput);
+                    const levelGroup = formInput({
+                        label: '等级选择模式 (thinkingLevel)',
+                        hint: '匹配的模型将显示 Low/High 等级选择（适用于 Gemini 3 系列）',
+                        value: rules.levelModelPattern,
+                        placeholder: 'gemini-3',
+                        onChange: (val) => {
+                            const r = loadGlobalThinkingRules();
+                            r.levelModelPattern = val || DEFAULT_THINKING_RULES.levelModelPattern;
+                            saveGlobalThinkingRules(r);
+                        }
+                    });
+                    levelGroup.classList.add('mt-3');
                     container.appendChild(levelGroup);
                     
-                    // 说明文字
-                    const helpText = document.createElement('div');
-                    helpText.className = 'text-[10px] text-gray-400 mt-3';
-                    helpText.innerHTML = '提示：使用正则表达式匹配模型名称。例如 <code class="bg-gray-100 px-1 rounded">gemini-2\\.5</code> 匹配包含 "gemini-2.5" 的模型名。';
-                    container.appendChild(helpText);
+                    container.appendChild(h('div.text-\[10px\].text-gray-400.mt-3', {
+                        html: '提示：使用正则表达式匹配模型名称。例如 <code class="bg-gray-100 px-1 rounded">gemini-2\\.5</code> 匹配包含 "gemini-2.5" 的模型名。'
+                    }));
                 }
             });
         } catch (e) {
@@ -1823,14 +1879,71 @@
         }
     }
     
+    /**
+     * 注册 Gemini 图像生成规则设置分区到通用设置
+     */
+    function registerGeminiImageGenSettingsSection() {
+        const sm = window.IdoFront?.settingsManager;
+        if (!sm?.registerGeneralSection) return;
+        
+        try {
+            const { h, formInput } = window.IdoUI;
+            sm.registerGeneralSection({
+                id: 'gemini-image-gen',
+                title: 'Gemini 图像生成',
+                description: '配置支持图像生成的模型匹配规则（正则表达式）',
+                icon: 'image',
+                order: 21,
+                render: function(container) {
+                    container.innerHTML = '';
+                    const rules = loadImageGenRules();
+                    
+                    container.appendChild(formInput({
+                        label: '图像生成模型',
+                        hint: '匹配的模型将显示图像生成设置（宽高比、输出类型等）',
+                        value: rules.imageModelPattern,
+                        placeholder: 'gemini-.*-image|imagen',
+                        onChange: (val) => {
+                            const r = loadImageGenRules();
+                            r.imageModelPattern = val || DEFAULT_IMAGE_GEN_RULES.imageModelPattern;
+                            saveImageGenRules(r);
+                        }
+                    }));
+                    
+                    const sizeGroup = formInput({
+                        label: '支持分辨率选择的模型',
+                        hint: '匹配的模型将显示 1K/2K/4K 分辨率选项（适用于 Gemini 3 Pro Image）',
+                        value: rules.imageSizeModelPattern,
+                        placeholder: 'gemini-3.*-image',
+                        onChange: (val) => {
+                            const r = loadImageGenRules();
+                            r.imageSizeModelPattern = val || DEFAULT_IMAGE_GEN_RULES.imageSizeModelPattern;
+                            saveImageGenRules(r);
+                        }
+                    });
+                    sizeGroup.classList.add('mt-3');
+                    container.appendChild(sizeGroup);
+                    
+                    container.appendChild(h('div.text-\[10px\].text-gray-400.mt-3', {
+                        html: '提示：图像生成模型支持设置宽高比（1:1、16:9、9:16 等）和输出类型（文本+图片 或 仅图片）。'
+                    }));
+                }
+            });
+        } catch (e) {
+            console.warn('[GeminiChannel] registerGeminiImageGenSettingsSection error:', e);
+        }
+    }
+    
     // 尝试立即注册（兼容 settingsManager 已就绪的情况）
     registerGeminiThinkingSettingsSection();
+    registerGeminiImageGenSettingsSection();
     
     // 监听设置管理器就绪事件，确保在 settingsManager.init 之后也能完成注册
     if (typeof document !== 'undefined') {
         try {
             document.addEventListener('IdoFrontSettingsReady', function() {
                 registerGeminiThinkingSettingsSection();
+                registerGeminiImageGenSettingsSection();
             });
         } catch (e) {
             console.warn('[GeminiChannel] attach IdoFrontSettingsReady listener error:', e);
@@ -1842,7 +1955,7 @@
     window.IdoFront.geminiChannel.useLevelMode = useLevelMode;
     window.IdoFront.geminiChannel.supportsThinking = supportsThinking;
     window.IdoFront.geminiChannel.getThinkingConfig = getThinkingConfig;
-    window.IdoFront.geminiChannel.getThinkingRules = getThinkingRules;
+    window.IdoFront.geminiChannel.getThinkingRules = loadGlobalThinkingRules; // 别名，兼容旧代码
     window.IdoFront.geminiChannel.loadGlobalThinkingRules = loadGlobalThinkingRules;
     window.IdoFront.geminiChannel.saveGlobalThinkingRules = saveGlobalThinkingRules;
     window.IdoFront.geminiChannel.setThinkingBudget = setThinkingBudget;
@@ -1851,9 +1964,29 @@
     window.IdoFront.geminiChannel.setCodeExecution = setCodeExecution;
     window.IdoFront.geminiChannel.getGoogleSearchConfig = getGoogleSearchConfig;
     window.IdoFront.geminiChannel.setGoogleSearch = setGoogleSearch;
+    window.IdoFront.geminiChannel.getUrlContextConfig = getUrlContextConfig;
+    window.IdoFront.geminiChannel.setUrlContext = setUrlContext;
+    window.IdoFront.geminiChannel.getYouTubeVideoConfig = getYouTubeVideoConfig;
+    window.IdoFront.geminiChannel.setYouTubeVideo = setYouTubeVideo;
+    window.IdoFront.geminiChannel.extractYouTubeUrls = extractYouTubeUrls;
     window.IdoFront.geminiChannel.processGroundingMetadata = processGroundingMetadata;
+    window.IdoFront.geminiChannel.processUrlContextMetadata = processUrlContextMetadata;
     window.IdoFront.geminiChannel.BUDGET_PRESETS = BUDGET_PRESETS;
     window.IdoFront.geminiChannel.LEVEL_OPTIONS = LEVEL_OPTIONS;
     window.IdoFront.geminiChannel.DEFAULT_THINKING_RULES = DEFAULT_THINKING_RULES;
+    
+    // 图像生成相关
+    window.IdoFront.geminiChannel.supportsImageGeneration = supportsImageGeneration;
+    window.IdoFront.geminiChannel.supportsImageSize = supportsImageSize;
+    window.IdoFront.geminiChannel.getImageGenConfig = getImageGenConfig;
+    window.IdoFront.geminiChannel.setImageAspectRatio = setImageAspectRatio;
+    window.IdoFront.geminiChannel.setImageSize = setImageSize;
+    window.IdoFront.geminiChannel.setResponseModality = setResponseModality;
+    window.IdoFront.geminiChannel.loadImageGenRules = loadImageGenRules;
+    window.IdoFront.geminiChannel.saveImageGenRules = saveImageGenRules;
+    window.IdoFront.geminiChannel.ASPECT_RATIO_OPTIONS = ASPECT_RATIO_OPTIONS;
+    window.IdoFront.geminiChannel.IMAGE_SIZE_OPTIONS = IMAGE_SIZE_OPTIONS;
+    window.IdoFront.geminiChannel.RESPONSE_MODALITY_OPTIONS = RESPONSE_MODALITY_OPTIONS;
+    window.IdoFront.geminiChannel.DEFAULT_IMAGE_GEN_RULES = DEFAULT_IMAGE_GEN_RULES;
 
 })();

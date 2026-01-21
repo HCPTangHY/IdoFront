@@ -310,7 +310,9 @@ const FrameworkCore = (function() {
             // 消息
             addMessage: messages ? messages.addMessage : null,
             updateLastMessage: messages ? messages.updateLastMessage : null,
+            updateMessageById: messages ? messages.updateMessageById : null,
             finalizeStreamingMessage: messages ? messages.finalizeStreamingMessage : null,
+            finalizeStreamingMessageById: messages ? messages.finalizeStreamingMessageById : null,
             renderAllPendingMarkdown: messages ? messages.renderAllPendingMarkdown : null,
             clearMessages: messages ? messages.clearMessages : null,
             addLoadingIndicator: messages ? messages.addLoadingIndicator : null,

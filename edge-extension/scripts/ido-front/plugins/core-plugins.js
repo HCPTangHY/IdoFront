@@ -677,7 +677,11 @@
             const triggerBtn = document.getElementById('core-input-tools-trigger');
             if (triggerBtn) {
                 const visibleTools = getVisibleTools();
-                triggerBtn.classList.toggle('hidden', visibleTools.length === 0);
+                // 检查是否有 MCP 服务器
+                const mcpSettings = window.IdoFront.mcpSettings;
+                const hasMCPServers = mcpSettings && mcpSettings.getServerGroups && mcpSettings.getServerGroups().length > 0;
+                // 有内置工具或 MCP 服务器时显示
+                triggerBtn.classList.toggle('hidden', visibleTools.length === 0 && !hasMCPServers);
             }
         };
 
@@ -704,6 +708,7 @@
             store.events.on('updated', updateToolsTriggerVisibility);
             store.events.on('channel:changed', updateToolsTriggerVisibility);
             store.events.on('conversation:switched', updateToolsTriggerVisibility);
+            store.events.on('mcp:tools:updated', updateToolsTriggerVisibility);
         }
 
         const showInputToolsSheet = () => {
@@ -724,93 +729,32 @@
                 header.appendChild(title);
                 header.appendChild(closeBtn);
                 
-                // Body - 直接显示工具开关列表
+                // Body - 分组显示工具
                 const body = document.createElement('div');
-                body.className = "flex-1 overflow-y-auto px-6 py-4 space-y-3";
+                body.className = "flex-1 overflow-y-auto px-6 py-4 space-y-6";
                 
-                // 获取当前可见的工具
+                // 获取当前可见的内置工具
                 const visibleTools = getVisibleTools();
                 
+                // ========== 内置工具分组 ==========
                 if (visibleTools.length > 0) {
-                    visibleTools.forEach(tool => {
-                        // 如果工具有 render 函数，使用它；否则使用默认的开关样式
-                        if (typeof tool.render === 'function') {
-                            const customEl = tool.render(body, context);
-                            if (customEl) body.appendChild(customEl);
-                        } else {
-                            // 默认开关样式
-                            const toolItem = document.createElement('div');
-                            toolItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
-                            
-                            const info = document.createElement('div');
-                            info.className = 'flex items-center gap-3 flex-1';
-                            
-                            // 图标
-                            const iconEl = document.createElement('span');
-                            iconEl.className = 'material-symbols-outlined text-[24px] text-gray-600';
-                            iconEl.textContent = tool.icon || 'build';
-                            
-                            const textGroup = document.createElement('div');
-                            textGroup.className = 'flex-1';
-                            
-                            const labelEl = document.createElement('div');
-                            labelEl.className = 'font-medium text-gray-800';
-                            labelEl.textContent = tool.label || tool.id;
-                            
-                            if (tool.description) {
-                                const descEl = document.createElement('div');
-                                descEl.className = 'text-xs text-gray-500 mt-0.5';
-                                descEl.textContent = tool.description;
-                                textGroup.appendChild(labelEl);
-                                textGroup.appendChild(descEl);
-                            } else {
-                                textGroup.appendChild(labelEl);
-                            }
-                            
-                            info.appendChild(iconEl);
-                            info.appendChild(textGroup);
-                            
-                            // 开关（如果工具提供 getState/setState）
-                            if (typeof tool.getState === 'function' && typeof tool.setState === 'function') {
-                                const switchLabel = document.createElement('label');
-                                switchLabel.className = 'ido-form-switch';
-                                const switchInput = document.createElement('input');
-                                switchInput.type = 'checkbox';
-                                switchInput.className = 'ido-form-switch__input';
-                                switchInput.checked = tool.getState();
-                                const slider = document.createElement('div');
-                                slider.className = 'ido-form-switch__slider';
-                                
-                                switchInput.onchange = () => {
-                                    tool.setState(switchInput.checked);
-                                };
-                                
-                                switchLabel.appendChild(switchInput);
-                                switchLabel.appendChild(slider);
-                                
-                                toolItem.appendChild(info);
-                                toolItem.appendChild(switchLabel);
-                            } else if (typeof tool.onClick === 'function') {
-                                // 没有开关，但有点击事件
-                                toolItem.className += ' cursor-pointer hover:bg-gray-100';
-                                toolItem.onclick = () => {
-                                    context.hideBottomSheet();
-                                    tool.onClick();
-                                };
-                                toolItem.appendChild(info);
-                                
-                                const arrow = document.createElement('span');
-                                arrow.className = 'material-symbols-outlined text-gray-400';
-                                arrow.textContent = 'chevron_right';
-                                toolItem.appendChild(arrow);
-                            } else {
-                                toolItem.appendChild(info);
-                            }
-                            
-                            body.appendChild(toolItem);
-                        }
+                    const builtinSection = createToolSection('内置工具', 'build', visibleTools);
+                    body.appendChild(builtinSection);
+                }
+                
+                // ========== MCP 工具分组 ==========
+                const mcpSettings = window.IdoFront.mcpSettings;
+                if (mcpSettings) {
+                    const serverGroups = mcpSettings.getServerGroups ? mcpSettings.getServerGroups() : [];
+                    
+                    serverGroups.forEach(server => {
+                        const mcpSection = createMCPSection(server);
+                        body.appendChild(mcpSection);
                     });
-                } else {
+                }
+                
+                // 如果没有任何工具
+                if (visibleTools.length === 0 && (!mcpSettings || !mcpSettings.getServerGroups)) {
                     const emptyContent = document.createElement('div');
                     emptyContent.className = "text-center text-gray-500 py-10";
                     emptyContent.textContent = "暂无可用工具";
@@ -821,6 +765,224 @@
                 sheetContainer.appendChild(body);
             });
         };
+        
+        // 创建工具分组区域
+        function createToolSection(title, icon, tools) {
+            const section = document.createElement('div');
+            section.className = 'space-y-3';
+            
+            // 分组标题
+            const sectionHeader = document.createElement('div');
+            sectionHeader.className = 'flex items-center gap-2 text-sm font-medium text-gray-500 px-1';
+            sectionHeader.innerHTML = `<span class="material-symbols-outlined text-[18px]">${icon}</span> ${title}`;
+            section.appendChild(sectionHeader);
+            
+            // 工具列表
+            tools.forEach(tool => {
+                const toolItem = createToolItem(tool);
+                section.appendChild(toolItem);
+            });
+            
+            return section;
+        }
+        
+        // 创建 MCP 服务器分组
+        function createMCPSection(server) {
+            const section = document.createElement('div');
+            section.className = 'space-y-3';
+            
+            // 状态配置
+            const statusConfig = {
+                connected: { dot: 'bg-green-500', text: '已连接', textColor: 'text-green-600' },
+                connecting: { dot: 'bg-yellow-500', text: '连接中...', textColor: 'text-yellow-600' },
+                disconnected: { dot: 'bg-gray-300', text: '未连接', textColor: 'text-gray-400' },
+                error: { dot: 'bg-red-500', text: '连接失败', textColor: 'text-red-500' }
+            };
+            const status = statusConfig[server.status] || statusConfig.disconnected;
+            
+            // 分组标题
+            const sectionHeader = document.createElement('div');
+            sectionHeader.className = 'flex items-center justify-between px-1';
+            
+            const headerLeft = document.createElement('div');
+            headerLeft.className = 'flex items-center gap-2 text-sm font-medium text-gray-500';
+            headerLeft.innerHTML = `
+                <span class="material-symbols-outlined text-[18px] text-purple-500">extension</span>
+                <span>MCP: ${server.name}</span>
+                <span class="flex items-center gap-1 text-xs ${status.textColor}">
+                    <span class="w-1.5 h-1.5 rounded-full ${status.dot}"></span>
+                    ${status.text}
+                </span>
+            `;
+            sectionHeader.appendChild(headerLeft);
+            
+            // 如果未连接，显示连接按钮
+            if (server.status === 'disconnected') {
+                const connectBtn = document.createElement('button');
+                connectBtn.className = 'text-xs text-blue-500 hover:text-blue-600 font-medium';
+                connectBtn.textContent = '连接';
+                connectBtn.onclick = () => {
+                    // TODO: 实际连接逻辑
+                    console.log('[MCP] Connect to:', server.name);
+                };
+                sectionHeader.appendChild(connectBtn);
+            }
+            
+            section.appendChild(sectionHeader);
+            
+            // 工具列表（仅已连接时显示）
+            if (server.status === 'connected' && server.tools && server.tools.length > 0) {
+                server.tools.forEach(tool => {
+                    const toolItem = createMCPToolItem(tool, server);
+                    section.appendChild(toolItem);
+                });
+            } else if (server.status === 'connected' && (!server.tools || server.tools.length === 0)) {
+                const emptyHint = document.createElement('div');
+                emptyHint.className = 'text-xs text-gray-400 px-1 py-2';
+                emptyHint.textContent = '该服务器暂无可用工具';
+                section.appendChild(emptyHint);
+            }
+            
+            return section;
+        }
+        
+        // 创建内置工具项
+        function createToolItem(tool) {
+            const toolItem = document.createElement('div');
+            toolItem.className = 'flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-100';
+            
+            const info = document.createElement('div');
+            info.className = 'flex items-center gap-3 flex-1';
+            
+            // 图标
+            const iconEl = document.createElement('span');
+            iconEl.className = 'material-symbols-outlined text-[24px] text-gray-600';
+            iconEl.textContent = tool.icon || 'build';
+            
+            const textGroup = document.createElement('div');
+            textGroup.className = 'flex-1';
+            
+            const labelEl = document.createElement('div');
+            labelEl.className = 'font-medium text-gray-800';
+            labelEl.textContent = tool.label || tool.id;
+            
+            if (tool.description) {
+                const descEl = document.createElement('div');
+                descEl.className = 'text-xs text-gray-500 mt-0.5';
+                descEl.textContent = tool.description;
+                textGroup.appendChild(labelEl);
+                textGroup.appendChild(descEl);
+            } else {
+                textGroup.appendChild(labelEl);
+            }
+            
+            info.appendChild(iconEl);
+            info.appendChild(textGroup);
+            
+            // 如果工具有 render 函数，使用自定义渲染
+            if (typeof tool.render === 'function') {
+                const customEl = tool.render(null, context);
+                if (customEl) return customEl;
+            }
+            
+            // 开关（如果工具提供 getState/setState）
+            if (typeof tool.getState === 'function' && typeof tool.setState === 'function') {
+                const switchLabel = document.createElement('label');
+                switchLabel.className = 'ido-form-switch';
+                const switchInput = document.createElement('input');
+                switchInput.type = 'checkbox';
+                switchInput.className = 'ido-form-switch__input';
+                switchInput.checked = tool.getState();
+                const slider = document.createElement('div');
+                slider.className = 'ido-form-switch__slider';
+                
+                switchInput.onchange = () => {
+                    tool.setState(switchInput.checked);
+                };
+                
+                switchLabel.appendChild(switchInput);
+                switchLabel.appendChild(slider);
+                
+                toolItem.appendChild(info);
+                toolItem.appendChild(switchLabel);
+            } else if (typeof tool.onClick === 'function') {
+                // 没有开关，但有点击事件
+                toolItem.className += ' cursor-pointer hover:bg-gray-100';
+                toolItem.onclick = () => {
+                    context.hideBottomSheet();
+                    tool.onClick();
+                };
+                toolItem.appendChild(info);
+                
+                const arrow = document.createElement('span');
+                arrow.className = 'material-symbols-outlined text-gray-400';
+                arrow.textContent = 'chevron_right';
+                toolItem.appendChild(arrow);
+            } else {
+                toolItem.appendChild(info);
+            }
+            
+            return toolItem;
+        }
+        
+        // 创建 MCP 工具项
+        function createMCPToolItem(tool, server) {
+            const toolItem = document.createElement('div');
+            toolItem.className = 'flex items-center justify-between p-4 rounded-xl bg-purple-50/50 border border-purple-100';
+            
+            const info = document.createElement('div');
+            info.className = 'flex items-center gap-3 flex-1';
+            
+            // 图标
+            const iconEl = document.createElement('span');
+            iconEl.className = 'material-symbols-outlined text-[24px] text-purple-500';
+            iconEl.textContent = 'function';
+            
+            const textGroup = document.createElement('div');
+            textGroup.className = 'flex-1';
+            
+            const labelEl = document.createElement('div');
+            labelEl.className = 'font-medium text-gray-800 font-mono text-sm';
+            labelEl.textContent = tool.name;
+            
+            if (tool.description) {
+                const descEl = document.createElement('div');
+                descEl.className = 'text-xs text-gray-500 mt-0.5';
+                descEl.textContent = tool.description;
+                textGroup.appendChild(labelEl);
+                textGroup.appendChild(descEl);
+            } else {
+                textGroup.appendChild(labelEl);
+            }
+            
+            info.appendChild(iconEl);
+            info.appendChild(textGroup);
+            
+            // 开关
+            const mcpSettings = window.IdoFront.mcpSettings;
+            const switchLabel = document.createElement('label');
+            switchLabel.className = 'ido-form-switch';
+            const switchInput = document.createElement('input');
+            switchInput.type = 'checkbox';
+            switchInput.className = 'ido-form-switch__input';
+            switchInput.checked = tool.enabled !== false;
+            const slider = document.createElement('div');
+            slider.className = 'ido-form-switch__slider';
+            
+            switchInput.onchange = () => {
+                if (mcpSettings && mcpSettings.setToolState) {
+                    mcpSettings.setToolState(tool.id, switchInput.checked);
+                }
+            };
+            
+            switchLabel.appendChild(switchInput);
+            switchLabel.appendChild(slider);
+            
+            toolItem.appendChild(info);
+            toolItem.appendChild(switchLabel);
+            
+            return toolItem;
+        }
 
         // 内部注册函数
         const doRegister = (toolDef) => {
