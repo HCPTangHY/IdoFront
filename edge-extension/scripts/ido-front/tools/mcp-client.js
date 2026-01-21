@@ -482,29 +482,44 @@
     function registerTools(serverId, tools) {
         const toolRegistry = window.IdoFront.toolRegistry;
         if (!toolRegistry) return;
+
+        const mcpSettings = window.IdoFront.mcpSettings;
         
-        const toolDefs = tools.map(tool => ({
-            id: `mcp:${serverId}:${tool.name}`,
-            name: tool.name,
-            description: tool.description || '',
-            parameters: tool.inputSchema || { type: 'object', properties: {} },
-            provider: 'mcp',
-            serverId: serverId,
-            execute: async (args) => {
-                const result = await callTool(serverId, tool.name, args);
-                // MCP 工具结果格式转换
-                if (result.content && Array.isArray(result.content)) {
-                    // 提取文本内容
-                    const textParts = result.content
-                        .filter(c => c.type === 'text')
-                        .map(c => c.text);
-                    return textParts.join('\n');
+        const toolDefs = tools.map(tool => {
+            const enabledByDefault = (mcpSettings && typeof mcpSettings.getToolState === 'function')
+                ? mcpSettings.getToolState(`${serverId}:${tool.name}`)
+                : true;
+
+            return {
+                id: `mcp:${serverId}:${tool.name}`,
+                name: tool.name,
+                description: tool.description || '',
+                parameters: tool.inputSchema || { type: 'object', properties: {} },
+                provider: 'mcp',
+                serverId: serverId,
+                enabledByDefault,
+                execute: async (args) => {
+                    const result = await callTool(serverId, tool.name, args);
+                    // MCP 工具结果格式转换
+                    if (result.content && Array.isArray(result.content)) {
+                        // 提取文本内容
+                        const textParts = result.content
+                            .filter(c => c.type === 'text')
+                            .map(c => c.text);
+                        return textParts.join('\n');
+                    }
+                    return result;
                 }
-                return result;
-            }
-        }));
+            };
+        });
         
         toolRegistry.registerMany(toolDefs, 'mcp');
+
+        // 覆盖历史 enable 状态（避免 ido.tools.enabled 与 MCP 工具开关不同步）
+        toolDefs.forEach(def => {
+            toolRegistry.setEnabled(def.id, def.enabledByDefault !== false);
+        });
+
         console.log(`[MCP] Registered ${toolDefs.length} tools from ${serverId}`);
     }
     

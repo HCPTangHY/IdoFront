@@ -497,6 +497,7 @@
                 };
             } else if (msg.role === 'tool') {
                 // 工具响应消息 - 转换为 Gemini 的 functionResponse 格式
+                // 按官方说明：thought_signature 需要回填在 functionCall part 上；functionResponse 不要求携带。
                 const parts = [];
                 
                 if (msg.toolResponses && Array.isArray(msg.toolResponses)) {
@@ -525,6 +526,8 @@
                 const thoughtSig = (role === 'model' && msg.metadata?.gemini?.thoughtSignature)
                     ? msg.metadata.gemini.thoughtSignature
                     : null;
+
+                const hasFunctionCalls = (role === 'model' && msg.functionCalls && Array.isArray(msg.functionCalls) && msg.functionCalls.length > 0);
                 
                 // 构建 parts：从消息顶层字段读取
                 
@@ -543,10 +546,6 @@
                                     data: base64Data
                                 }
                             };
-                            // thought_signature 与 inlineData 平级
-                            if (thoughtSig) {
-                                part.thought_signature = thoughtSig;
-                            }
                             parts.push(part);
                         }
                     }
@@ -563,10 +562,6 @@
                                     data: base64Data
                                 }
                             };
-                            // thought_signature 与 inlineData 平级
-                            if (thoughtSig) {
-                                part.thought_signature = thoughtSig;
-                            }
                             parts.push(part);
                         }
                     }
@@ -588,9 +583,6 @@
                                     mimeType: 'video/*'
                                 }
                             };
-                            if (thoughtSig) {
-                                videoPart.thought_signature = thoughtSig;
-                            }
                             parts.push(videoPart);
                         }
                         
@@ -600,16 +592,13 @@
                     // 添加文本部分（如果还有内容）
                     if (textContent) {
                         const part = { text: textContent };
-                        // thought_signature 与 text 平级
-                        if (thoughtSig) {
-                            part.thought_signature = thoughtSig;
-                        }
                         parts.push(part);
                     }
                 }
                 
                 // 3. 处理 function calls（仅 assistant/model 消息）
                 if (role === 'model' && msg.functionCalls && Array.isArray(msg.functionCalls)) {
+                    let signatureAttached = false;
                     for (const fc of msg.functionCalls) {
                         const part = {
                             functionCall: {
@@ -617,13 +606,28 @@
                                 args: fc.args || {}
                             }
                         };
-                        if (thoughtSig) {
+
+                        // Gemini 3：并行 FC 时签名只挂在第一个 functionCall part；顺序多步则每步各有一个签名。
+                        if (thoughtSig && !signatureAttached) {
                             part.thought_signature = thoughtSig;
+                            signatureAttached = true;
                         }
+
                         parts.push(part);
                     }
                 }
                 
+                // 2.5. 处理 thought_signature（仅对 model 消息）：
+                // - 有 functionCall：签名只应附在该 step 的第一个 functionCall part 上（上面已处理）
+                // - 无 functionCall：Gemini 3 通常在最后一个 part 返回签名；这里回填到最后一个 part
+                if (role === 'model' && thoughtSig && !hasFunctionCalls) {
+                    if (parts.length === 0) {
+                        parts.push({ text: '', thought_signature: thoughtSig });
+                    } else {
+                        parts[parts.length - 1].thought_signature = thoughtSig;
+                    }
+                }
+
                 // 只有当 parts 非空时才添加到 contents
                 // Gemini API 要求每个 content 对象必须包含至少一个 parts
                 if (parts.length > 0) {

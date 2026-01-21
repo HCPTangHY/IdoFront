@@ -123,9 +123,49 @@
         return toolStates[toolId] !== false;  // 默认启用
     }
 
+    function syncToolStateToRegistry(toolId, enabled) {
+        const toolRegistry = window.IdoFront.toolRegistry;
+        if (!toolRegistry || typeof toolRegistry.setEnabled !== 'function') return;
+        if (!toolId) return;
+
+        const raw = String(toolId);
+        const sepIndex = raw.indexOf(':');
+        if (sepIndex <= 0) return;
+
+        const serverId = raw.slice(0, sepIndex);
+        const toolName = raw.slice(sepIndex + 1);
+        if (!serverId || !toolName) return;
+
+        const registryToolId = `mcp:${serverId}:${toolName}`;
+        toolRegistry.setEnabled(registryToolId, !!enabled);
+    }
+
+    function syncAllToolStatesToRegistry() {
+        try {
+            Object.keys(toolStates || {}).forEach((toolId) => {
+                const enabled = toolStates[toolId] !== false;
+                syncToolStateToRegistry(toolId, enabled);
+            });
+        } catch (e) {
+            console.warn('[MCP] Failed to sync tool states to registry:', e);
+        }
+    }
+
     function setToolState(toolId, enabled) {
         toolStates[toolId] = enabled;
         saveToolStates();
+
+        try {
+            syncToolStateToRegistry(toolId, enabled);
+        } catch (e) {
+            console.warn('[MCP] Failed to sync tool state to registry:', e);
+        }
+
+        try {
+            store?.events?.emit('mcp:tools:updated');
+        } catch (e) {
+            // ignore
+        }
     }
 
     // ========== 设置界面渲染 ==========
@@ -624,6 +664,7 @@
 
         loadServers();
         loadToolStates();
+        syncAllToolStatesToRegistry();
 
         // 注册设置标签页
         if (window.IdoFront.settingsManager?.registerTab) {

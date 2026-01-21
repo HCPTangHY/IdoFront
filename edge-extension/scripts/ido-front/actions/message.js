@@ -121,7 +121,13 @@
                             : { error: tc.error || 'Tool execution failed' }
                     }));
 
-                    messagesPayload.push({ role: 'tool', toolResponses });
+                    const toolMessage = { role: 'tool', toolResponses };
+                    const thoughtSignature = m.metadata?.gemini?.thoughtSignature;
+                    if (thoughtSignature) {
+                        toolMessage.metadata = { gemini: { thoughtSignature } };
+                    }
+
+                    messagesPayload.push(toolMessage);
                     continue;
                 }
                 // 未完成：只发送文本/附件/metadata，不发送 functionCall，避免历史断裂
