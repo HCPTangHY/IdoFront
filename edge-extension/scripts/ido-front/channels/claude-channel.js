@@ -845,8 +845,11 @@
                 title: 'Claude Extended Thinking',
                 description: '配置 Claude 模型的扩展思考功能匹配规则（正则表达式）',
                 icon: 'psychology',
+                category: '模型特性',
+                tags: ['Claude', 'extended thinking', 'thinking', '正则', '模型'],
+                advanced: false,
                 order: 22,
-                render: function(container) {
+                render: function(container, ctx, st) {
                     container.innerHTML = '';
                     
                     const rules = loadGlobalThinkingRules();
@@ -898,7 +901,7 @@
         try {
             document.addEventListener('IdoFrontSettingsReady', function() {
                 registerClaudeSettingsSection();
-            });
+            }, { once: true });
         } catch (e) {
             console.warn('[ClaudeChannel] attach IdoFrontSettingsReady listener error:', e);
         }

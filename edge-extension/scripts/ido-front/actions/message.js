@@ -284,7 +284,7 @@
                     nextAssistant.metadata = meta;
                 }
 
-                if (context && context.updateLastMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
+                if (context && shouldRenderUI(conv.id, nextAssistant.id)) {
                     const isReasoningSegmentEnded = !!currentContent && !nextAssistant.reasoningSegmentStart;
                     const updatePayload = {
                         content: fullContent,
@@ -295,7 +295,12 @@
                     if (finalAssistantAttachments && finalAssistantAttachments.length > 0) {
                         updatePayload.attachments = finalAssistantAttachments;
                     }
-                    context.updateLastMessage(updatePayload);
+
+                    if (typeof context.updateMessageById === 'function') {
+                        context.updateMessageById(nextAssistant.id, updatePayload);
+                    } else if (typeof context.updateLastMessage === 'function') {
+                        context.updateLastMessage(updatePayload);
+                    }
                 }
             };
 
@@ -313,8 +318,13 @@
                     nextAssistant.content = fullContent;
                     store.persist();
 
-                    if (context && context.updateLastMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
-                        context.updateLastMessage({ content: fullContent });
+                    if (context && shouldRenderUI(conv.id, nextAssistant.id)) {
+                        const updatePayload = { content: fullContent };
+                        if (typeof context.updateMessageById === 'function') {
+                            context.updateMessageById(nextAssistant.id, updatePayload);
+                        } else if (typeof context.updateLastMessage === 'function') {
+                            context.updateLastMessage(updatePayload);
+                        }
                     }
 
                     // 停止后直接结束本轮
@@ -462,8 +472,13 @@
                 context.removeMessageStreamingIndicator(nextAssistant.id);
             }
 
-            if (context && context.updateLastMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
-                context.updateLastMessage({ content: nextAssistant.content || '', toolCalls });
+            if (context && shouldRenderUI(conv.id, nextAssistant.id)) {
+                const updatePayload = { content: nextAssistant.content || '', toolCalls };
+                if (typeof context.updateMessageById === 'function') {
+                    context.updateMessageById(nextAssistant.id, updatePayload);
+                } else if (typeof context.updateLastMessage === 'function') {
+                    context.updateLastMessage(updatePayload);
+                }
             }
 
             for (const tc of toolCalls) {
@@ -1194,8 +1209,13 @@
                 context.removeMessageStreamingIndicator(assistantMessage.id);
             }
             // 更新 UI 显示错误信息
-            if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
-                context.updateLastMessage({ content: assistantMessage.content });
+            if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+                const updatePayload = { content: assistantMessage.content };
+                if (typeof context.updateMessageById === 'function') {
+                    context.updateMessageById(assistantMessage.id, updatePayload);
+                } else if (typeof context.updateLastMessage === 'function') {
+                    context.updateLastMessage(updatePayload);
+                }
             }
             store.state.isTyping = false;
             store.state.typingConversationId = null;
@@ -1655,11 +1675,16 @@
                     }
 
                     // 更新 UI 显示工具调用
-                    if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
-                        context.updateLastMessage({
+                    if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+                        const updatePayload = {
                             content: fullContent,
                             toolCalls: toolCalls
-                        });
+                        };
+                        if (typeof context.updateMessageById === 'function') {
+                            context.updateMessageById(assistantMessage.id, updatePayload);
+                        } else if (typeof context.updateLastMessage === 'function') {
+                            context.updateLastMessage(updatePayload);
+                        }
                     }
                     
                     // 依次执行每个工具
@@ -1798,8 +1823,13 @@
             store.persist();
             
             // 更新 UI 显示错误信息
-            if (context && context.updateLastMessage && shouldRenderUI(conv.id, assistantMessage.id)) {
-                context.updateLastMessage({ content: errorText });
+            if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+                const updatePayload = { content: errorText };
+                if (typeof context.updateMessageById === 'function') {
+                    context.updateMessageById(assistantMessage.id, updatePayload);
+                } else if (typeof context.updateLastMessage === 'function') {
+                    context.updateLastMessage(updatePayload);
+                }
             }
 
             if (context && logId && typeof context.completeRequest === 'function') {

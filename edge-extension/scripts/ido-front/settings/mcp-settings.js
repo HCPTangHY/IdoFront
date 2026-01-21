@@ -154,20 +154,36 @@
 
     function renderMCPSettings(container) {
         container.innerHTML = '';
-        container.setAttribute('data-settings-tab', 'mcp');  // 添加标识
-        settingsContainer = container;  // 保存引用
+        container.setAttribute('data-settings-tab', 'mcp'); // 添加标识
+        settingsContainer = container; // 保存引用
 
-        // 标题区域
+        const wrapper = document.createElement('div');
+        wrapper.className = 'space-y-4 max-w-2xl';
+        container.appendChild(wrapper);
+
+        // 标题区域 + 快捷操作
         const header = document.createElement('div');
-        header.className = 'mb-6';
-        header.innerHTML = `
-            <div class="flex items-center gap-2 mb-2">
-                <span class="material-symbols-outlined text-[24px] text-blue-500">extension</span>
+        header.className = 'flex items-start justify-between gap-3';
+
+        const titleGroup = document.createElement('div');
+        titleGroup.className = 'min-w-0';
+        titleGroup.innerHTML = `
+            <div class="flex items-center gap-2 mb-1">
+                <span class="material-symbols-outlined text-[22px] text-blue-500">dns</span>
                 <h3 class="text-base font-semibold text-gray-800">MCP 服务器</h3>
+                <span class="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100">工具扩展</span>
             </div>
             <p class="text-sm text-gray-500">连接外部工具服务，扩展 AI 能力</p>
         `;
-        container.appendChild(header);
+
+        const addBtn = document.createElement('button');
+        addBtn.className = 'ido-btn ido-btn--primary ido-btn--sm flex items-center gap-1.5 flex-shrink-0';
+        addBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">add</span><span>添加服务器</span>';
+        addBtn.onclick = () => showAddServerDialog(container);
+
+        header.appendChild(titleGroup);
+        header.appendChild(addBtn);
+        wrapper.appendChild(header);
 
         // 服务器列表
         const list = document.createElement('div');
@@ -179,29 +195,23 @@
                 list.appendChild(item);
             });
         } else {
-            // 空状态提示
-            const emptyHint = document.createElement('div');
-            emptyHint.className = 'text-center py-8 text-gray-400';
-            emptyHint.innerHTML = `
-                <span class="material-symbols-outlined text-[48px] mb-2">extension_off</span>
-                <p class="text-sm">暂无 MCP 服务器</p>
-                <p class="text-xs mt-1">点击下方按钮添加</p>
+            const emptyCard = document.createElement('div');
+            emptyCard.className = 'ido-card p-6 text-center text-gray-500';
+            emptyCard.innerHTML = `
+                <div class="flex flex-col items-center gap-2">
+                    <span class="material-symbols-outlined text-[44px] text-gray-300">dns</span>
+                    <div class="text-sm font-medium text-gray-700">暂无 MCP 服务器</div>
+                    <div class="text-xs text-gray-400">点击右上角按钮添加</div>
+                </div>
             `;
-            list.appendChild(emptyHint);
+            list.appendChild(emptyCard);
         }
 
-        container.appendChild(list);
-
-        // 添加服务器按钮
-        const addBtn = document.createElement('button');
-        addBtn.className = 'mt-4 w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-blue-400 hover:text-blue-500 transition-colors flex items-center justify-center gap-2';
-        addBtn.innerHTML = '<span class="material-symbols-outlined text-[20px]">add</span> 添加 MCP 服务器';
-        addBtn.onclick = () => showAddServerDialog(container);
-        container.appendChild(addBtn);
+        wrapper.appendChild(list);
 
         // 帮助信息
         const helpInfo = document.createElement('div');
-        helpInfo.className = 'mt-6 p-4 bg-blue-50 rounded-xl';
+        helpInfo.className = 'ido-card p-4 bg-blue-50 border border-blue-100';
         helpInfo.innerHTML = `
             <div class="flex items-start gap-3">
                 <span class="material-symbols-outlined text-blue-500 text-[20px] mt-0.5">info</span>
@@ -212,7 +222,7 @@
                 </div>
             </div>
         `;
-        container.appendChild(helpInfo);
+        wrapper.appendChild(helpInfo);
     }
 
     function createServerItem(server, listContainer) {
@@ -245,8 +255,8 @@
         item.innerHTML = `
             <div class="flex items-start justify-between">
                 <div class="flex items-start gap-3 flex-1 min-w-0">
-                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
-                        <span class="material-symbols-outlined text-white text-[20px]">dns</span>
+                    <div class="w-10 h-10 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center flex-shrink-0">
+                        <span class="material-symbols-outlined text-[20px] ${transport.color}">${transport.icon}</span>
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2">
@@ -620,8 +630,8 @@
             window.IdoFront.settingsManager.registerTab({
                 id: 'mcp',
                 label: 'MCP 服务',
-                icon: 'extension',
-                order: 35,
+                icon: 'dns',
+                order: 34,
                 render: renderMCPSettings
             });
         }

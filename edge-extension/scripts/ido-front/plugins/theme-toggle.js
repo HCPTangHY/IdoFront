@@ -495,6 +495,9 @@ body.ido-theme-dark .ido-quick-nav__btn:not(:last-child) {
         title: '主题',
         description: '切换界面主题：亮色 / 暗色 / 跟随系统。',
         icon: 'dark_mode',
+        category: '外观',
+        tags: ['theme', '主题', '亮色', '暗色', 'system'],
+        advanced: false,
         order: 10,
         render: function(container) {
           container.innerHTML = '';

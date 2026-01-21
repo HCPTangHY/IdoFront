@@ -1838,8 +1838,11 @@
                 title: 'Gemini 思考功能',
                 description: '配置 Gemini 模型的思考预算和思考等级匹配规则（正则表达式）',
                 icon: 'psychology',
+                category: '模型特性',
+                tags: ['Gemini', 'thinking', 'thinkingBudget', 'thinkingLevel', '正则', '模型'],
+                advanced: false,
                 order: 20,
-                render: function(container) {
+                render: function(container, ctx, st) {
                     container.innerHTML = '';
                     const rules = loadGlobalThinkingRules();
                     
@@ -1893,8 +1896,11 @@
                 title: 'Gemini 图像生成',
                 description: '配置支持图像生成的模型匹配规则（正则表达式）',
                 icon: 'image',
+                category: '模型特性',
+                tags: ['Gemini', 'image', 'image-gen', 'imagen', '正则', '模型'],
+                advanced: false,
                 order: 21,
-                render: function(container) {
+                render: function(container, ctx, st) {
                     container.innerHTML = '';
                     const rules = loadImageGenRules();
                     
@@ -1944,7 +1950,7 @@
             document.addEventListener('IdoFrontSettingsReady', function() {
                 registerGeminiThinkingSettingsSection();
                 registerGeminiImageGenSettingsSection();
-            });
+            }, { once: true });
         } catch (e) {
             console.warn('[GeminiChannel] attach IdoFrontSettingsReady listener error:', e);
         }

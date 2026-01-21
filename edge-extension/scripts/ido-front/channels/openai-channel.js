@@ -1053,8 +1053,11 @@
                 title: 'OpenAI 思考功能',
                 description: '配置 OpenAI 模型的 reasoning_effort 匹配规则（正则表达式）',
                 icon: 'psychology',
+                category: '模型特性',
+                tags: ['OpenAI', 'reasoning', 'reasoning_effort', '正则', '匹配规则', '模型'],
+                advanced: false,
                 order: 19,
-                render: function(container) {
+                render: function(container, ctx, st) {
                     container.innerHTML = '';
                     
                     const rules = loadGlobalReasoningRules();
@@ -1104,7 +1107,7 @@
         try {
             document.addEventListener('IdoFrontSettingsReady', function() {
                 registerOpenAIReasoningSettingsSection();
-            });
+            }, { once: true });
         } catch (e) {
             console.warn('[OpenAIChannel] attach IdoFrontSettingsReady listener error:', e);
         }

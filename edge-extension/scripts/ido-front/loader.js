@@ -85,6 +85,7 @@
         'settings/persona-settings.js',
         'settings/plugin-settings.js',
         'settings/ai-service-settings.js',
+        'settings/performance-settings.js', // 性能设置（DOM 缓存开关）
         'settings/data-settings.js',    // 数据管理（备份/导出/导入）
         'settings/mcp-settings.js',     // MCP 服务管理
         'settings/settings-manager.js',

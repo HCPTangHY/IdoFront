@@ -34,6 +34,7 @@
         const pluginLoader = window.IdoFront.pluginLoader;
         const titleGenerator = window.IdoFront.titleGenerator;
         const aiServiceSettings = window.IdoFront.aiServiceSettings;
+        const performanceSettings = window.IdoFront.performanceSettings;
         const dataSettings = window.IdoFront.dataSettings;
         const mcpSettings = window.IdoFront.mcpSettings;
 
@@ -78,6 +79,11 @@
         // AI 服务设置需要在 settingsManager 之后初始化
         if (aiServiceSettings && aiServiceSettings.init) {
             aiServiceSettings.init(store, context);
+        }
+
+        // 性能设置（DOM 缓存开关）
+        if (performanceSettings && performanceSettings.init) {
+            performanceSettings.init(store, context);
         }
         
         // MCP 服务设置

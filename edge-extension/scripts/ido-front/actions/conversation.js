@@ -94,7 +94,9 @@
         }
         
         // 保存当前对话的 DOM 缓存（切换前）
-        if (previousConvId) {
+        // 默认关闭：该功能容易引入流式/计时器/工具调用等状态同步问题
+        const domCacheEnabled = store.getSetting && store.getSetting('enableDomCache') === true;
+        if (domCacheEnabled && previousConvId) {
             try {
                 const chatStream = document.getElementById('chat-stream');
                 if (chatStream && window.IdoFront.virtualList) {
@@ -208,7 +210,8 @@
             
             // ★ 性能优化：尝试从缓存恢复
             // 但如果有正在生成的消息，跳过缓存以确保显示最新内容
-            if (options.useCache && !hasActiveGenerationInPath && window.IdoFront.virtualList) {
+            const domCacheEnabled = store.getSetting && store.getSetting('enableDomCache') === true;
+            if (domCacheEnabled && options.useCache && !hasActiveGenerationInPath && window.IdoFront.virtualList) {
                 const restored = window.IdoFront.virtualList.restoreFromCache(
                     active.id,
                     chatStream,
@@ -374,6 +377,25 @@
             
             const contentEl = msgEl.querySelector('.message-content');
             if (!contentEl) continue;
+
+            // reasoning / stats / toolCalls：如果 Store 有但 DOM 缺失，说明缓存已过期
+            const storeHasReasoning = !!(msg.reasoning && String(msg.reasoning).trim().length > 0);
+            const domHasReasoningBlock = !!msgEl.querySelector('.reasoning-block');
+            if (storeHasReasoning && !domHasReasoningBlock) {
+                return true;
+            }
+
+            const storeHasStats = msg.role === 'assistant' && !!msg.stats;
+            const domHasStats = !!msgEl.querySelector('.ido-message__stats');
+            if (storeHasStats && !domHasStats) {
+                return true;
+            }
+
+            const storeHasToolCalls = Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0;
+            const domHasToolCalls = !!msgEl.querySelector('.tool-calls-container');
+            if (storeHasToolCalls && !domHasToolCalls) {
+                return true;
+            }
             
             // 获取 DOM 中显示的内容（纯文本）
             const displayedContent = contentEl.textContent || '';

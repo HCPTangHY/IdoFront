@@ -39,7 +39,8 @@
             channels: [],
             pluginStates: {}, // Format: "slot::id": boolean
             settings: {
-                autoGenerateTitle: true  // AI 自动生成对话标题
+                autoGenerateTitle: true,  // AI 自动生成对话标题
+                enableDomCache: false     // 对话 DOM 缓存（实验，默认关闭）
             }
         },
 
@@ -1175,7 +1176,10 @@
          */
         getSetting(key) {
             if (!this.state.settings) {
-                this.state.settings = { autoGenerateTitle: true };
+                this.state.settings = {
+                    autoGenerateTitle: true,
+                    enableDomCache: false
+                };
             }
             if (key) {
                 return this.state.settings[key];
@@ -1190,7 +1194,10 @@
          */
         setSetting(key, value) {
             if (!this.state.settings) {
-                this.state.settings = { autoGenerateTitle: true };
+                this.state.settings = {
+                    autoGenerateTitle: true,
+                    enableDomCache: false
+                };
             }
             this.state.settings[key] = value;
             this.persist();

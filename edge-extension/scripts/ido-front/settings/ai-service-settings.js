@@ -23,6 +23,9 @@
                 title: 'AI 服务',
                 description: '配置 AI 自动化服务功能',
                 icon: 'auto_awesome',
+                category: 'AI 服务',
+                tags: ['title', '标题', '自动生成', '总结', '模型'],
+                advanced: false,
                 order: 10,
                 render: renderSection
             });

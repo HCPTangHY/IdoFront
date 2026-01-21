@@ -16,7 +16,47 @@
     const settingsTabs = [];
     
     // 通用设置分区注册表（供主插件 / 其他插件往“通用设置”标签注入内容）
+    // 说明：每个 section 支持可选字段 category/tags/advanced，用于在 UI 中分类、检索与折叠。
     const generalSections = [];
+
+    const GENERAL_UI_STATE_STORAGE_KEY = 'ido.ui.settingsGeneral';
+
+    // 通用设置页状态（仅会话内，避免每次重渲染丢失输入）
+    const generalTabState = {
+        query: '',
+        showAdvanced: false,
+        collapsedCategories: Object.create(null) // category -> boolean
+    };
+
+    function loadGeneralUIState() {
+        let saved = null;
+        try {
+            saved = Framework?.storage?.getItem(GENERAL_UI_STATE_STORAGE_KEY);
+        } catch (e) {
+            saved = null;
+        }
+
+        if (!saved || typeof saved !== 'object') return;
+
+        if (typeof saved.showAdvanced === 'boolean') {
+            generalTabState.showAdvanced = saved.showAdvanced;
+        }
+
+        if (saved.collapsedCategories && typeof saved.collapsedCategories === 'object') {
+            generalTabState.collapsedCategories = Object.assign(Object.create(null), saved.collapsedCategories);
+        }
+    }
+
+    function saveGeneralUIState() {
+        try {
+            Framework?.storage?.setItem(GENERAL_UI_STATE_STORAGE_KEY, {
+                showAdvanced: !!generalTabState.showAdvanced,
+                collapsedCategories: generalTabState.collapsedCategories || {}
+            });
+        } catch (e) {
+            // ignore
+        }
+    }
     
     // 保存容器引用，用于局部更新
     let mainContainer = null;
@@ -53,6 +93,51 @@
         settingsTabs.sort((a, b) => (a.order || 999) - (b.order || 999));
     };
     
+    function normalizeGeneralTags(tags) {
+        if (!tags) return [];
+        if (Array.isArray(tags)) {
+            return tags
+                .map(t => String(t || '').trim())
+                .filter(Boolean);
+        }
+        if (typeof tags === 'string') {
+            return tags
+                .split(',')
+                .map(t => t.trim())
+                .filter(Boolean);
+        }
+        return [];
+    }
+
+    function inferGeneralCategory(section) {
+        const id = String(section?.id || '').trim();
+        const title = String(section?.title || '').trim();
+
+        if (id === 'theme' || title.includes('主题')) return '外观';
+        if (id === 'ai-services' || title.includes('AI 服务')) return 'AI 服务';
+        if (id === 'performance' || title.includes('性能')) return '性能';
+
+        // Channel/provider 级“规则/能力”设置：更适合归入“模型特性”而不是“通用”杂项
+        if (
+            id.startsWith('openai-') ||
+            id.startsWith('gemini-') ||
+            id.startsWith('claude-') ||
+            id.includes('thinking') ||
+            id.includes('reasoning')
+        ) {
+            return '模型特性';
+        }
+
+        return '其它';
+    }
+
+    function inferGeneralAdvanced(section) {
+        const id = String(section?.id || '').trim();
+        // 性能/实验性开关默认视为高级
+        if (id === 'performance') return true;
+        return false;
+    }
+
     /**
      * 注册“通用设置”页面中的一个分区
      * @param {Object} section
@@ -60,6 +145,9 @@
      * @param {string} section.title - 分区标题
      * @param {string} [section.description] - 分区说明
      * @param {string} [section.icon] - Material 图标名或 SVG 片段
+     * @param {string} [section.category] - 分类（用于通用设置页分组）
+     * @param {string[]|string} [section.tags] - 搜索标签（数组或逗号分隔字符串）
+     * @param {boolean} [section.advanced] - 是否为高级设置（默认隐藏，可在通用设置页开启显示）
      * @param {number} [section.order] - 排序权重（越小越靠前）
      * @param {Function} section.render - 渲染函数 (container, context, store) => void
      */
@@ -74,7 +162,10 @@
             title: section.title || section.id,
             description: section.description || '',
             icon: section.icon || 'tune',
-            order: section.order || 999,
+            category: (section.category && String(section.category).trim()) || inferGeneralCategory(section),
+            tags: normalizeGeneralTags(section.tags),
+            advanced: (typeof section.advanced === 'boolean') ? section.advanced : inferGeneralAdvanced(section),
+            order: (typeof section.order === 'number') ? section.order : 999,
             render: section.render
         };
         
@@ -94,6 +185,9 @@
     window.IdoFront.settingsManager.init = function(frameworkInstance, storeInstance) {
         context = frameworkInstance;
         store = storeInstance;
+
+        // 读取通用设置 UI 状态（高级开关/折叠状态）
+        loadGeneralUIState();
         
         // 注册核心设置标签
         registerCoreSettingsTabs();
@@ -254,42 +348,286 @@
      */
     function renderGeneralTab(container, ctx, st) {
         container.innerHTML = '';
-        
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'space-y-4';
+
+        // ===== 顶部：搜索 + 高级开关 =====
+        const controlsCard = document.createElement('div');
+        controlsCard.className = 'ido-card p-4 space-y-3';
+
+        const searchRow = document.createElement('div');
+        searchRow.className = 'flex items-center gap-2';
+
+        const searchIcon = document.createElement('span');
+        searchIcon.className = 'material-symbols-outlined text-[18px] text-gray-400';
+        searchIcon.textContent = 'search';
+        searchRow.appendChild(searchIcon);
+
+        const searchInput = document.createElement('input');
+        searchInput.type = 'search';
+        searchInput.className = 'ido-input w-full text-sm';
+        searchInput.placeholder = '搜索设置（标题 / 描述 / 标签）';
+        searchInput.value = generalTabState.query || '';
+        searchRow.appendChild(searchInput);
+
+        const clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded';
+        clearBtn.title = '清空搜索';
+        clearBtn.innerHTML = '<span class="material-symbols-outlined text-[18px]">close</span>';
+        clearBtn.onclick = () => {
+            generalTabState.query = '';
+            searchInput.value = '';
+            rerender();
+            try { searchInput.focus(); } catch (e) {}
+        };
+        searchRow.appendChild(clearBtn);
+
+        const hint = document.createElement('div');
+        hint.className = 'text-[11px] text-gray-400';
+        hint.textContent = '提示：支持搜索标题、说明与标签；插件插槽内容不参与搜索。';
+
+        // 高级开关
+        const advancedRow = document.createElement('div');
+        advancedRow.className = 'flex items-center justify-between';
+
+        const advancedLeft = document.createElement('div');
+        const advancedLabel = document.createElement('div');
+        advancedLabel.className = 'text-sm font-medium text-gray-700';
+        advancedLabel.textContent = '显示实验性/高级选项';
+        const advancedDesc = document.createElement('div');
+        advancedDesc.className = 'text-xs text-gray-500 mt-0.5';
+        advancedDesc.textContent = '包含性能优化、实验性与调试相关选项';
+        advancedLeft.appendChild(advancedLabel);
+        advancedLeft.appendChild(advancedDesc);
+
+        const advancedToggle = document.createElement('label');
+        advancedToggle.className = 'ido-form-switch';
+        const advancedInput = document.createElement('input');
+        advancedInput.type = 'checkbox';
+        advancedInput.className = 'ido-form-switch__input';
+        advancedInput.checked = !!generalTabState.showAdvanced;
+        const advancedSlider = document.createElement('div');
+        advancedSlider.className = 'ido-form-switch__slider';
+        advancedToggle.appendChild(advancedInput);
+        advancedToggle.appendChild(advancedSlider);
+
+        advancedRow.appendChild(advancedLeft);
+        advancedRow.appendChild(advancedToggle);
+
+        controlsCard.appendChild(searchRow);
+        controlsCard.appendChild(hint);
+        controlsCard.appendChild(advancedRow);
+        wrapper.appendChild(controlsCard);
+
+        // ===== 主体：分类分组后的 sections =====
         const list = document.createElement('div');
         list.className = 'space-y-4';
-        
-        // 1. 渲染通过 registerGeneralSection 注册的设置分区
-        generalSections.forEach(section => {
-            const card = renderSettingsSection(section, ctx, st);
-            list.appendChild(card);
-        });
-        
-        // 2. 渲染通过 Framework 插槽注册的设置组件
-        if (ctx && typeof ctx.getDynamicPlugins === 'function') {
-            const slotName = ctx.SLOTS?.SETTINGS_GENERAL || 'slot-settings-general';
-            const pluginComponents = ctx.getDynamicPlugins(slotName, { context: ctx, store: st });
-            
+        wrapper.appendChild(list);
+
+        function normalizeText(value) {
+            return String(value || '').trim().toLowerCase();
+        }
+
+        function matchesSection(section, query) {
+            const q = normalizeText(query);
+            if (!q) return true;
+
+            const haystacks = [
+                section.id,
+                section.title,
+                section.description,
+                section.category,
+                ...(Array.isArray(section.tags) ? section.tags : [])
+            ].map(normalizeText);
+
+            return haystacks.some(s => s.includes(q));
+        }
+
+        function getCategoryOrderIndex(category) {
+            const order = ['常用', '外观', 'AI 服务', '模型特性', '性能', '其它'];
+            const idx = order.indexOf(category);
+            return idx === -1 ? 999 : idx;
+        }
+
+        function renderCategoryGroup(category, sections, queryActive) {
+            const group = document.createElement('div');
+            group.className = 'space-y-3';
+
+            const headerBtn = document.createElement('button');
+            headerBtn.type = 'button';
+            headerBtn.className = 'w-full flex items-center justify-between px-2 py-2 rounded-lg hover:bg-gray-50 transition-colors';
+
+            const left = document.createElement('div');
+            left.className = 'flex items-center gap-2';
+
+            const title = document.createElement('div');
+            title.className = 'text-sm font-semibold text-gray-800';
+            title.textContent = category;
+
+            const count = document.createElement('span');
+            count.className = 'text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500';
+            count.textContent = `${sections.length}`;
+
+            left.appendChild(title);
+            left.appendChild(count);
+
+            const right = document.createElement('div');
+            right.className = 'flex items-center gap-2 text-gray-400';
+
+            const arrow = document.createElement('span');
+            arrow.className = 'material-symbols-outlined text-[18px] transition-transform';
+            arrow.textContent = 'expand_more';
+            right.appendChild(arrow);
+
+            headerBtn.appendChild(left);
+            headerBtn.appendChild(right);
+
+            const collapsed = queryActive
+                ? false
+                : (generalTabState.collapsedCategories[category] === true);
+
+            if (!collapsed) {
+                arrow.style.transform = 'rotate(180deg)';
+            }
+
+            const body = document.createElement('div');
+            body.className = 'space-y-4';
+            body.style.display = collapsed ? 'none' : '';
+
+            sections.forEach(section => {
+                body.appendChild(renderSettingsSection(section, ctx, st));
+            });
+
+            headerBtn.onclick = () => {
+                if (queryActive) return;
+                const next = !(generalTabState.collapsedCategories[category] === true);
+                generalTabState.collapsedCategories[category] = next;
+                saveGeneralUIState();
+                rerender();
+            };
+
+            group.appendChild(headerBtn);
+            group.appendChild(body);
+            return group;
+        }
+
+        function renderPluginGroup(pluginComponents) {
+            const group = document.createElement('div');
+            group.className = 'space-y-3';
+
+            const header = document.createElement('div');
+            header.className = 'px-2';
+
+            const title = document.createElement('div');
+            title.className = 'text-sm font-semibold text-gray-800';
+            title.textContent = '插件提供的设置';
+
+            const desc = document.createElement('div');
+            desc.className = 'text-[11px] text-gray-400 mt-0.5';
+            desc.textContent = '来自 slot-settings-general（当前不参与搜索/分类）。';
+
+            header.appendChild(title);
+            header.appendChild(desc);
+
+            const body = document.createElement('div');
+            body.className = 'space-y-4';
+
             pluginComponents.forEach(component => {
                 if (component instanceof HTMLElement) {
-                    list.appendChild(component);
+                    body.appendChild(component);
                 } else if (typeof component === 'string') {
                     const wrapper = document.createElement('div');
                     wrapper.innerHTML = component;
-                    list.appendChild(wrapper);
+                    body.appendChild(wrapper);
                 }
             });
+
+            group.appendChild(header);
+            group.appendChild(body);
+            return group;
         }
-        
-        // 如果没有任何设置
-        if (list.childNodes.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'ido-empty';
-            empty.textContent = '暂无通用设置';
-            container.appendChild(empty);
-            return;
+
+        function collectPluginComponents() {
+            if (!ctx || typeof ctx.getDynamicPlugins !== 'function') {
+                return [];
+            }
+            const slotName = ctx.SLOTS?.SETTINGS_GENERAL || 'slot-settings-general';
+            try {
+                const comps = ctx.getDynamicPlugins(slotName, { context: ctx, store: st });
+                return Array.isArray(comps) ? comps : [];
+            } catch (e) {
+                console.warn('[settingsManager] getDynamicPlugins(SETTINGS_GENERAL) failed', e);
+                return [];
+            }
         }
-        
-        container.appendChild(list);
+
+        function rerender() {
+            list.innerHTML = '';
+
+            const query = String(generalTabState.query || '').trim();
+            const queryActive = query.length > 0;
+
+            clearBtn.style.visibility = queryActive ? '' : 'hidden';
+
+            const visibleSections = generalSections
+                .filter(section => {
+                    if (queryActive) return matchesSection(section, query);
+                    if (generalTabState.showAdvanced) return true;
+                    return section.advanced !== true;
+                });
+
+            if (visibleSections.length > 0) {
+                const byCategory = new Map();
+                visibleSections.forEach(section => {
+                    const category = section.category || '其它';
+                    if (!byCategory.has(category)) byCategory.set(category, []);
+                    byCategory.get(category).push(section);
+                });
+
+                const categories = Array.from(byCategory.keys()).sort((a, b) => {
+                    const ai = getCategoryOrderIndex(a);
+                    const bi = getCategoryOrderIndex(b);
+                    if (ai !== bi) return ai - bi;
+                    return a.localeCompare(b, 'zh-Hans-CN');
+                });
+
+                categories.forEach(category => {
+                    const sections = byCategory.get(category) || [];
+                    // 维持原 section.order 顺序
+                    sections.sort((a, b) => (a.order || 999) - (b.order || 999));
+                    list.appendChild(renderCategoryGroup(category, sections, queryActive));
+                });
+            }
+
+            const pluginComponents = collectPluginComponents();
+            if (pluginComponents.length > 0) {
+                list.appendChild(renderPluginGroup(pluginComponents));
+            }
+
+            if (list.childNodes.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'ido-empty';
+                empty.textContent = queryActive ? '没有匹配的设置项' : '暂无通用设置';
+                list.appendChild(empty);
+            }
+        }
+
+        // 事件绑定
+        searchInput.oninput = () => {
+            generalTabState.query = searchInput.value;
+            rerender();
+        };
+
+        advancedInput.onchange = () => {
+            generalTabState.showAdvanced = advancedInput.checked;
+            saveGeneralUIState();
+            rerender();
+        };
+
+        rerender();
+        container.appendChild(wrapper);
     }
     
     /**
