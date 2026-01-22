@@ -13,6 +13,7 @@
     window.IdoFront = window.IdoFront || {};
 
     const STORAGE_KEY = 'core.chat.state';
+    const RESUME_KEY = 'core.chat.resume';
 
     window.IdoFront.store = {
         
@@ -26,10 +27,14 @@
         _backgroundSaveTimer: null, // 后台保存定时器
         // 活跃路径缓存
         _activePathCache: {},
+        // resume 信息（localStorage）去重缓存
+        _resumeLastSerialized: null,
         
         state: {
             personas: [], // 面具列表
             activePersonaId: null, // 当前激活的面具ID
+            // 记录每个面具上次活跃的会话（用于切换面具时恢复）
+            personaLastActiveConversationIdMap: {},
             conversations: [],
             activeConversationId: null,
             inputText: '',
@@ -191,6 +196,12 @@
                 return;
             }
 
+            // 1.5 Ensure personaLastActiveConversationIdMap is Valid
+            if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                this.state.personaLastActiveConversationIdMap = {};
+                updated = true;
+            }
+
             // 2. Ensure Active Persona Exists
             const activePersonaExists = this.state.personas.some(p => p.id === this.state.activePersonaId);
             if (!this.state.activePersonaId || !activePersonaExists) {
@@ -207,6 +218,20 @@
                     const validConv = this.state.conversations.find(c => c.personaId === this.state.activePersonaId);
                     this.state.activeConversationId = validConv ? validConv.id : null;
                     updated = true;
+                }
+            }
+
+            // Sync mapping for active persona
+            if (this.state.activePersonaId && this.state.activeConversationId) {
+                const activeConv2 = this.state.conversations.find(c => c && c.id === this.state.activeConversationId);
+                if (activeConv2 && activeConv2.personaId === this.state.activePersonaId) {
+                    if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                        this.state.personaLastActiveConversationIdMap = {};
+                    }
+                    if (this.state.personaLastActiveConversationIdMap[this.state.activePersonaId] !== this.state.activeConversationId) {
+                        this.state.personaLastActiveConversationIdMap[this.state.activePersonaId] = this.state.activeConversationId;
+                        updated = true;
+                    }
                 }
             }
 
@@ -409,6 +434,7 @@
             return {
                 personas: this.state.personas,
                 activePersonaId: this.state.activePersonaId,
+                personaLastActiveConversationIdMap: this.state.personaLastActiveConversationIdMap,
                 conversations: this.state.conversations,
                 activeConversationId: this.state.activeConversationId,
                 logs: Array.isArray(this.state.logs) ? this.state.logs.slice(0, MAX_LOGS) : [],
@@ -416,6 +442,84 @@
                 pluginStates: this.state.pluginStates,
                 settings: this.state.settings
             };
+        },
+
+        _buildResumeSnapshot() {
+            return {
+                activePersonaId: this.state.activePersonaId || null,
+                activeConversationId: this.state.activeConversationId || null,
+                personaLastActiveConversationIdMap: (this.state.personaLastActiveConversationIdMap && typeof this.state.personaLastActiveConversationIdMap === 'object')
+                    ? this.state.personaLastActiveConversationIdMap
+                    : {}
+            };
+        },
+
+        _persistResume() {
+            try {
+                const resume = this._buildResumeSnapshot();
+                const serialized = JSON.stringify(resume);
+                if (serialized === this._resumeLastSerialized) return;
+                this._resumeLastSerialized = serialized;
+                localStorage.setItem(RESUME_KEY, serialized);
+            } catch (e) {
+                // localStorage 可能不可用（隐私模式/配额），忽略即可
+            }
+        },
+
+        _loadResumeSnapshot() {
+            try {
+                const raw = localStorage.getItem(RESUME_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                return parsed && typeof parsed === 'object' ? parsed : null;
+            } catch (e) {
+                return null;
+            }
+        },
+
+        _applyResumeSnapshot(resume) {
+            if (!resume || typeof resume !== 'object') return;
+
+            // 先合并每个面具的上次活跃会话映射
+            const map = resume.personaLastActiveConversationIdMap;
+            if (map && typeof map === 'object' && !Array.isArray(map)) {
+                if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                    this.state.personaLastActiveConversationIdMap = {};
+                }
+                Object.assign(this.state.personaLastActiveConversationIdMap, map);
+            }
+
+            // activeConversationId 优先（更精确），并推导 activePersonaId
+            let appliedActiveConversation = false;
+            if (resume.activeConversationId) {
+                const conv = this.state.conversations.find(c => c && c.id === resume.activeConversationId);
+                if (conv) {
+                    this.state.activeConversationId = resume.activeConversationId;
+                    if (conv.personaId) {
+                        this.state.activePersonaId = conv.personaId;
+                    }
+                    appliedActiveConversation = true;
+                }
+            }
+
+            // 没有可用会话时再应用 activePersonaId
+            if (!appliedActiveConversation && resume.activePersonaId) {
+                const personaExists = this.state.personas && this.state.personas.some(p => p && p.id === resume.activePersonaId);
+                if (personaExists) {
+                    this.state.activePersonaId = resume.activePersonaId;
+                }
+            }
+
+            // 兜底：记录当前活跃会话到映射
+            if (this.state.activePersonaId && this.state.activeConversationId) {
+                const conv = this.state.conversations.find(c => c && c.id === this.state.activeConversationId);
+                if (conv && conv.personaId === this.state.activePersonaId) {
+                    if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                        this.state.personaLastActiveConversationIdMap = {};
+                    }
+                    this.state.personaLastActiveConversationIdMap[this.state.activePersonaId] = this.state.activeConversationId;
+                }
+            }
         },
 
         /**
@@ -454,6 +558,7 @@
             const snapshot = this._buildSnapshot();
             this._pendingSnapshot = snapshot;
             this._hasPendingWrite = true;
+            this._persistResume();
             // 触发 30 秒后台保存
             this.persistInBackground();
             // 不触发事件
@@ -463,6 +568,7 @@
             const snapshot = this._buildSnapshot();
             this._pendingSnapshot = snapshot;
             this._hasPendingWrite = true;
+            this._persistResume();
             // 触发 30 秒后台保存
             this.persistInBackground();
 
@@ -488,6 +594,7 @@
             const snapshot = this._pendingSnapshot || this._buildSnapshot();
             this._pendingSnapshot = null;
             this._hasPendingWrite = false;
+            this._persistResume();
 
             // 直接写入 IndexedDB（关键时刻必须保存）
             this._doSaveToIDB(snapshot).catch(e => {
@@ -542,6 +649,9 @@
                         this.state.personas = snapshot.personas;
                     }
                     this.state.activePersonaId = snapshot.activePersonaId || null;
+                    if (snapshot.personaLastActiveConversationIdMap && typeof snapshot.personaLastActiveConversationIdMap === 'object') {
+                        this.state.personaLastActiveConversationIdMap = snapshot.personaLastActiveConversationIdMap;
+                    }
                     this.state.activeConversationId = snapshot.activeConversationId || null;
                     if (Array.isArray(snapshot.logs)) {
                         this.state.logs = snapshot.logs;
@@ -555,6 +665,12 @@
                     if (snapshot.settings) {
                         this.state.settings = { ...this.state.settings, ...snapshot.settings };
                     }
+                }
+
+                // resume 信息优先用于恢复“上次活跃会话”（避免 IDB 写入未完成导致的回退）
+                const resume = this._loadResumeSnapshot();
+                if (resume) {
+                    this._applyResumeSnapshot(resume);
                 }
             } catch (e) {
                 console.error('Storage load error:', e);
@@ -592,6 +708,12 @@
             this.state.conversations.unshift(conversation);
             if (!this.state.activeConversationId) {
                 this.state.activeConversationId = conversation.id;
+                if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                    this.state.personaLastActiveConversationIdMap = {};
+                }
+                if (conversation.personaId) {
+                    this.state.personaLastActiveConversationIdMap[conversation.personaId] = conversation.id;
+                }
             }
             this.persist();
             return conversation;
@@ -621,19 +743,113 @@
             return this.state.channels.find(c => c.id === conv.selectedChannelId) || null;
         },
 
+        _normalizeRegistryToolId(toolId) {
+            const raw = String(toolId || '').trim();
+            if (!raw) return null;
+            if (raw.startsWith('mcp:')) return raw;
+            // 兼容旧格式："<serverId>:<toolName>"，其中 serverId 通常以 mcp_ 开头
+            if (/^mcp_[^:]+:.+/.test(raw)) {
+                return `mcp:${raw}`;
+            }
+            return raw;
+        },
+
+        getToolStateForConversation(convId, toolId) {
+            const normalizedId = this._normalizeRegistryToolId(toolId);
+            if (!normalizedId) return false;
+
+            const conv = this.state.conversations.find(c => c && c.id === convId);
+            if (!conv) return false;
+
+            const states = conv.metadata && typeof conv.metadata === 'object' ? conv.metadata.toolStates : null;
+            if (states && Object.prototype.hasOwnProperty.call(states, normalizedId)) {
+                return states[normalizedId] !== false;
+            }
+
+            // MCP：默认走全局默认开关（用于新会话/未覆写）
+            if (normalizedId.startsWith('mcp:')) {
+                const mcpSettings = window.IdoFront && window.IdoFront.mcpSettings;
+                if (mcpSettings && typeof mcpSettings.getToolState === 'function') {
+                    return mcpSettings.getToolState(normalizedId);
+                }
+            }
+
+            // 其他工具：回退到全局工具注册表
+            const toolRegistry = window.IdoFront && window.IdoFront.toolRegistry;
+            if (toolRegistry && typeof toolRegistry.isEnabled === 'function') {
+                return toolRegistry.isEnabled(normalizedId);
+            }
+
+            return true;
+        },
+
+        setToolStateForConversation(convId, toolId, enabled, options) {
+            const opts = options || {};
+            const normalizedId = this._normalizeRegistryToolId(toolId);
+            if (!normalizedId) return false;
+
+            const conv = this.state.conversations.find(c => c && c.id === convId);
+            if (!conv) return false;
+
+            if (!conv.metadata || typeof conv.metadata !== 'object') {
+                conv.metadata = {};
+            }
+            if (!conv.metadata.toolStates || typeof conv.metadata.toolStates !== 'object') {
+                conv.metadata.toolStates = {};
+            }
+
+            conv.metadata.toolStates[normalizedId] = !!enabled;
+
+            if (opts.silent !== false) {
+                this.persistSilent();
+            } else {
+                this.persist();
+            }
+
+            return true;
+        },
+
         setActivePersona(id) {
             const persona = this.state.personas.find(p => p.id === id);
             if (persona) {
                 this.state.activePersonaId = id;
-                
-                // Switch to the most recent conversation for this persona
-                const personaConvs = this.state.conversations.filter(c => c.personaId === id);
-                if (personaConvs.length > 0) {
-                    this.state.activeConversationId = personaConvs[0].id;
-                } else {
-                    this.state.activeConversationId = null; // Will trigger creation of new one if needed
+
+                if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                    this.state.personaLastActiveConversationIdMap = {};
                 }
-                
+
+                // 1) 优先进入该面具“上次活跃的会话”
+                let nextConvId = this.state.personaLastActiveConversationIdMap[id] || null;
+                if (nextConvId) {
+                    const conv = this.state.conversations.find(c => c && c.id === nextConvId);
+                    if (!conv || conv.personaId !== id) {
+                        nextConvId = null;
+                    }
+                }
+
+                // 2) 兜底：选择该面具最近更新的会话
+                if (!nextConvId) {
+                    const personaConvs = this.state.conversations
+                        .filter(c => c && c.personaId === id)
+                        .slice()
+                        .sort((a, b) => {
+                            const aTime = a.updatedAt || a.createdAt || 0;
+                            const bTime = b.updatedAt || b.createdAt || 0;
+                            return bTime - aTime;
+                        });
+
+                    if (personaConvs.length > 0) {
+                        nextConvId = personaConvs[0].id;
+                    }
+                }
+
+                this.state.activeConversationId = nextConvId || null; // Will trigger creation of new one if needed
+
+                // 3) 记录该面具的上次活跃会话
+                if (this.state.activeConversationId) {
+                    this.state.personaLastActiveConversationIdMap[id] = this.state.activeConversationId;
+                }
+
                 this.persist();
                 if (this.events) {
                     if (typeof this.events.emitAsync === 'function') {
@@ -673,6 +889,11 @@
             // For now let's keep them but they won't show up. Or maybe delete.
             // Let's delete conversations associated with this persona to be clean.
             this.state.conversations = this.state.conversations.filter(c => c.personaId !== id);
+
+            // 清理该面具对应的上次活跃会话记录
+            if (this.state.personaLastActiveConversationIdMap && typeof this.state.personaLastActiveConversationIdMap === 'object') {
+                delete this.state.personaLastActiveConversationIdMap[id];
+            }
 
             if (this.state.activePersonaId === id) {
                 this.state.activePersonaId = this.state.personas[0].id;
@@ -1210,6 +1431,15 @@
 
         deleteConversation(id) {
             this.state.conversations = this.state.conversations.filter(c => c.id !== id);
+
+            // 清理“面具上次活跃会话”映射中指向被删除会话的条目
+            if (this.state.personaLastActiveConversationIdMap && typeof this.state.personaLastActiveConversationIdMap === 'object') {
+                for (const personaId in this.state.personaLastActiveConversationIdMap) {
+                    if (this.state.personaLastActiveConversationIdMap[personaId] === id) {
+                        delete this.state.personaLastActiveConversationIdMap[personaId];
+                    }
+                }
+            }
             
             if (this.state.activeConversationId === id) {
                 // 删除的是当前激活的对话，需要选择新的激活对话
@@ -1231,6 +1461,13 @@
                 if (personaConvs.length === 0) {
                     this.createConversationInternal('新对话');
                 }
+            }
+            // 更新当前面具的“上次活跃会话”记录
+            if (this.state.activePersonaId && this.state.activeConversationId) {
+                if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
+                    this.state.personaLastActiveConversationIdMap = {};
+                }
+                this.state.personaLastActiveConversationIdMap[this.state.activePersonaId] = this.state.activeConversationId;
             }
             
             this.persist();

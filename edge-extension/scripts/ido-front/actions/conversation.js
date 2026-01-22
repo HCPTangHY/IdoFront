@@ -24,7 +24,12 @@
         
         // 监听面具切换事件，刷新对话列表
         if (store.events) {
-            store.events.on('persona:changed', () => {
+            store.events.on('persona:changed', (payload) => {
+                // 如果是“跨面具选中某个会话”导致的 persona 变化，select() 会负责完整 UI 同步
+                if (payload && typeof payload === 'object' && payload.source === 'conversation-select') {
+                    return;
+                }
+
                 renderConversationList();
                 // 同步UI以显示新面具的对话
                 syncUI();
@@ -61,6 +66,12 @@
             : '新对话';
         const conv = store.createConversationInternal(title);
         store.state.activeConversationId = conv.id;
+        if (!store.state.personaLastActiveConversationIdMap || typeof store.state.personaLastActiveConversationIdMap !== 'object') {
+            store.state.personaLastActiveConversationIdMap = {};
+        }
+        if (store.state.activePersonaId) {
+            store.state.personaLastActiveConversationIdMap[store.state.activePersonaId] = conv.id;
+        }
         
         if (context && context.clearMessages) context.clearMessages();
 
@@ -110,8 +121,28 @@
         store.state.activeConversationId = id;
         
         // If switching to a conversation from a different persona, switch persona too
+        let personaChanged = false;
         if (target.personaId && target.personaId !== store.state.activePersonaId) {
             store.state.activePersonaId = target.personaId;
+            personaChanged = true;
+        }
+
+        // 记录该面具的上次活跃会话，便于切换面具后恢复
+        if (!store.state.personaLastActiveConversationIdMap || typeof store.state.personaLastActiveConversationIdMap !== 'object') {
+            store.state.personaLastActiveConversationIdMap = {};
+        }
+        if (store.state.activePersonaId) {
+            store.state.personaLastActiveConversationIdMap[store.state.activePersonaId] = id;
+        }
+
+        // 跨面具选择会话时，需要通知依赖 persona:changed 的组件（例如面具切换器）
+        if (personaChanged && store.events) {
+            const payload = { id: store.state.activePersonaId, source: 'conversation-select' };
+            if (typeof store.events.emitAsync === 'function') {
+                store.events.emitAsync('persona:changed', payload);
+            } else if (typeof store.events.emit === 'function') {
+                store.events.emit('persona:changed', payload);
+            }
         }
         
         // 【修复】切换对话是用户的明确操作，使用立即持久化防止关闭扩展窗口时状态丢失

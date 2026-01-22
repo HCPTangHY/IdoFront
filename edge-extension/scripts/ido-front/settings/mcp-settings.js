@@ -119,16 +119,48 @@
 
     // ========== 工具状态管理 ==========
 
+    function normalizeToolId(toolId) {
+        const raw = String(toolId || '').trim();
+        if (!raw) return null;
+        if (raw.startsWith('mcp:')) return raw;
+        // 兼容旧格式："<serverId>:<toolName>"，其中 serverId 通常以 mcp_ 开头
+        if (/^mcp_[^:]+:.+/.test(raw)) {
+            return `mcp:${raw}`;
+        }
+        return raw;
+    }
+
     function getToolState(toolId) {
-        return toolStates[toolId] !== false;  // 默认启用
+        const normalized = normalizeToolId(toolId);
+        if (!normalized) return true; // 默认启用
+
+        if (Object.prototype.hasOwnProperty.call(toolStates, normalized)) {
+            return toolStates[normalized] !== false;
+        }
+
+        // 兼容历史存储：key 可能是 "<serverId>:<toolName>"
+        if (normalized.startsWith('mcp:')) {
+            const legacy = normalized.slice(4);
+            if (Object.prototype.hasOwnProperty.call(toolStates, legacy)) {
+                return toolStates[legacy] !== false;
+            }
+        }
+
+        return true;
     }
 
     function syncToolStateToRegistry(toolId, enabled) {
         const toolRegistry = window.IdoFront.toolRegistry;
         if (!toolRegistry || typeof toolRegistry.setEnabled !== 'function') return;
-        if (!toolId) return;
 
-        const raw = String(toolId);
+        const normalized = normalizeToolId(toolId);
+        if (!normalized) return;
+
+        let raw = normalized;
+        if (raw.startsWith('mcp:')) {
+            raw = raw.slice(4);
+        }
+
         const sepIndex = raw.indexOf(':');
         if (sepIndex <= 0) return;
 
@@ -152,11 +184,23 @@
     }
 
     function setToolState(toolId, enabled) {
-        toolStates[toolId] = enabled;
+        const normalized = normalizeToolId(toolId);
+        if (!normalized) return;
+
+        toolStates[normalized] = !!enabled;
+
+        // 迁移旧 key（如果存在）
+        if (normalized.startsWith('mcp:')) {
+            const legacy = normalized.slice(4);
+            if (Object.prototype.hasOwnProperty.call(toolStates, legacy)) {
+                delete toolStates[legacy];
+            }
+        }
+
         saveToolStates();
 
         try {
-            syncToolStateToRegistry(toolId, enabled);
+            syncToolStateToRegistry(normalized, enabled);
         } catch (e) {
             console.warn('[MCP] Failed to sync tool state to registry:', e);
         }
@@ -778,11 +822,12 @@
                 server.tools.forEach(tool => {
                     allTools.push({
                         id: `${server.id}:${tool.name}`,
+                        registryId: `mcp:${server.id}:${tool.name}`,
                         name: tool.name,
                         description: tool.description,
                         serverId: server.id,
                         serverName: server.name,
-                        enabled: getToolState(`${server.id}:${tool.name}`)
+                        enabled: getToolState(`mcp:${server.id}:${tool.name}`)
                     });
                 });
             }
@@ -799,9 +844,10 @@
             status: server.status,
             tools: (server.tools || []).map(tool => ({
                 id: `${server.id}:${tool.name}`,
+                registryId: `mcp:${server.id}:${tool.name}`,
                 name: tool.name,
                 description: tool.description,
-                enabled: getToolState(`${server.id}:${tool.name}`)
+                enabled: getToolState(`mcp:${server.id}:${tool.name}`)
             }))
         }));
     };

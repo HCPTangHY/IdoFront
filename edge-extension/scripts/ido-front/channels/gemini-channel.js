@@ -680,12 +680,13 @@
 
             // 获取当前会话的 gemini 配置（需要在 convertMessages 之前获取，因为需要传递 youtubeVideo 选项）
             let geminiMeta = {};
+            let activeConv = null;
             try {
                 const store = window.IdoFront && window.IdoFront.store;
                 if (store && typeof store.getActiveConversation === 'function') {
-                    const conv = store.getActiveConversation();
-                    if (conv && conv.metadata && conv.metadata.gemini) {
-                        geminiMeta = conv.metadata.gemini;
+                    activeConv = store.getActiveConversation();
+                    if (activeConv && activeConv.metadata && activeConv.metadata.gemini) {
+                        geminiMeta = activeConv.metadata.gemini;
                     }
                 }
             } catch (e) {
@@ -790,7 +791,14 @@
             // 添加 MCP/自定义工具（来自 toolRegistry）
             const toolRegistry = window.IdoFront.toolRegistry;
             if (toolRegistry && geminiMeta.enableTools !== false) {
-                const customTools = toolRegistry.toGeminiFormat();
+                const store = window.IdoFront && window.IdoFront.store;
+                const customTools = toolRegistry.toGeminiFormat({
+                    isEnabled: (toolId) => {
+                        if (!store || typeof store.getToolStateForConversation !== 'function') return true;
+                        if (!activeConv || !activeConv.id) return true;
+                        return store.getToolStateForConversation(activeConv.id, toolId);
+                    }
+                });
                 if (customTools && customTools.length > 0) {
                     tools.push(...customTools);
                 }

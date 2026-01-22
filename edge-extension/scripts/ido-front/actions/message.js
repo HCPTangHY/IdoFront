@@ -494,6 +494,26 @@
                 }
 
                 try {
+                    const def = toolRegistry && typeof toolRegistry.resolve === 'function'
+                        ? toolRegistry.resolve(tc.name)
+                        : null;
+
+                    if (def && def.id && store && typeof store.getToolStateForConversation === 'function') {
+                        const enabled = store.getToolStateForConversation(conv.id, def.id);
+                        if (!enabled) {
+                            toolCallTypes.updateStatus(tc, 'error', null, '该工具在当前会话已禁用');
+                            if (toolCallRenderer && shouldRenderUI(conv.id, nextAssistant.id)) {
+                                toolCallRenderer.updateUI(nextAssistant.id, tc.id, {
+                                    status: tc.status,
+                                    result: tc.result,
+                                    error: tc.error,
+                                    duration: tc.duration
+                                });
+                            }
+                            continue;
+                        }
+                    }
+
                     const result = await toolRegistry.execute(tc.name, tc.args);
                     if (result.success) {
                         toolCallTypes.updateStatus(tc, 'success', result.result);
@@ -1702,6 +1722,26 @@
                         }
                         
                         try {
+                            const def = toolRegistry && typeof toolRegistry.resolve === 'function'
+                                ? toolRegistry.resolve(tc.name)
+                                : null;
+
+                            if (def && def.id && store && typeof store.getToolStateForConversation === 'function') {
+                                const enabled = store.getToolStateForConversation(conv.id, def.id);
+                                if (!enabled) {
+                                    toolCallTypes.updateStatus(tc, 'error', null, '该工具在当前会话已禁用');
+                                    if (toolCallRenderer && shouldRenderUI(conv.id, assistantMessage.id)) {
+                                        toolCallRenderer.updateUI(assistantMessage.id, tc.id, {
+                                            status: tc.status,
+                                            result: tc.result,
+                                            error: tc.error,
+                                            duration: tc.duration
+                                        });
+                                    }
+                                    continue;
+                                }
+                            }
+
                             // 执行工具
                             const result = await toolRegistry.execute(tc.name, tc.args);
                             

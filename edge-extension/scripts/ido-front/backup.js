@@ -105,6 +105,7 @@
             // 核心数据
             personas: store.state.personas || [],
             activePersonaId: store.state.activePersonaId,
+            personaLastActiveConversationIdMap: store.state.personaLastActiveConversationIdMap || {},
             conversations: store.state.conversations || [],
             activeConversationId: store.state.activeConversationId,
             channels: store.state.channels || [],
@@ -240,10 +241,21 @@
                     store.state.personas.push(persona);
                 }
             }
+
+            // 合并“面具上次活跃会话”映射（可选字段）
+            if (backup.personaLastActiveConversationIdMap && typeof backup.personaLastActiveConversationIdMap === 'object') {
+                if (!store.state.personaLastActiveConversationIdMap || typeof store.state.personaLastActiveConversationIdMap !== 'object') {
+                    store.state.personaLastActiveConversationIdMap = {};
+                }
+                Object.assign(store.state.personaLastActiveConversationIdMap, backup.personaLastActiveConversationIdMap);
+            }
         } else {
             // 覆盖模式：完全替换
             if (backup.personas) store.state.personas = backup.personas;
             if (backup.activePersonaId) store.state.activePersonaId = backup.activePersonaId;
+            if (backup.personaLastActiveConversationIdMap && typeof backup.personaLastActiveConversationIdMap === 'object') {
+                store.state.personaLastActiveConversationIdMap = backup.personaLastActiveConversationIdMap;
+            }
             if (backup.conversations) store.state.conversations = backup.conversations;
             if (backup.activeConversationId) store.state.activeConversationId = backup.activeConversationId;
             if (backup.channels) store.state.channels = backup.channels;

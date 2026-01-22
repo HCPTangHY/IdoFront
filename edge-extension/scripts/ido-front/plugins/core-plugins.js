@@ -965,13 +965,34 @@
             const switchInput = document.createElement('input');
             switchInput.type = 'checkbox';
             switchInput.className = 'ido-form-switch__input';
-            switchInput.checked = tool.enabled !== false;
+
+            const activeConv = store && typeof store.getActiveConversation === 'function'
+                ? store.getActiveConversation()
+                : null;
+            const registryToolId = tool.registryId || (tool.id ? `mcp:${tool.id}` : null);
+
+            switchInput.checked = (activeConv && registryToolId && store && typeof store.getToolStateForConversation === 'function')
+                ? store.getToolStateForConversation(activeConv.id, registryToolId)
+                : (tool.enabled !== false);
+
             const slider = document.createElement('div');
             slider.className = 'ido-form-switch__slider';
             
             switchInput.onchange = () => {
-                if (mcpSettings && mcpSettings.setToolState) {
-                    mcpSettings.setToolState(tool.id, switchInput.checked);
+                const conv = store && typeof store.getActiveConversation === 'function'
+                    ? store.getActiveConversation()
+                    : null;
+                const id = tool.registryId || (tool.id ? `mcp:${tool.id}` : null);
+
+                // 优先：会话级开关（与内置工具一致）
+                if (conv && id && store && typeof store.setToolStateForConversation === 'function') {
+                    store.setToolStateForConversation(conv.id, id, switchInput.checked, { silent: true });
+                    return;
+                }
+
+                // 回退：全局默认开关（用于无会话场景）
+                if (mcpSettings && typeof mcpSettings.setToolState === 'function') {
+                    mcpSettings.setToolState(id || tool.id, switchInput.checked);
                 }
             };
             

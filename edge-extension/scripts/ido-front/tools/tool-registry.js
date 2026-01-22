@@ -261,11 +261,29 @@
         return cleaned;
     }
     
+    function getEnabledList(options) {
+        if (options && typeof options.isEnabled === 'function') {
+            return getAll().filter(t => {
+                try {
+                    return options.isEnabled(t.id) === true;
+                } catch (e) {
+                    return false;
+                }
+            });
+        }
+
+        if (options && options.enabledToolIds && typeof options.enabledToolIds.has === 'function') {
+            return getAll().filter(t => options.enabledToolIds.has(t.id));
+        }
+
+        return getEnabled();
+    }
+
     /**
      * 转换为 Gemini functionDeclarations 格式
      */
-    function toGeminiFormat() {
-        const enabledList = getEnabled();
+    function toGeminiFormat(options) {
+        const enabledList = getEnabledList(options);
         if (enabledList.length === 0) return null;
         
         const functionDeclarations = enabledList.map(tool => {
@@ -288,8 +306,8 @@
     /**
      * 转换为 OpenAI tools 格式
      */
-    function toOpenAIFormat() {
-        const enabledList = getEnabled();
+    function toOpenAIFormat(options) {
+        const enabledList = getEnabledList(options);
         if (enabledList.length === 0) return null;
         
         return enabledList.map(tool => ({
@@ -305,8 +323,8 @@
     /**
      * 转换为 Claude tools 格式
      */
-    function toClaudeFormat() {
-        const enabledList = getEnabled();
+    function toClaudeFormat(options) {
+        const enabledList = getEnabledList(options);
         if (enabledList.length === 0) return null;
         
         return enabledList.map(tool => ({
