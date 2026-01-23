@@ -18,7 +18,7 @@
     // 默认思考规则配置（正则表达式字符串）
     const DEFAULT_THINKING_RULES = {
         // 使用 thinkingBudget (数值) 的模型匹配规则
-        budgetModelPattern: 'gemini-2\\.5|gemini-2-5',
+        budgetModelPattern: 'gemini-2\\.5(?!.*-image)|gemini-2-5(?!.*-image)',
         // 使用 thinkingLevel (low/high) 的模型匹配规则
         // 排除 gemini-3-pro-image 系列（图像生成模型不支持思考功能）
         levelModelPattern: 'gemini-3(?!.*-pro-image)'
@@ -715,8 +715,13 @@
             // Thinking Config - 根据模型规则添加思考配置
             
             const thinkingConfig = {};
+            const isImageGenModel = supportsImageGeneration(model, config);
+            // Image generation 的响应模态（默认 Text + Image）
+            const responseModality = geminiMeta.responseModality || 'default';
             
-            if (useBudgetMode(model, config)) {
+            // 注意：部分图像生成模型（例如 gemini-2.5-*-image 系列）可能不支持思考参数。
+            // 这里对“图像生成模型”默认不注入 thinkingBudget/thinkingLevel，只尝试请求 thought 摘要。
+            if (!isImageGenModel && useBudgetMode(model, config)) {
                 // 数值预算模式：使用 thinkingBudget
                 const budget = geminiMeta.thinkingBudget !== undefined
                     ? geminiMeta.thinkingBudget
@@ -724,13 +729,16 @@
                 if (budget !== -1) {
                     thinkingConfig.thinkingBudget = budget;
                 }
-                // 启用思考摘要
                 thinkingConfig.includeThoughts = true;
-            } else if (useLevelMode(model, config)) {
+            } else if (!isImageGenModel && useLevelMode(model, config)) {
                 // 等级模式：使用 thinkingLevel（四档：minimal/low/medium/high）
                 const level = geminiMeta.thinkingLevel || 'low';
                 thinkingConfig.thinkingLevel = level;
-                // 始终启用思考摘要（思维链）
+                thinkingConfig.includeThoughts = true;
+            }
+
+            // 对图像生成模型：无论“仅图片/默认”，都尝试请求 thought 摘要（如果该模型/后端不支持，将在请求失败后自动降级重试）。
+            if (isImageGenModel) {
                 thinkingConfig.includeThoughts = true;
             }
 
@@ -740,9 +748,8 @@
             }
             
             // Image Generation Config - 图像生成配置
-            if (supportsImageGeneration(model, config)) {
+            if (isImageGenModel) {
                 // 响应模态配置
-                const responseModality = geminiMeta.responseModality || 'default';
                 if (responseModality === 'image') {
                     generationConfig.responseModalities = ['Image'];
                 } else {
@@ -828,19 +835,11 @@
             }
 
             try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(body),
-                    signal: signal // 传递取消信号
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    let errorMsg = `Gemini API Error ${response.status}`;
+                function formatGeminiError(status, errorText) {
+                    let errorMsg = `Gemini API Error ${status}`;
                     try {
                         const errorJson = JSON.parse(errorText);
-                        if (errorJson.error && errorJson.error.message) {
+                        if (errorJson?.error?.message) {
                             errorMsg += `: ${errorJson.error.message}`;
                         } else {
                             errorMsg += `: ${errorText}`;
@@ -848,8 +847,69 @@
                     } catch (e) {
                         errorMsg += `: ${errorText}`;
                     }
-                    throw new Error(errorMsg);
+                    return errorMsg;
                 }
+
+                function looksLikeThinkingNotSupported(errorText) {
+                    const t = String(errorText || '').toLowerCase();
+                    return (
+                        t.includes('thinkingconfig') ||
+                        t.includes('include_thought') ||
+                        t.includes('includethought') ||
+                        t.includes('thinkingbudget') ||
+                        t.includes('thinking_budget') ||
+                        t.includes('thinkinglevel') ||
+                        t.includes('thinking_level')
+                    );
+                }
+
+                function stripThinkingConfigFromBody(bodyObj) {
+                    if (!bodyObj || typeof bodyObj !== 'object') return;
+                    const gen = bodyObj.generationConfig;
+                    if (!gen || typeof gen !== 'object') return;
+                    if (!gen.thinkingConfig) return;
+                    delete gen.thinkingConfig;
+                    // 如果 generationConfig 只剩空对象，清理掉，避免发空结构
+                    if (Object.keys(gen).length === 0) {
+                        delete bodyObj.generationConfig;
+                    }
+                }
+
+                async function postGemini(bodyObj) {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(bodyObj),
+                        signal: signal // 传递取消信号
+                    });
+
+                    if (res.ok) {
+                        return { ok: true, response: res, errorText: null };
+                    }
+
+                    const errorText = await res.text();
+                    return { ok: false, response: res, errorText };
+                }
+
+                // 发送请求：若后端不支持 thinkingConfig（常见于部分图像模型），自动降级重试一次
+                const hadThinkingConfig = !!body?.generationConfig?.thinkingConfig;
+                let attempt = await postGemini(body);
+
+                if (
+                    !attempt.ok &&
+                    hadThinkingConfig &&
+                    attempt.response?.status === 400 &&
+                    looksLikeThinkingNotSupported(attempt.errorText)
+                ) {
+                    stripThinkingConfigFromBody(body);
+                    attempt = await postGemini(body);
+                }
+
+                if (!attempt.ok) {
+                    throw new Error(formatGeminiError(attempt.response?.status, attempt.errorText));
+                }
+
+                const response = attempt.response;
 
                 if (isStream) {
                     const reader = response.body.getReader();
