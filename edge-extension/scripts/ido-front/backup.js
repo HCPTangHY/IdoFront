@@ -242,6 +242,14 @@
                 }
             }
 
+            // 追加不存在的渠道
+            const existingChannelIds = new Set(store.state.channels.map(c => c.id));
+            for (const channel of (backup.channels || [])) {
+                if (!existingChannelIds.has(channel.id)) {
+                    store.state.channels.push(channel);
+                }
+            }
+
             // 合并“面具上次活跃会话”映射（可选字段）
             if (backup.personaLastActiveConversationIdMap && typeof backup.personaLastActiveConversationIdMap === 'object') {
                 if (!store.state.personaLastActiveConversationIdMap || typeof store.state.personaLastActiveConversationIdMap !== 'object') {
@@ -553,6 +561,37 @@
         };
     }
 
+    /**
+     * 清除所有数据
+     */
+    async function clear() {
+        if (!store || !store.state) {
+            throw new Error('Store 未初始化');
+        }
+
+        // 1. 清除核心数据
+        store.state.conversations = [];
+        store.state.activeConversationId = null;
+        store.state.personaLastActiveConversationIdMap = {};
+        store.state.logs = [];
+        store.state.networkLogs = [];
+
+        // 2. 重置渠道和面具到默认状态
+        store.initDefaultChannels();
+        store.initDefaultPersona();
+
+        // 3. 强制持久化
+        store.persistImmediately();
+
+        // 4. 清除 IndexedDB 中的附件
+        const attachmentsApi = window.IdoFront.attachments;
+        if (attachmentsApi && typeof attachmentsApi.gc === 'function') {
+            await attachmentsApi.gc(new Set()); // 空 Set 代表清除所有附件
+        }
+
+        console.log('[backup] Storage cleared');
+    }
+
     // 暴露 API
     window.IdoFront.backup = {
         exportAll,
@@ -561,6 +600,7 @@
         exportConversationAsJSON,
         importConversation,
         getBackupStats,
+        clear,
         BACKUP_VERSION
     };
 

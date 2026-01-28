@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IdoFront",
-  "version": "1.2.19",
+  "version": "1.2.20",
   "description": "一个模块化的高客制LLM前端",
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -25,7 +25,9 @@
   "permissions": [
     "sidePanel",
     "tabs",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://fonts.googleapis.com/*",

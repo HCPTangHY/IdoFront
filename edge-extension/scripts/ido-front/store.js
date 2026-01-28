@@ -95,6 +95,9 @@
             this._initPromise = (async () => {
                 await this.restore();
 
+                // 尽力申请持久化存储，降低浏览器存储压力下被回收的概率
+                await this._ensurePersistentStorage();
+
                 // 附件外置化迁移：把历史消息中的 base64 dataUrl 挪到 pluginData (Blob) 存储，
                 // 避免 core.chat.state 写入 IndexedDB 时发生秒级 structured clone 卡顿。
                 await this.migrateAttachmentsToBlobStorage();
@@ -185,6 +188,27 @@
                     this.persistImmediately();
                 }
             });
+        },
+
+        async _ensurePersistentStorage() {
+            try {
+                if (!navigator?.storage || typeof navigator.storage.persist !== 'function') {
+                    return;
+                }
+
+                // 已持久化则无需重复申请
+                if (typeof navigator.storage.persisted === 'function') {
+                    const already = await navigator.storage.persisted();
+                    if (already) return;
+                }
+
+                const granted = await navigator.storage.persist();
+                if (!granted) {
+                    console.warn('[store] 浏览器未授予持久化存储权限，数据在存储压力下可能被清理');
+                }
+            } catch (e) {
+                // ignore
+            }
         },
 
         validateIntegrity() {
@@ -625,17 +649,36 @@
         async restore() {
             try {
                 let snapshot = null;
+
+                async function loadFromChromeStorage() {
+                    try {
+                        if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return null;
+                        return await new Promise(resolve => {
+                            chrome.storage.local.get([STORAGE_KEY], result => {
+                                const value = result ? result[STORAGE_KEY] : null;
+                                resolve(value || null);
+                            });
+                        });
+                    } catch (e) {
+                        return null;
+                    }
+                }
                 
-                // 优先从 IndexedDB 加载
+                // 1) 优先从 IndexedDB 加载
                 if (window.IdoFront.idbStorage) {
                     try {
                         snapshot = await window.IdoFront.idbStorage.load();
                     } catch (error) {
-                        console.warn('IndexedDB 加载失败，尝试 localStorage:', error);
+                        console.warn('IndexedDB 加载失败，尝试 chrome.storage/localStorage:', error);
                     }
                 }
+
+                // 2) 兜底：尝试 chrome.storage.local（更不容易被“清理站点数据”影响）
+                if (!snapshot) {
+                    snapshot = await loadFromChromeStorage();
+                }
                 
-                // 降级到 localStorage
+                // 3) 兜底：降级到 localStorage
                 if (!snapshot) {
                     const item = localStorage.getItem(STORAGE_KEY);
                     snapshot = item ? JSON.parse(item) : null;

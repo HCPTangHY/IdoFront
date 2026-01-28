@@ -313,26 +313,35 @@
     }
 
      // Helper: Convert Gemini parts to displayable content, reasoning, attachments, thoughtSignature and functionCalls
+    // 同时保留「轻量 parts 蓝图」用于严格回放 thoughtSignature（不包含 base64）。
     function partsToContent(parts) {
-        if (!parts || !Array.isArray(parts)) return { content: '', reasoning: null, attachments: null, thoughtSignature: null, functionCalls: null };
-        
+        if (!parts || !Array.isArray(parts)) {
+            return {
+                content: '',
+                reasoning: null,
+                attachments: null,
+                thoughtSignature: null,
+                imagePartSignatures: null,
+                partsBlueprint: null,
+                functionCalls: null
+            };
+        }
+
         let content = '';
         let reasoning = '';
         const attachments = [];
+        const imagePartSignatures = [];
+        const partsBlueprint = [];
         const functionCalls = [];
         let imageIndex = 1;
         let thoughtSignature = null;
-        
+
         for (const part of parts) {
-            if (part.text) {
-                // Check if this is a thought part
-                if (part.thought === true) {
-                    reasoning += part.text;
-                } else {
-                    content += part.text;
-                }
+            const partThoughtSignature = part.thoughtSignature || part.thought_signature || null;
+            if (partThoughtSignature) {
+                thoughtSignature = partThoughtSignature;
             }
-            
+
             // Handle function call from AI
             const functionCall = part.functionCall || part.function_call;
             if (functionCall) {
@@ -340,7 +349,41 @@
                     name: functionCall.name,
                     args: functionCall.args || {}
                 });
+                partsBlueprint.push({
+                    type: 'functionCall',
+                    functionCall: {
+                        name: functionCall.name,
+                        args: functionCall.args || {}
+                    },
+                    thoughtSignature: partThoughtSignature || undefined
+                });
             }
+
+            // Handle text (包括空字符串；流式时签名可能挂在空 text part 上)
+            if (Object.prototype.hasOwnProperty.call(part, 'text') && typeof part.text === 'string') {
+                if (part.thought === true) {
+                    reasoning += part.text;
+                    // 不回放 thought 文本；但如果该 thought part 用于承载签名（常见：text="" + thoughtSignature），保留一个空 text 占位。
+                    if (partThoughtSignature && part.text === '') {
+                        partsBlueprint.push({
+                            type: 'text',
+                            text: '',
+                            thoughtSignature: partThoughtSignature
+                        });
+                    }
+                } else {
+                    content += part.text;
+                    // 保留原始 text part（含空文本 + 签名占位）
+                    if (part.text !== '' || partThoughtSignature) {
+                        partsBlueprint.push({
+                            type: 'text',
+                            text: part.text,
+                            thoughtSignature: partThoughtSignature || undefined
+                        });
+                    }
+                }
+            }
+
             // Handle executable code from code execution tool
             // Support both camelCase (JS SDK) and snake_case (REST API) formats
             const executableCode = part.executableCode || part.executable_code;
@@ -349,6 +392,7 @@
                 const code = executableCode.code || '';
                 content += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
             }
+
             // Handle code execution result
             // Support both camelCase (JS SDK) and snake_case (REST API) formats
             const codeExecutionResult = part.codeExecutionResult || part.code_execution_result;
@@ -363,51 +407,57 @@
                     content += `\n**执行错误 (${outcome}):**\n\`\`\`\n${output}\n\`\`\`\n`;
                 }
             }
-            // Handle inline data (images from code execution or other sources)
+
+            // Handle inline data
             // Support both camelCase (JS SDK) and snake_case (REST API) formats
             const inlineData = part.inlineData || part.inline_data;
             if (inlineData) {
                 const mimeType = inlineData.mimeType || inlineData.mime_type;
                 const data = inlineData.data;
-                
-                // 将 Gemini 的 inlineData 转为浏览器可直接使用的 data URL，交给 DOM <img> 渲染，
-                // 避免把超长 Base64 串拼进 Markdown 再交给 marked 解析，降低性能开销。
+
                 if (mimeType && typeof data === 'string') {
                     const dataUrl = `data:${mimeType};base64,${data}`;
-                    
-                    // 尽量估算原始字节大小（Base64 长度 * 3/4），仅作为展示/调试用途
+
                     let approximateSize = undefined;
                     try {
                         approximateSize = Math.round((data.length * 3) / 4);
                     } catch (e) {
                         approximateSize = undefined;
                     }
-                    
-                    // 判断是否为代码执行生成的图表
+
                     const isCodeExecOutput = mimeType.startsWith('image/');
-                    
+                    const attachmentIndex = attachments.length;
+                    const attachmentName = isCodeExecOutput ? `图表 ${imageIndex++}` : `Gemini Image ${imageIndex++}`;
+
                     attachments.push({
                         dataUrl: dataUrl,
                         type: mimeType,
-                        name: isCodeExecOutput ? `图表 ${imageIndex++}` : `Gemini Image ${imageIndex++}`,
+                        name: attachmentName,
                         size: approximateSize,
-                        source: 'gemini-code-execution'
+                        source: 'gemini-code-execution',
+                        thought_signature: partThoughtSignature || undefined
+                    });
+
+                    imagePartSignatures.push(partThoughtSignature || null);
+                    partsBlueprint.push({
+                        type: 'inlineData',
+                        inlineData: {
+                            mimeType: mimeType,
+                            attachmentIndex: attachmentIndex
+                        },
+                        thoughtSignature: partThoughtSignature || undefined
                     });
                 }
             }
-            // 提取 thoughtSignature（per-part 级别，但对于简单文本对话通常只有一个）
-            // Support both camelCase and snake_case
-            const partThoughtSignature = part.thoughtSignature || part.thought_signature;
-            if (partThoughtSignature) {
-                thoughtSignature = partThoughtSignature;
-            }
         }
-        
+
         return {
             content,
             reasoning: reasoning || null,
             attachments: attachments.length > 0 ? attachments : null,
             thoughtSignature: thoughtSignature,
+            imagePartSignatures: imagePartSignatures.length > 0 ? imagePartSignatures : null,
+            partsBlueprint: partsBlueprint.length > 0 ? partsBlueprint : null,
             functionCalls: functionCalls.length > 0 ? functionCalls : null
         };
     }
@@ -488,6 +538,7 @@
         const contents = [];
         let systemInstruction = undefined;
         const enableYouTube = options.youtubeVideo || false;
+        const requireThoughtSignatures = !!options.requireThoughtSignatures;
 
         for (const msg of messages) {
             if (msg.role === 'system') {
@@ -519,6 +570,89 @@
                 }
             } else {
                 const role = msg.role === 'assistant' ? 'model' : 'user';
+
+                // Gemini：如果已保存 parts 蓝图，则按蓝图严格回放（保持 part 顺序 + thoughtSignature 位置）
+                const savedBlueprint = (role === 'model' && Array.isArray(msg.metadata?.gemini?.partsBlueprint))
+                    ? msg.metadata.gemini.partsBlueprint
+                    : null;
+
+                if (savedBlueprint && savedBlueprint.length > 0) {
+                    const attachmentList = Array.isArray(msg.attachments)
+                        ? msg.attachments
+                        : (Array.isArray(msg.metadata?.attachments) ? msg.metadata.attachments : []);
+
+                    const replayParts = [];
+                    let replayFunctionCallIndex = 0;
+
+                    for (const bp of savedBlueprint) {
+                        if (!bp || typeof bp !== 'object') continue;
+
+                        if (bp.type === 'text' && Object.prototype.hasOwnProperty.call(bp, 'text')) {
+                            const p = { text: typeof bp.text === 'string' ? bp.text : '' };
+                            if (bp.thoughtSignature) {
+                                p.thoughtSignature = bp.thoughtSignature;
+                            }
+                            replayParts.push(p);
+                            continue;
+                        }
+
+                        if (bp.type === 'functionCall' && bp.functionCall && bp.functionCall.name) {
+                            const p = {
+                                functionCall: {
+                                    name: bp.functionCall.name,
+                                    args: bp.functionCall.args || {}
+                                }
+                            };
+
+                            if (bp.thoughtSignature) {
+                                p.thoughtSignature = bp.thoughtSignature;
+                            } else if (requireThoughtSignatures && replayFunctionCallIndex === 0) {
+                                // 文档：如果不得不注入缺失签名的 functionCall，可用 dummy 签名跳过校验。
+                                // 仅用于兼容旧历史/迁移数据，避免 400 阻塞。
+                                p.thoughtSignature = 'skip_thought_signature_validator';
+                            }
+
+                            replayParts.push(p);
+                            replayFunctionCallIndex += 1;
+                            continue;
+                        }
+
+                        if (bp.type === 'inlineData' && bp.inlineData && typeof bp.inlineData.attachmentIndex === 'number') {
+                            // 文档要求：inlineData 的签名必须回填在该图片 part 上。
+                            // 如果缺失，且当前请求开启 includeThoughts/严格校验，跳过该图片 part。
+                            if (requireThoughtSignatures && !bp.thoughtSignature) {
+                                continue;
+                            }
+
+                            const att = attachmentList[bp.inlineData.attachmentIndex];
+                            const dataUrl = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
+                            const mimeType = (att && att.type) || bp.inlineData.mimeType;
+                            if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+                                continue;
+                            }
+                            const base64Data = dataUrl.split(',')[1];
+                            if (!base64Data) {
+                                continue;
+                            }
+                            const p = {
+                                inlineData: {
+                                    mimeType: mimeType,
+                                    data: base64Data
+                                }
+                            };
+                            if (bp.thoughtSignature) {
+                                p.thoughtSignature = bp.thoughtSignature;
+                            }
+                            replayParts.push(p);
+                            continue;
+                        }
+                    }
+
+                    if (replayParts.length > 0) {
+                        contents.push({ role: role, parts: replayParts });
+                        continue;
+                    }
+                }
                 
                 let parts = [];
                 
@@ -528,6 +662,12 @@
                     : null;
 
                 const hasFunctionCalls = (role === 'model' && msg.functionCalls && Array.isArray(msg.functionCalls) && msg.functionCalls.length > 0);
+
+                // Gemini：记录每个 inlineData part 的签名（按附件顺序）。
+                const imagePartSignatures = (role === 'model' && Array.isArray(msg.metadata?.gemini?.imagePartSignatures))
+                    ? msg.metadata.gemini.imagePartSignatures
+                    : null;
+                let inlineDataPartIndex = 0;
                 
                 // 构建 parts：从消息顶层字段读取
                 
@@ -546,7 +686,24 @@
                                     data: base64Data
                                 }
                             };
+
+                            if (role === 'model') {
+                                // 文档要求：thoughtSignature 必须回填到“收到它的那个 part”。
+                                // 对 inlineData：优先使用该图片 part 自己的签名；不要用 message 级签名兜底（可能被校验为缺失/无效）。
+                                const sig = attachment.thought_signature
+                                    || attachment.thoughtSignature
+                                    || (imagePartSignatures ? imagePartSignatures[inlineDataPartIndex] : null)
+                                    || null;
+                                if (sig) {
+                                    part.thoughtSignature = sig;
+                                } else if (requireThoughtSignatures) {
+                                    // 拿不到该图片 part 的签名：宁可不回传该图片 part，也不要伪造/复用别的签名。
+                                    continue;
+                                }
+                            }
+
                             parts.push(part);
+                            inlineDataPartIndex += 1;
                         }
                     }
                 } else if (msg.metadata?.attachments && Array.isArray(msg.metadata.attachments)) {
@@ -562,7 +719,21 @@
                                     data: base64Data
                                 }
                             };
+
+                            if (role === 'model') {
+                                const sig = attachment.thought_signature
+                                    || attachment.thoughtSignature
+                                    || (imagePartSignatures ? imagePartSignatures[inlineDataPartIndex] : null)
+                                    || null;
+                                if (sig) {
+                                    part.thoughtSignature = sig;
+                                } else if (requireThoughtSignatures) {
+                                    continue;
+                                }
+                            }
+
                             parts.push(part);
+                            inlineDataPartIndex += 1;
                         }
                     }
                 }
@@ -609,7 +780,7 @@
 
                         // Gemini 3：并行 FC 时签名只挂在第一个 functionCall part；顺序多步则每步各有一个签名。
                         if (thoughtSig && !signatureAttached) {
-                            part.thought_signature = thoughtSig;
+                            part.thoughtSignature = thoughtSig;
                             signatureAttached = true;
                         }
 
@@ -622,9 +793,9 @@
                 // - 无 functionCall：Gemini 3 通常在最后一个 part 返回签名；这里回填到最后一个 part
                 if (role === 'model' && thoughtSig && !hasFunctionCalls) {
                     if (parts.length === 0) {
-                        parts.push({ text: '', thought_signature: thoughtSig });
+                        parts.push({ text: '', thoughtSignature: thoughtSig });
                     } else {
-                        parts[parts.length - 1].thought_signature = thoughtSig;
+                        parts[parts.length - 1].thoughtSignature = thoughtSig;
                     }
                 }
 
@@ -693,9 +864,14 @@
                 console.warn('[GeminiChannel] Failed to get conversation metadata:', e);
             }
 
+            // 预判本次请求是否会开启 includeThoughts（开启时会要求历史 model parts 回填 thought_signature）
+            const isImageGenModel = supportsImageGeneration(model, config);
+            const requireThoughtSignatures = isImageGenModel || useBudgetMode(model, config) || useLevelMode(model, config);
+
             // 转换消息，传递 YouTube 视频选项
             const { contents, systemInstruction } = convertMessages(messages, {
-                youtubeVideo: !!geminiMeta.youtubeVideo
+                youtubeVideo: !!geminiMeta.youtubeVideo,
+                requireThoughtSignatures
             });
 
             const body = {
@@ -715,7 +891,6 @@
             // Thinking Config - 根据模型规则添加思考配置
             
             const thinkingConfig = {};
-            const isImageGenModel = supportsImageGeneration(model, config);
             // Image generation 的响应模态（默认 Text + Image）
             const responseModality = geminiMeta.responseModality || 'default';
             
@@ -863,6 +1038,15 @@
                     );
                 }
 
+                function looksLikeThoughtSignatureRequired(errorText) {
+                    const t = String(errorText || '').toLowerCase();
+                    return (
+                        t.includes('thought_signature') ||
+                        t.includes('thought signature') ||
+                        (t.includes('missing') && t.includes('thought') && t.includes('signature'))
+                    );
+                }
+
                 function stripThinkingConfigFromBody(bodyObj) {
                     if (!bodyObj || typeof bodyObj !== 'object') return;
                     const gen = bodyObj.generationConfig;
@@ -899,7 +1083,7 @@
                     !attempt.ok &&
                     hadThinkingConfig &&
                     attempt.response?.status === 400 &&
-                    looksLikeThinkingNotSupported(attempt.errorText)
+                    (looksLikeThinkingNotSupported(attempt.errorText) || looksLikeThoughtSignatureRequired(attempt.errorText))
                 ) {
                     stripThinkingConfigFromBody(body);
                     attempt = await postGemini(body);
@@ -974,7 +1158,7 @@
                                             accumulatedParts = accumulatedParts.concat(newParts);
                                             lastThoughtSignature = thoughtSignature;
                                             
-                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts);
                                             
                                             const updateData = {
                                                 content: content,
@@ -982,7 +1166,9 @@
                                                 attachments: attachments,
                                                 metadata: {
                                                     gemini: {
-                                                        thoughtSignature: extractedSignature || thoughtSignature
+                                                        thoughtSignature: extractedSignature || thoughtSignature,
+                                                        imagePartSignatures: extractedImagePartSignatures || null,
+                                                        partsBlueprint: extractedPartsBlueprint || null
                                                     }
                                                 }
                                             };
@@ -995,7 +1181,7 @@
                                             onUpdate(updateData);
                                         } else if (lastFinishReason) {
                                             // 收到 finishReason 但没有新内容，仍需通知上层流式已结束
-                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts);
                                             const updateData = {
                                                 content: content,
                                                 reasoning: reasoning,
@@ -1003,7 +1189,9 @@
                                                 attachments: attachments,
                                                 metadata: {
                                                     gemini: {
-                                                        thoughtSignature: extractedSignature || lastThoughtSignature
+                                                        thoughtSignature: extractedSignature || lastThoughtSignature,
+                                                        imagePartSignatures: extractedImagePartSignatures || null,
+                                                        partsBlueprint: extractedPartsBlueprint || null
                                                     }
                                                 }
                                             };
@@ -1020,7 +1208,7 @@
                         throw streamError;
                     }
 
-                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, functionCalls } = partsToContent(accumulatedParts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(accumulatedParts);
                     
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
@@ -1055,6 +1243,8 @@
                                 metadata: {
                                     gemini: {
                                         thoughtSignature: extractedSignature || lastThoughtSignature,
+                                        imagePartSignatures: extractedImagePartSignatures || null,
+                                        partsBlueprint: extractedPartsBlueprint || null,
                                         citations: citations,
                                         searchQueries: searchQueries,
                                         urlContext: urlContextInfo
@@ -1087,7 +1277,7 @@
                     const groundingMetadata = candidate?.groundingMetadata;
                     // 支持 camelCase 和 snake_case
                     const urlContextMetadata = candidate?.urlContextMetadata || candidate?.url_context_metadata;
-                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, functionCalls } = partsToContent(parts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(parts);
                     
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
@@ -1122,6 +1312,8 @@
                                 metadata: {
                                     gemini: {
                                         thoughtSignature: extractedSignature || thoughtSignature,
+                                        imagePartSignatures: extractedImagePartSignatures || null,
+                                        partsBlueprint: extractedPartsBlueprint || null,
                                         citations: citations,
                                         searchQueries: searchQueries,
                                         urlContext: urlContextInfo

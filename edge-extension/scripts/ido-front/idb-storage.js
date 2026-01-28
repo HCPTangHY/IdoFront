@@ -14,6 +14,47 @@
     const PLUGINS_FALLBACK_KEY = 'idofront.external.plugins.v1';
     const PLUGIN_DATA_FALLBACK_KEY = 'idofront.plugin.data.v1';
 
+    // 冗余副本：用于 IndexedDB 数据被清理/损坏时恢复
+    // 1) localStorage：无需额外权限，但可能被“清理站点数据”影响，且有配额限制
+    // 2) chrome.storage.local：通常不随站点数据被清理，更适合扩展（需要 manifest 权限 storage）
+    function persistStateShadowToLocalStorage(state) {
+        try {
+            localStorage.setItem(STATE_KEY, JSON.stringify(state));
+        } catch (e) {
+            // localStorage 可能空间不足/被禁用，忽略即可
+        }
+    }
+
+    function removeStateShadowFromLocalStorage() {
+        try {
+            localStorage.removeItem(STATE_KEY);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function persistStateShadowToChromeStorage(state) {
+        try {
+            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+            chrome.storage.local.set({ [STATE_KEY]: state }, () => {
+                // ignore runtime errors
+            });
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function removeStateShadowFromChromeStorage() {
+        try {
+            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+            chrome.storage.local.remove([STATE_KEY], () => {
+                // ignore
+            });
+        } catch (e) {
+            // ignore
+        }
+    }
+
     class IDBStorage {
         constructor() {
             this.db = null;
@@ -74,13 +115,18 @@
         async save(state) {
             try {
                 await this.init();
-                
+
                 return new Promise((resolve, reject) => {
                     const transaction = this.db.transaction([STORE_NAME], 'readwrite');
                     const store = transaction.objectStore(STORE_NAME);
                     const request = store.put(state, STATE_KEY);
 
-                    request.onsuccess = () => resolve();
+                    request.onsuccess = () => {
+                        // 额外保存一份到 localStorage / chrome.storage.local，作为 IDB 被清理/损坏时的兜底
+                        persistStateShadowToLocalStorage(state);
+                        persistStateShadowToChromeStorage(state);
+                        resolve();
+                    };
                     request.onerror = () => {
                         console.error('IndexedDB 保存失败:', request.error);
                         reject(request.error);
@@ -125,13 +171,16 @@
         async clear() {
             try {
                 await this.init();
-                
+
                 return new Promise((resolve, reject) => {
                     const transaction = this.db.transaction([STORE_NAME], 'readwrite');
                     const store = transaction.objectStore(STORE_NAME);
                     const request = store.clear();
 
                     request.onsuccess = () => {
+                        // 同步清理 localStorage / chrome.storage.local 影子副本
+                        removeStateShadowFromLocalStorage();
+                        removeStateShadowFromChromeStorage();
                         console.log('IndexedDB 数据已清除');
                         resolve();
                     };
@@ -153,13 +202,19 @@
         async delete(key) {
             try {
                 await this.init();
-                
+
                 return new Promise((resolve, reject) => {
                     const transaction = this.db.transaction([STORE_NAME], 'readwrite');
                     const store = transaction.objectStore(STORE_NAME);
                     const request = store.delete(key);
 
-                    request.onsuccess = () => resolve();
+                    request.onsuccess = () => {
+                        if (key === STATE_KEY) {
+                            removeStateShadowFromLocalStorage();
+                            removeStateShadowFromChromeStorage();
+                        }
+                        resolve();
+                    };
                     request.onerror = () => {
                         console.error('IndexedDB 删除失败:', request.error);
                         reject(request.error);
