@@ -650,12 +650,12 @@
             try {
                 let snapshot = null;
 
-                async function loadFromChromeStorage() {
+                async function loadFromChromeStorage(key) {
                     try {
                         if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return null;
                         return await new Promise(resolve => {
-                            chrome.storage.local.get([STORAGE_KEY], result => {
-                                const value = result ? result[STORAGE_KEY] : null;
+                            chrome.storage.local.get([key], result => {
+                                const value = result ? result[key] : null;
                                 resolve(value || null);
                             });
                         });
@@ -673,12 +673,17 @@
                     }
                 }
 
-                // 2) 兜底：尝试 chrome.storage.local（更不容易被“清理站点数据”影响）
+                // 2) 兜底：尝试 chrome.storage.local 的“影子备份”（轻量，性能更好）
                 if (!snapshot) {
-                    snapshot = await loadFromChromeStorage();
+                    snapshot = await loadFromChromeStorage('core.chat.state.shadow.v1');
+                }
+
+                // 3) 兼容：旧实现可能曾把完整 state 写到 core.chat.state
+                if (!snapshot) {
+                    snapshot = await loadFromChromeStorage(STORAGE_KEY);
                 }
                 
-                // 3) 兜底：降级到 localStorage
+                // 4) 兜底：降级到 localStorage
                 if (!snapshot) {
                     const item = localStorage.getItem(STORAGE_KEY);
                     snapshot = item ? JSON.parse(item) : null;

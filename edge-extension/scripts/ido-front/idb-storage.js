@@ -14,40 +14,165 @@
     const PLUGINS_FALLBACK_KEY = 'idofront.external.plugins.v1';
     const PLUGIN_DATA_FALLBACK_KEY = 'idofront.plugin.data.v1';
 
-    // 冗余副本：用于 IndexedDB 数据被清理/损坏时恢复
-    // 1) localStorage：无需额外权限，但可能被“清理站点数据”影响，且有配额限制
-    // 2) chrome.storage.local：通常不随站点数据被清理，更适合扩展（需要 manifest 权限 storage）
-    function persistStateShadowToLocalStorage(state) {
+    // 轻量影子备份：用于 IndexedDB 数据被清理/损坏时“尽力恢复”（避免影响主线程性能）
+    // 说明：不要把完整 state（可能几十/上百 MB）写入 chrome.storage/localStorage，会造成明显卡顿。
+    // 这里只存：渠道/面具/设置 + 当前活跃会话最近一段消息（可恢复近期工作）。
+    const STATE_SHADOW_KEY = 'core.chat.state.shadow.v1';
+
+    const SHADOW_MIN_INTERVAL_MS = 60 * 1000; // 最多 1 分钟写一次
+    const SHADOW_WRITE_DELAY_MS = 3000;       // 延迟写入，避免卡在响应结束关键路径
+    const MAX_SHADOW_MESSAGES = 200;          // 仅保留活跃会话最后 N 条消息
+
+    let shadowLastWrittenAt = 0;
+    let shadowWriteTimer = null;
+    let pendingShadowState = null;
+
+    function canUseChromeStorage() {
         try {
-            localStorage.setItem(STATE_KEY, JSON.stringify(state));
+            return typeof chrome !== 'undefined' && !!chrome.storage && !!chrome.storage.local;
         } catch (e) {
-            // localStorage 可能空间不足/被禁用，忽略即可
+            return false;
         }
     }
 
-    function removeStateShadowFromLocalStorage() {
-        try {
-            localStorage.removeItem(STATE_KEY);
-        } catch (e) {
-            // ignore
+    function sanitizeMessageForShadow(msg) {
+        if (!msg || typeof msg !== 'object') return null;
+        const clean = {
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            createdAt: msg.createdAt,
+            updatedAt: msg.updatedAt,
+            parentId: msg.parentId
+        };
+
+        // 保留轻量附件引用（避免携带 dataUrl/file/blob 等大字段）
+        if (Array.isArray(msg.attachments)) {
+            clean.attachments = msg.attachments.map(a => {
+                if (!a || typeof a !== 'object') return null;
+                return {
+                    id: a.id,
+                    name: a.name,
+                    type: a.type,
+                    size: a.size,
+                    source: a.source
+                };
+            }).filter(Boolean);
         }
+
+        // 保留工具调用等结构化信息（通常不大）
+        if (msg.toolCalls) clean.toolCalls = msg.toolCalls;
+        if (msg.toolResults) clean.toolResults = msg.toolResults;
+        if (msg.metadata) clean.metadata = msg.metadata;
+
+        return clean;
     }
 
-    function persistStateShadowToChromeStorage(state) {
+    function buildShadowSnapshot(state) {
+        const base = state && typeof state === 'object' ? state : {};
+        const conversations = Array.isArray(base.conversations) ? base.conversations : [];
+        const activeConversationId = base.activeConversationId || null;
+        const activeConv = activeConversationId
+            ? conversations.find(c => c && c.id === activeConversationId)
+            : null;
+
+        let convShadow = null;
+        if (activeConv) {
+            const allMessages = Array.isArray(activeConv.messages) ? activeConv.messages : [];
+            const tail = allMessages.slice(Math.max(0, allMessages.length - MAX_SHADOW_MESSAGES));
+            convShadow = {
+                id: activeConv.id,
+                title: activeConv.title,
+                createdAt: activeConv.createdAt,
+                updatedAt: activeConv.updatedAt,
+                personaId: activeConv.personaId,
+                selectedChannelId: activeConv.selectedChannelId,
+                selectedModel: activeConv.selectedModel,
+                streamOverride: activeConv.streamOverride,
+                reasoningEffort: activeConv.reasoningEffort,
+                activeBranchMap: activeConv.activeBranchMap,
+                titleEditedByUser: activeConv.titleEditedByUser,
+                titleGeneratedByAI: activeConv.titleGeneratedByAI,
+                metadata: activeConv.metadata,
+                messages: tail.map(sanitizeMessageForShadow).filter(Boolean)
+            };
+        }
+
+        return {
+            _shadowMagic: 'IdoFront_StateShadow',
+            _shadowVersion: 1,
+            _shadowSavedAt: new Date().toISOString(),
+            personas: Array.isArray(base.personas) ? base.personas : [],
+            activePersonaId: base.activePersonaId || null,
+            personaLastActiveConversationIdMap: (base.personaLastActiveConversationIdMap && typeof base.personaLastActiveConversationIdMap === 'object')
+                ? base.personaLastActiveConversationIdMap
+                : {},
+            activeConversationId,
+            conversations: convShadow ? [convShadow] : [],
+            channels: Array.isArray(base.channels) ? base.channels : [],
+            pluginStates: base.pluginStates && typeof base.pluginStates === 'object' ? base.pluginStates : {},
+            settings: base.settings && typeof base.settings === 'object' ? base.settings : {}
+        };
+    }
+
+    function flushShadowWrite() {
+        shadowWriteTimer = null;
+        if (!pendingShadowState || !canUseChromeStorage()) return;
+
+        const now = Date.now();
+        if (now - shadowLastWrittenAt < SHADOW_MIN_INTERVAL_MS) {
+            // 仍在节流窗口内，下次再写
+            return;
+        }
+
+        shadowLastWrittenAt = now;
+        const source = pendingShadowState;
+        pendingShadowState = null;
+
+        const snapshot = buildShadowSnapshot(source);
         try {
-            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
-            chrome.storage.local.set({ [STATE_KEY]: state }, () => {
-                // ignore runtime errors
+            chrome.storage.local.set({ [STATE_SHADOW_KEY]: snapshot }, () => {
+                // ignore
             });
         } catch (e) {
             // ignore
         }
     }
 
-    function removeStateShadowFromChromeStorage() {
+    function scheduleShadowWrite(state) {
+        if (!canUseChromeStorage()) return;
+
+        // 始终更新待写入 state（取最新），但写入频率受控
+        pendingShadowState = state;
+
+        if (shadowWriteTimer) return;
+
+        const run = () => flushShadowWrite();
+        if (typeof requestIdleCallback === 'function') {
+            shadowWriteTimer = requestIdleCallback(run, { timeout: 5000 });
+        } else {
+            shadowWriteTimer = setTimeout(run, SHADOW_WRITE_DELAY_MS);
+        }
+    }
+
+    function clearShadow() {
+        pendingShadowState = null;
+        if (shadowWriteTimer) {
+            try {
+                if (typeof cancelIdleCallback === 'function') {
+                    cancelIdleCallback(shadowWriteTimer);
+                } else {
+                    clearTimeout(shadowWriteTimer);
+                }
+            } catch (e) {
+                // ignore
+            }
+            shadowWriteTimer = null;
+        }
+
+        if (!canUseChromeStorage()) return;
         try {
-            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
-            chrome.storage.local.remove([STATE_KEY], () => {
+            chrome.storage.local.remove([STATE_SHADOW_KEY], () => {
                 // ignore
             });
         } catch (e) {
@@ -122,9 +247,8 @@
                     const request = store.put(state, STATE_KEY);
 
                     request.onsuccess = () => {
-                        // 额外保存一份到 localStorage / chrome.storage.local，作为 IDB 被清理/损坏时的兜底
-                        persistStateShadowToLocalStorage(state);
-                        persistStateShadowToChromeStorage(state);
+                        // 轻量影子备份：异步 + 节流 + 延迟，避免主线程卡顿
+                        scheduleShadowWrite(state);
                         resolve();
                     };
                     request.onerror = () => {
@@ -178,9 +302,8 @@
                     const request = store.clear();
 
                     request.onsuccess = () => {
-                        // 同步清理 localStorage / chrome.storage.local 影子副本
-                        removeStateShadowFromLocalStorage();
-                        removeStateShadowFromChromeStorage();
+                        // 同步清理影子副本
+                        clearShadow();
                         console.log('IndexedDB 数据已清除');
                         resolve();
                     };
@@ -210,8 +333,7 @@
 
                     request.onsuccess = () => {
                         if (key === STATE_KEY) {
-                            removeStateShadowFromLocalStorage();
-                            removeStateShadowFromChromeStorage();
+                            clearShadow();
                         }
                         resolve();
                     };
