@@ -46,7 +46,10 @@
         // 3. 单对话导出区域
         wrapper.appendChild(createExportSection());
 
-        // 4. 危险操作区域
+        // 4. 诊断与日志
+        wrapper.appendChild(createDiagnosticsSection());
+
+        // 5. 危险操作区域
         wrapper.appendChild(createDangerSection());
 
         container.appendChild(wrapper);
@@ -259,6 +262,91 @@
     /**
      * 创建危险操作区域
      */
+    /**
+     * 创建诊断与日志区域（用于崩溃前后的问题定位）
+     */
+    function createDiagnosticsSection() {
+        const section = document.createElement('div');
+        section.className = 'ido-card p-4';
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center gap-2 mb-2';
+        header.innerHTML = `
+            <span class="material-symbols-outlined text-[18px] text-amber-500">bug_report</span>
+            <span class="font-medium text-gray-800">诊断与日志</span>
+        `;
+        section.appendChild(header);
+
+        const desc = document.createElement('p');
+        desc.className = 'text-xs text-gray-500 mb-3';
+        desc.textContent = '用于定位崩溃/数据丢失等问题。日志会尽力在后台持续保存，崩溃后可在下次启动导出。';
+        section.appendChild(desc);
+
+        const info = document.createElement('div');
+        info.className = 'mb-3 p-2 bg-gray-50 rounded-lg text-sm text-gray-600';
+        info.id = 'crash-log-info';
+        info.textContent = '崩溃日志：加载中...';
+        section.appendChild(info);
+
+        // 加载日志数量
+        (async () => {
+            try {
+                const logger = window.IdoFront.crashLogger;
+                if (!logger || typeof logger.getLogs !== 'function') {
+                    info.textContent = '崩溃日志：模块未加载（crash-logger.js）';
+                    return;
+                }
+                const logs = await logger.getLogs();
+                info.textContent = `崩溃日志：${Array.isArray(logs) ? logs.length : 0} 条（仅保留最近一段）`;
+            } catch (e) {
+                info.textContent = '崩溃日志：读取失败';
+            }
+        })();
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'flex flex-wrap gap-2';
+
+        // 导出崩溃日志
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors';
+        exportBtn.innerHTML = `
+            <span class="material-symbols-outlined text-[16px]">download</span>
+            <span>导出崩溃日志</span>
+        `;
+        exportBtn.onclick = async () => {
+            const logger = window.IdoFront.crashLogger;
+            if (!logger || typeof logger.exportLogs !== 'function') {
+                alert('崩溃日志模块未加载');
+                return;
+            }
+            await logger.exportLogs();
+        };
+        btnGroup.appendChild(exportBtn);
+
+        // 清空崩溃日志
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'flex items-center gap-1.5 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors';
+        clearBtn.innerHTML = `
+            <span class="material-symbols-outlined text-[16px]">delete</span>
+            <span>清空崩溃日志</span>
+        `;
+        clearBtn.onclick = async () => {
+            const logger = window.IdoFront.crashLogger;
+            if (!logger || typeof logger.clearLogs !== 'function') {
+                alert('崩溃日志模块未加载');
+                return;
+            }
+            if (!confirm('确定清空崩溃日志吗？')) return;
+            await logger.clearLogs();
+            info.textContent = '崩溃日志：0 条';
+        };
+        btnGroup.appendChild(clearBtn);
+
+        section.appendChild(btnGroup);
+
+        return section;
+    }
+
     function createDangerSection() {
         const section = document.createElement('div');
         section.className = 'ido-card p-4 border-red-200';

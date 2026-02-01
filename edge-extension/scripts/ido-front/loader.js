@@ -21,6 +21,7 @@
     const scripts = [
         // 1. 基础模块（无依赖）
         'utils.js',
+        'crash-logger.js', // 崩溃/异常日志采集（尽力持久化到 chrome.storage.local）
         'idb-storage.js',  // IndexedDB 存储层（store.js 依赖）
         'attachments.js',  // 附件外置化（Blob 存储 / 引用）
         'store.js',

@@ -338,6 +338,17 @@
 
         // 保存到 store
         const store = window.IdoFront.store;
+
+        // 记录到 crashLogger（仅保存概要信息，避免体积过大）
+        const crashLogger = window.IdoFront.crashLogger;
+        if (crashLogger && typeof crashLogger.record === 'function') {
+            crashLogger.record('info', 'network_request', {
+                id: logId,
+                ts: timestamp,
+                url: url,
+                method: method
+            });
+        }
         if (!store.state.networkLogs) {
             store.state.networkLogs = [];
         }
@@ -401,6 +412,19 @@
             
             logEntry.duration = Date.now() - logEntry.timestamp;
             logEntry.status = 'success';
+
+            // 记录到 crashLogger（保存概要信息）
+            const crashLogger = window.IdoFront.crashLogger;
+            if (crashLogger && typeof crashLogger.record === 'function') {
+                const level = response.status >= 400 ? 'warn' : 'info';
+                crashLogger.record(level, 'network_response', {
+                    id: logId,
+                    status: response.status,
+                    duration: logEntry.duration,
+                    url: logEntry.request?.url,
+                    method: logEntry.request?.method
+                });
+            }
 
             // 触发事件
             if (store.events) {
@@ -514,6 +538,18 @@
             stack: error.stack,
             name: error.name
         };
+
+        // 记录到 crashLogger（保存概要信息）
+        const crashLogger = window.IdoFront.crashLogger;
+        if (crashLogger && typeof crashLogger.record === 'function') {
+            crashLogger.record('error', 'network_error', {
+                id: logId,
+                url: logEntry.request?.url,
+                method: logEntry.request?.method,
+                message: error && error.message,
+                name: error && error.name
+            });
+        }
         logEntry.status = 'error';
         logEntry.duration = Date.now() - logEntry.timestamp;
 
