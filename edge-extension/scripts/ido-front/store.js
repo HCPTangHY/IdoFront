@@ -947,6 +947,16 @@
                 this.state.activePersonaId = this.state.personas[0].id;
                 // Trigger switch logic
                 this.setActivePersona(this.state.activePersonaId);
+
+                // deletePersona 也属于“面具列表变更”，需要广播 personas:updated
+                // （setActivePersona 只会广播 persona:changed，不会广播 personas:updated）
+                if (this.events) {
+                    if (typeof this.events.emitAsync === 'function') {
+                        this.events.emitAsync('personas:updated', this.state.personas);
+                    } else if (typeof this.events.emit === 'function') {
+                        this.events.emit('personas:updated', this.state.personas);
+                    }
+                }
             } else {
                 this.persist();
                 if (this.events) {

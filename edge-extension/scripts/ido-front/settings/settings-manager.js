@@ -225,6 +225,22 @@
                     }
                 }
             });
+
+            // 当前面具切换（activePersonaId 变化）也需要刷新“面具列表”的【当前】徽章
+            // 注意：切换面具不会触发 personas:updated，因此需要单独监听 persona:changed
+            store.events.on('persona:changed', () => {
+                if (activeSettingsTab === 'personas' && mainContainer) {
+                    try {
+                        updateSettingsContent();
+                    } catch (e) {
+                        const content = mainContainer.querySelector('.flex-1.overflow-y-auto');
+                        const personaSettings = window.IdoFront.personaSettings;
+                        if (content && personaSettings && personaSettings.render) {
+                            personaSettings.render(content, context, store);
+                        }
+                    }
+                }
+            });
         }
         
         // 监听状态保存事件（用于新标签页）

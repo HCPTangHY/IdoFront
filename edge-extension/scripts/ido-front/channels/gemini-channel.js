@@ -814,6 +814,35 @@
         return { contents, systemInstruction };
     }
 
+    /**
+     * 判断历史消息是否具备完整的 thoughtSignature 回放信息。
+     * 
+     * 说明：当请求开启 thinkingConfig.includeThoughts 时，Gemini 可能要求历史中的 model turn
+     * 回填 thoughtSignature。若历史缺失，会导致 400，并触发一次“先报错再降级重试”的额外请求。
+     * 为了避免这种「试探报错」的请求，这里做一次预检：
+     * - 只要历史里存在 assistant 消息但没有 thoughtSignature（或 partsBlueprint 里也找不到），就视为不完整
+     * - 不完整时：本次请求不启用 includeThoughts（也不注入 thinkingConfig），直接走降级路径
+     */
+    function hasCompleteThoughtSignatures(messages) {
+        if (!Array.isArray(messages) || messages.length === 0) return true;
+
+        for (const msg of messages) {
+            if (!msg || msg.role !== 'assistant') continue;
+
+            const sig = msg.metadata?.gemini?.thoughtSignature;
+            if (sig) continue;
+
+            // 兼容：如果只保存了 partsBlueprint，但没有汇总 thoughtSignature，也认为“可回放”
+            const bp = msg.metadata?.gemini?.partsBlueprint;
+            const hasSigInBlueprint = Array.isArray(bp) && bp.some(p => p && (p.thoughtSignature || p.thought_signature));
+            if (hasSigInBlueprint) continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
     const adapter = {
         /**
          * Send message to Gemini API
@@ -866,7 +895,26 @@
 
             // 预判本次请求是否会开启 includeThoughts（开启时会要求历史 model parts 回填 thought_signature）
             const isImageGenModel = supportsImageGeneration(model, config);
-            const requireThoughtSignatures = isImageGenModel || useBudgetMode(model, config) || useLevelMode(model, config);
+
+            // 对图像生成模型：仅对“已知更可能支持 thoughtSignature 的模型”尝试 includeThoughts。
+            // 目前用 supportsImageSize（Gemini 3 Pro Image）作为近似判断，避免对 gemini-2.5-*-image 等模型
+            // 发送一条大概率 400 的“试探请求”。
+            const imageModelTryIncludeThoughts = isImageGenModel && supportsImageSize(model, config);
+
+            // 想要 includeThoughts 的条件：
+            // - 文本模型：启用 thinkingBudget/thinkingLevel 时
+            // - 图像模型：仅对特定模型（如 Gemini 3 Pro Image）尝试
+            const wantsIncludeThoughts = (!isImageGenModel && (useBudgetMode(model, config) || useLevelMode(model, config)))
+                || imageModelTryIncludeThoughts;
+
+            // 历史不完整时，直接禁用 includeThoughts，避免“先报错再重试”
+            const canReplayThoughtSignatures = wantsIncludeThoughts ? hasCompleteThoughtSignatures(messages) : true;
+            const enableIncludeThoughts = wantsIncludeThoughts && canReplayThoughtSignatures;
+            const requireThoughtSignatures = enableIncludeThoughts;
+
+            if (wantsIncludeThoughts && !enableIncludeThoughts) {
+                console.warn('[GeminiChannel] 已自动关闭 includeThoughts：历史消息缺少 thoughtSignature。建议新建会话后再开启思考/图像签名相关能力。');
+            }
 
             // 转换消息，传递 YouTube 视频选项
             const { contents, systemInstruction } = convertMessages(messages, {
@@ -894,9 +942,9 @@
             // Image generation 的响应模态（默认 Text + Image）
             const responseModality = geminiMeta.responseModality || 'default';
             
-            // 注意：部分图像生成模型（例如 gemini-2.5-*-image 系列）可能不支持思考参数。
-            // 这里对“图像生成模型”默认不注入 thinkingBudget/thinkingLevel，只尝试请求 thought 摘要。
-            if (!isImageGenModel && useBudgetMode(model, config)) {
+            // 注意：thinkingConfig/includeThoughts 可能触发“历史 thoughtSignature 回填”校验。
+            // 因此仅在 enableIncludeThoughts=true 时注入，避免额外的 400 试探请求。
+            if (enableIncludeThoughts && !isImageGenModel && useBudgetMode(model, config)) {
                 // 数值预算模式：使用 thinkingBudget
                 const budget = geminiMeta.thinkingBudget !== undefined
                     ? geminiMeta.thinkingBudget
@@ -905,15 +953,15 @@
                     thinkingConfig.thinkingBudget = budget;
                 }
                 thinkingConfig.includeThoughts = true;
-            } else if (!isImageGenModel && useLevelMode(model, config)) {
+            } else if (enableIncludeThoughts && !isImageGenModel && useLevelMode(model, config)) {
                 // 等级模式：使用 thinkingLevel（四档：minimal/low/medium/high）
                 const level = geminiMeta.thinkingLevel || 'low';
                 thinkingConfig.thinkingLevel = level;
                 thinkingConfig.includeThoughts = true;
             }
 
-            // 对图像生成模型：无论“仅图片/默认”，都尝试请求 thought 摘要（如果该模型/后端不支持，将在请求失败后自动降级重试）。
-            if (isImageGenModel) {
+            // 图像生成模型：仅在 enableIncludeThoughts 时请求 thoughtSignature（用于更严格的历史回放/附件签名回填）
+            if (enableIncludeThoughts && isImageGenModel) {
                 thinkingConfig.includeThoughts = true;
             }
 

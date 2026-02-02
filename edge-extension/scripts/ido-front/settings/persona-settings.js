@@ -63,7 +63,10 @@
         fileInput.onchange = (e) => {
             const file = e.target.files && e.target.files[0];
             if (!file) return;
-            handleImportPersonas(file, container);
+            // 注意：SettingsManager 使用“离屏渲染再 replaceChildren”的方式，
+            // render() 入参 container 可能是离屏临时节点。
+            // 这里用按钮自身在真实 DOM 中的父容器来刷新 UI。
+            handleImportPersonas(file, importBtn);
             // 重置 input，允许重复选择同一文件
             fileInput.value = '';
         };
@@ -185,21 +188,19 @@
         });
         actions.appendChild(editBtn);
 
-        // Export Button
-        const exportBtn = context.ui.createIconButton({
-            icon: 'download',
-            title: '导出',
-            className: "p-1 hover:bg-gray-100 rounded text-gray-500",
-            iconClassName: "material-symbols-outlined text-[16px]",
-            onClick: () => {
-                try {
-                    exportSinglePersona(persona);
-                } catch (e) {
-                    console.error(e);
-                    alert('导出失败：' + (e && e.message ? e.message : '未知错误'));
-                }
+        // Export Button（单个面具导出：给一个更明显的“导出”文字，移动端也可见）
+        const exportBtn = document.createElement('button');
+        exportBtn.className = "px-2 py-1 hover:bg-gray-100 rounded text-gray-600 flex items-center gap-1 text-xs";
+        exportBtn.title = '导出';
+        exportBtn.innerHTML = `<span class="material-symbols-outlined text-[16px]">download</span><span>导出</span>`;
+        exportBtn.onclick = () => {
+            try {
+                exportSinglePersona(persona);
+            } catch (e) {
+                console.error(e);
+                alert('导出失败：' + (e && e.message ? e.message : '未知错误'));
             }
-        });
+        };
         actions.appendChild(exportBtn);
         
         // Delete Button
@@ -213,7 +214,7 @@
                     if (confirm(`确定要删除面具 "${persona.name}" 吗？相关的对话也将被删除。`)) {
                         const success = store.deletePersona(persona.id);
                         if (success) {
-                            window.IdoFront.personaSettings.render(container, context, store);
+                            refreshPersonaSettingsView(deleteBtn);
                         }
                     }
                 }
@@ -510,7 +511,25 @@
         return { imported, overwritten, duplicated };
     }
 
-    async function handleImportPersonas(file, container) {
+    function refreshPersonaSettingsView(anchorEl) {
+        // 优先从触发按钮/卡片中反查当前“设置内容区”，避免渲染到离屏容器
+        const realContainer = anchorEl && anchorEl.closest
+            ? anchorEl.closest('.flex-1.overflow-y-auto')
+            : null;
+
+        if (realContainer) {
+            window.IdoFront.personaSettings.render(realContainer, context, store);
+            return;
+        }
+
+        // 兜底：尝试找当前设置主面板内容区（可能命中多个，但总比无刷新好）
+        const fallback = document.querySelector('.flex-1.overflow-y-auto');
+        if (fallback) {
+            window.IdoFront.personaSettings.render(fallback, context, store);
+        }
+    }
+
+    async function handleImportPersonas(file, anchorEl) {
         try {
             const text = await readFileAsText(file);
             let data;
@@ -539,7 +558,7 @@
                 }
             }
 
-            window.IdoFront.personaSettings.render(container, context, store);
+            refreshPersonaSettingsView(anchorEl);
 
             const extra = [];
             if (result.overwritten) extra.push(`覆盖 ${result.overwritten} 个`);
