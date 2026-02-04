@@ -73,7 +73,7 @@
         { value: '2K', label: '2K', description: '高清分辨率' },
         { value: '4K', label: '4K', description: '超高清分辨率' }
     ];
-    
+
     // 响应模态选项
     const RESPONSE_MODALITY_OPTIONS = [
         { value: 'default', label: '默认', description: '文本和图片', icon: 'auto_awesome' },
@@ -121,12 +121,21 @@
      * 获取会话的图像生成配置
      */
     function getImageGenConfig(conv) {
-        if (!conv) return { aspectRatio: 'auto', imageSize: '1K', responseModality: 'default' };
+        if (!conv) {
+            return {
+                aspectRatio: 'auto',
+                imageSize: '1K',
+                responseModality: 'default',
+                forceThinking: false
+            };
+        }
         const geminiMeta = conv.metadata?.gemini || {};
         return {
             aspectRatio: geminiMeta.imageAspectRatio || 'auto',
             imageSize: geminiMeta.imageSize || '1K',
-            responseModality: geminiMeta.responseModality || 'default'
+            responseModality: geminiMeta.responseModality || 'default',
+            // 生图请求思维链：默认开启，用于获取 thoughtSignature
+            forceThinking: geminiMeta.imageForceThinking !== false
         };
     }
     
@@ -158,6 +167,7 @@
     const setImageAspectRatio = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageAspectRatio', val, opts);
     const setImageSize = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageSize', val, opts);
     const setResponseModality = (store, convId, val, opts) => setGeminiMeta(store, convId, 'responseModality', val, opts);
+    const setImageForceThinking = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageForceThinking', !!val, opts);
 
     // 思考规则
     const loadGlobalThinkingRules = () => loadRules(THINKING_RULES_STORAGE_KEY, DEFAULT_THINKING_RULES);
@@ -314,12 +324,14 @@
 
      // Helper: Convert Gemini parts to displayable content, reasoning, attachments, thoughtSignature and functionCalls
     // 同时保留「轻量 parts 蓝图」用于严格回放 thoughtSignature（不包含 base64）。
-    function partsToContent(parts) {
+    function partsToContent(parts, options) {
         if (!parts || !Array.isArray(parts)) {
             return {
                 content: '',
                 reasoning: null,
                 attachments: null,
+                // 思维链中的预览图（仅 UI 展示，不持久化/不回传）
+                thoughtAttachments: null,
                 thoughtSignature: null,
                 imagePartSignatures: null,
                 partsBlueprint: null,
@@ -327,9 +339,18 @@
             };
         }
 
+        const opt = (options && typeof options === 'object') ? options : {};
+        // Gemini 生图模型可能在 thought 段返回预览图：默认不记录/不展示/不回传
+        const dropThoughtImages = !!opt.dropThoughtImages;
+        const inlineDataSource = (typeof opt.inlineDataSource === 'string' && opt.inlineDataSource)
+            ? opt.inlineDataSource
+            : 'gemini-inlineData';
+
         let content = '';
         let reasoning = '';
         const attachments = [];
+        // 思维链中的预览图（仅 UI 展示，不持久化/不回传）
+        const thoughtAttachments = [];
         const imagePartSignatures = [];
         const partsBlueprint = [];
         const functionCalls = [];
@@ -416,6 +437,34 @@
                 const data = inlineData.data;
 
                 if (mimeType && typeof data === 'string') {
+                    const isImage = mimeType.startsWith('image/');
+                    const isThought = part.thought === true;
+
+                    // ★ 思维链里的预览图：收进思维链（仅 UI 展示），不进入 attachments（不持久化、不回传）
+                    if (dropThoughtImages && isThought && isImage) {
+                        const dataUrl = `data:${mimeType};base64,${data}`;
+
+                        let approximateSize = undefined;
+                        try {
+                            approximateSize = Math.round((data.length * 3) / 4);
+                        } catch (e) {
+                            approximateSize = undefined;
+                        }
+
+                        const attachmentName = `预览图 ${imageIndex++}`;
+                        thoughtAttachments.push({
+                            dataUrl: dataUrl,
+                            type: mimeType,
+                            name: attachmentName,
+                            size: approximateSize,
+                            source: 'gemini-thought-preview',
+                            thought_signature: partThoughtSignature || undefined
+                        });
+
+                        // 注意：不写入 partsBlueprint / imagePartSignatures，避免后续回放/回传
+                        continue;
+                    }
+
                     const dataUrl = `data:${mimeType};base64,${data}`;
 
                     let approximateSize = undefined;
@@ -425,20 +474,22 @@
                         approximateSize = undefined;
                     }
 
-                    const isCodeExecOutput = mimeType.startsWith('image/');
                     const attachmentIndex = attachments.length;
-                    const attachmentName = isCodeExecOutput ? `图表 ${imageIndex++}` : `Gemini Image ${imageIndex++}`;
+                    const attachmentName = isImage ? `图片 ${imageIndex++}` : `Gemini Attachment ${imageIndex++}`;
 
                     attachments.push({
                         dataUrl: dataUrl,
                         type: mimeType,
                         name: attachmentName,
                         size: approximateSize,
-                        source: 'gemini-code-execution',
+                        source: inlineDataSource,
                         thought_signature: partThoughtSignature || undefined
                     });
 
-                    imagePartSignatures.push(partThoughtSignature || null);
+                    // 仅对“实际输出到 UI 的图片附件”记录签名
+                    if (isImage) {
+                        imagePartSignatures.push(partThoughtSignature || null);
+                    }
                     partsBlueprint.push({
                         type: 'inlineData',
                         inlineData: {
@@ -455,6 +506,8 @@
             content,
             reasoning: reasoning || null,
             attachments: attachments.length > 0 ? attachments : null,
+            // 思维链中的预览图（仅 UI 展示，不持久化/不回传）
+            thoughtAttachments: thoughtAttachments.length > 0 ? thoughtAttachments : null,
             thoughtSignature: thoughtSignature,
             imagePartSignatures: imagePartSignatures.length > 0 ? imagePartSignatures : null,
             partsBlueprint: partsBlueprint.length > 0 ? partsBlueprint : null,
@@ -538,7 +591,6 @@
         const contents = [];
         let systemInstruction = undefined;
         const enableYouTube = options.youtubeVideo || false;
-        const requireThoughtSignatures = !!options.requireThoughtSignatures;
 
         for (const msg of messages) {
             if (msg.role === 'system') {
@@ -582,7 +634,6 @@
                         : (Array.isArray(msg.metadata?.attachments) ? msg.metadata.attachments : []);
 
                     const replayParts = [];
-                    let replayFunctionCallIndex = 0;
 
                     for (const bp of savedBlueprint) {
                         if (!bp || typeof bp !== 'object') continue;
@@ -606,23 +657,14 @@
 
                             if (bp.thoughtSignature) {
                                 p.thoughtSignature = bp.thoughtSignature;
-                            } else if (requireThoughtSignatures && replayFunctionCallIndex === 0) {
-                                // 文档：如果不得不注入缺失签名的 functionCall，可用 dummy 签名跳过校验。
-                                // 仅用于兼容旧历史/迁移数据，避免 400 阻塞。
-                                p.thoughtSignature = 'skip_thought_signature_validator';
                             }
 
                             replayParts.push(p);
-                            replayFunctionCallIndex += 1;
                             continue;
                         }
 
                         if (bp.type === 'inlineData' && bp.inlineData && typeof bp.inlineData.attachmentIndex === 'number') {
                             // 文档要求：inlineData 的签名必须回填在该图片 part 上。
-                            // 如果缺失，且当前请求开启 includeThoughts/严格校验，跳过该图片 part。
-                            if (requireThoughtSignatures && !bp.thoughtSignature) {
-                                continue;
-                            }
 
                             const att = attachmentList[bp.inlineData.attachmentIndex];
                             const dataUrl = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
@@ -696,9 +738,6 @@
                                     || null;
                                 if (sig) {
                                     part.thoughtSignature = sig;
-                                } else if (requireThoughtSignatures) {
-                                    // 拿不到该图片 part 的签名：宁可不回传该图片 part，也不要伪造/复用别的签名。
-                                    continue;
                                 }
                             }
 
@@ -727,8 +766,6 @@
                                     || null;
                                 if (sig) {
                                     part.thoughtSignature = sig;
-                                } else if (requireThoughtSignatures) {
-                                    continue;
                                 }
                             }
 
@@ -814,35 +851,6 @@
         return { contents, systemInstruction };
     }
 
-    /**
-     * 判断历史消息是否具备完整的 thoughtSignature 回放信息。
-     * 
-     * 说明：当请求开启 thinkingConfig.includeThoughts 时，Gemini 可能要求历史中的 model turn
-     * 回填 thoughtSignature。若历史缺失，会导致 400，并触发一次“先报错再降级重试”的额外请求。
-     * 为了避免这种「试探报错」的请求，这里做一次预检：
-     * - 只要历史里存在 assistant 消息但没有 thoughtSignature（或 partsBlueprint 里也找不到），就视为不完整
-     * - 不完整时：本次请求不启用 includeThoughts（也不注入 thinkingConfig），直接走降级路径
-     */
-    function hasCompleteThoughtSignatures(messages) {
-        if (!Array.isArray(messages) || messages.length === 0) return true;
-
-        for (const msg of messages) {
-            if (!msg || msg.role !== 'assistant') continue;
-
-            const sig = msg.metadata?.gemini?.thoughtSignature;
-            if (sig) continue;
-
-            // 兼容：如果只保存了 partsBlueprint，但没有汇总 thoughtSignature，也认为“可回放”
-            const bp = msg.metadata?.gemini?.partsBlueprint;
-            const hasSigInBlueprint = Array.isArray(bp) && bp.some(p => p && (p.thoughtSignature || p.thought_signature));
-            if (hasSigInBlueprint) continue;
-
-            return false;
-        }
-
-        return true;
-    }
-
     const adapter = {
         /**
          * Send message to Gemini API
@@ -869,6 +877,12 @@
             // Use SSE for streaming if requested
             const isStream = !!onUpdate;
             const action = isStream ? 'streamGenerateContent' : 'generateContent';
+
+            // partsToContent 的解析选项（用于过滤 thought 段图片等特殊情况）
+            const partsToContentOpt = {
+                dropThoughtImages: false,
+                inlineDataSource: 'gemini-inlineData'
+            };
             
             // Construct URL
             // Standard: https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}
@@ -896,30 +910,44 @@
             // 预判本次请求是否会开启 includeThoughts（开启时会要求历史 model parts 回填 thought_signature）
             const isImageGenModel = supportsImageGeneration(model, config);
 
-            // 对图像生成模型：仅对“已知更可能支持 thoughtSignature 的模型”尝试 includeThoughts。
-            // 目前用 supportsImageSize（Gemini 3 Pro Image）作为近似判断，避免对 gemini-2.5-*-image 等模型
-            // 发送一条大概率 400 的“试探请求”。
-            const imageModelTryIncludeThoughts = isImageGenModel && supportsImageSize(model, config);
+            // 生图模型：过滤思维链预览图（不显示、不记录、也不回传）
+            partsToContentOpt.dropThoughtImages = !!isImageGenModel;
+            partsToContentOpt.inlineDataSource = isImageGenModel ? 'gemini-imagegen' : 'gemini-inlineData';
 
-            // 想要 includeThoughts 的条件：
-            // - 文本模型：启用 thinkingBudget/thinkingLevel 时
-            // - 图像模型：仅对特定模型（如 Gemini 3 Pro Image）尝试
-            const wantsIncludeThoughts = (!isImageGenModel && (useBudgetMode(model, config) || useLevelMode(model, config)))
-                || imageModelTryIncludeThoughts;
+            // 说明：
+            // - 文本模型：thinking 由 thinkingBudget/thinkingLevel 控制
+            // - 图片模型：多数后端不允许设置 thinkingConfig（包括 thinkingBudget）。
+            //   因此这里仅提供一个开关：允许用户“尝试 includeThoughts（拿 thoughtSignature）”。
+            //   若后端不支持，将直接报错，由用户手动关闭开关后重试。
 
-            // 历史不完整时，直接禁用 includeThoughts，避免“先报错再重试”
-            const canReplayThoughtSignatures = wantsIncludeThoughts ? hasCompleteThoughtSignatures(messages) : true;
-            const enableIncludeThoughts = wantsIncludeThoughts && canReplayThoughtSignatures;
-            const requireThoughtSignatures = enableIncludeThoughts;
+            const isBudgetModel = (!isImageGenModel && useBudgetMode(model, config));
+            const isLevelModel = (!isImageGenModel && useLevelMode(model, config));
 
-            if (wantsIncludeThoughts && !enableIncludeThoughts) {
-                console.warn('[GeminiChannel] 已自动关闭 includeThoughts：历史消息缺少 thoughtSignature。建议新建会话后再开启思考/图像签名相关能力。');
-            }
+            // 生图：是否尝试 includeThoughts（用于 thoughtSignature）- 默认开启
+            const imageForceThinking = isImageGenModel && (geminiMeta.imageForceThinking !== false);
+
+            // 预算模型：budget>0 视为启用 thinking；-1(自动)/0(关闭) 则不启用。
+            const budget = isBudgetModel
+                ? ((geminiMeta.thinkingBudget !== undefined) ? geminiMeta.thinkingBudget : -1)
+                : -1;
+
+            const wantsThinking = (
+                (isBudgetModel && typeof budget === 'number' && budget > 0) ||
+                (isLevelModel === true)
+            );
+
+            // includeThoughts：
+            // - 文本模型：启用 thinking 时默认尝试
+            // - 图片模型：仅当用户打开开关时尝试
+            const wantsIncludeThoughts = wantsThinking || imageForceThinking;
+
+            // 砍掉预检/自动处理：includeThoughts 是否发送完全由开关/思考设置决定。
+            // 若后端要求历史 thoughtSignature 而当前历史不满足，将直接 400 报错。
+            const enableIncludeThoughts = wantsIncludeThoughts;
 
             // 转换消息，传递 YouTube 视频选项
             const { contents, systemInstruction } = convertMessages(messages, {
-                youtubeVideo: !!geminiMeta.youtubeVideo,
-                requireThoughtSignatures
+                youtubeVideo: !!geminiMeta.youtubeVideo
             });
 
             const body = {
@@ -942,27 +970,28 @@
             // Image generation 的响应模态（默认 Text + Image）
             const responseModality = geminiMeta.responseModality || 'default';
             
-            // 注意：thinkingConfig/includeThoughts 可能触发“历史 thoughtSignature 回填”校验。
-            // 因此仅在 enableIncludeThoughts=true 时注入，避免额外的 400 试探请求。
-            if (enableIncludeThoughts && !isImageGenModel && useBudgetMode(model, config)) {
-                // 数值预算模式：使用 thinkingBudget
-                const budget = geminiMeta.thinkingBudget !== undefined
-                    ? geminiMeta.thinkingBudget
-                    : -1; // 默认动态思考
-                if (budget !== -1) {
+            // 注意：thinkingConfig.includeThoughts 可能触发“历史 thoughtSignature 回填”校验。
+            // 因此把 includeThoughts 与 thinking 启用解耦：
+            // - thinking 可以开（预算/等级）
+            // - includeThoughts 只有在历史可回放时才开（避免 400）
+
+            if (wantsThinking) {
+                if (isBudgetModel && typeof budget === 'number' && budget > 0) {
                     thinkingConfig.thinkingBudget = budget;
+                } else if (isLevelModel) {
+                    const level = geminiMeta.thinkingLevel || 'low';
+                    thinkingConfig.thinkingLevel = level;
                 }
-                thinkingConfig.includeThoughts = true;
-            } else if (enableIncludeThoughts && !isImageGenModel && useLevelMode(model, config)) {
-                // 等级模式：使用 thinkingLevel（四档：minimal/low/medium/high）
-                const level = geminiMeta.thinkingLevel || 'low';
-                thinkingConfig.thinkingLevel = level;
-                thinkingConfig.includeThoughts = true;
             }
 
-            // 图像生成模型：仅在 enableIncludeThoughts 时请求 thoughtSignature（用于更严格的历史回放/附件签名回填）
-            if (enableIncludeThoughts && isImageGenModel) {
+            // 图片模型：开启 includeThoughts 时，同时带上 thinkingBudget=-1（自动）。
+            // Vertex 要求：includeThoughts 只有在 thinking 启用时才允许。
+            if (enableIncludeThoughts) {
                 thinkingConfig.includeThoughts = true;
+                // 如果还没设置 thinkingBudget/thinkingLevel，补一个 -1（自动）让 Vertex 认为 thinking 已启用
+                if (!thinkingConfig.thinkingBudget && !thinkingConfig.thinkingLevel) {
+                    thinkingConfig.thinkingBudget = -1;
+                }
             }
 
             // 将 thinkingConfig 合并到 generationConfig
@@ -1073,40 +1102,6 @@
                     return errorMsg;
                 }
 
-                function looksLikeThinkingNotSupported(errorText) {
-                    const t = String(errorText || '').toLowerCase();
-                    return (
-                        t.includes('thinkingconfig') ||
-                        t.includes('include_thought') ||
-                        t.includes('includethought') ||
-                        t.includes('thinkingbudget') ||
-                        t.includes('thinking_budget') ||
-                        t.includes('thinkinglevel') ||
-                        t.includes('thinking_level')
-                    );
-                }
-
-                function looksLikeThoughtSignatureRequired(errorText) {
-                    const t = String(errorText || '').toLowerCase();
-                    return (
-                        t.includes('thought_signature') ||
-                        t.includes('thought signature') ||
-                        (t.includes('missing') && t.includes('thought') && t.includes('signature'))
-                    );
-                }
-
-                function stripThinkingConfigFromBody(bodyObj) {
-                    if (!bodyObj || typeof bodyObj !== 'object') return;
-                    const gen = bodyObj.generationConfig;
-                    if (!gen || typeof gen !== 'object') return;
-                    if (!gen.thinkingConfig) return;
-                    delete gen.thinkingConfig;
-                    // 如果 generationConfig 只剩空对象，清理掉，避免发空结构
-                    if (Object.keys(gen).length === 0) {
-                        delete bodyObj.generationConfig;
-                    }
-                }
-
                 async function postGemini(bodyObj) {
                     const res = await fetch(url, {
                         method: 'POST',
@@ -1123,19 +1118,8 @@
                     return { ok: false, response: res, errorText };
                 }
 
-                // 发送请求：若后端不支持 thinkingConfig（常见于部分图像模型），自动降级重试一次
-                const hadThinkingConfig = !!body?.generationConfig?.thinkingConfig;
-                let attempt = await postGemini(body);
-
-                if (
-                    !attempt.ok &&
-                    hadThinkingConfig &&
-                    attempt.response?.status === 400 &&
-                    (looksLikeThinkingNotSupported(attempt.errorText) || looksLikeThoughtSignatureRequired(attempt.errorText))
-                ) {
-                    stripThinkingConfigFromBody(body);
-                    attempt = await postGemini(body);
-                }
+                // 发送请求：只发一次，不做任何自动重试/自动降级。
+                const attempt = await postGemini(body);
 
                 if (!attempt.ok) {
                     throw new Error(formatGeminiError(attempt.response?.status, attempt.errorText));
@@ -1206,12 +1190,14 @@
                                             accumulatedParts = accumulatedParts.concat(newParts);
                                             lastThoughtSignature = thoughtSignature;
                                             
-                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments, thoughtAttachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts, partsToContentOpt);
                                             
                                             const updateData = {
                                                 content: content,
                                                 reasoning: reasoning,
                                                 attachments: attachments,
+                                                // 思维链预览图：仅用于 UI 展示，不进入 metadata/store
+                                                thoughtAttachments: thoughtAttachments,
                                                 metadata: {
                                                     gemini: {
                                                         thoughtSignature: extractedSignature || thoughtSignature,
@@ -1229,12 +1215,14 @@
                                             onUpdate(updateData);
                                         } else if (lastFinishReason) {
                                             // 收到 finishReason 但没有新内容，仍需通知上层流式已结束
-                                            const { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts);
+                                            const { content, reasoning, attachments, thoughtAttachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts, partsToContentOpt);
                                             const updateData = {
                                                 content: content,
                                                 reasoning: reasoning,
                                                 finishReason: lastFinishReason,
                                                 attachments: attachments,
+                                                // 思维链预览图：仅用于 UI 展示，不进入 metadata/store
+                                                thoughtAttachments: thoughtAttachments,
                                                 metadata: {
                                                     gemini: {
                                                         thoughtSignature: extractedSignature || lastThoughtSignature,
@@ -1256,7 +1244,7 @@
                         throw streamError;
                     }
 
-                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(accumulatedParts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(accumulatedParts, partsToContentOpt);
                     
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
@@ -1325,7 +1313,7 @@
                     const groundingMetadata = candidate?.groundingMetadata;
                     // 支持 camelCase 和 snake_case
                     const urlContextMetadata = candidate?.urlContextMetadata || candidate?.url_context_metadata;
-                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(parts);
+                    let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(parts, partsToContentOpt);
                     
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
@@ -1825,7 +1813,7 @@
             const store = getStore();
             if (!store) return;
             
-            const { h, icon: uiIcon, section, sheetHeader } = window.IdoUI;
+            const { h, icon: uiIcon, section, sheetHeader, switchItem } = window.IdoUI;
             const model = conv.selectedModel;
             const hasImageSize = supportsImageSize(model, channelConfig);
             
@@ -1880,6 +1868,23 @@
                 const modalityGrid = h('div.grid.grid-cols-2.gap-3');
                 renderOptions(modalityGrid, RESPONSE_MODALITY_OPTIONS, 'responseModality', setResponseModality, { layout: 'horizontal' });
                 body.appendChild(section({ label: '输出类型', children: modalityGrid }));
+
+                // 1.5 生图思考
+                body.appendChild(section({
+                    label: '思考',
+                    hint: 'Gemini 3 Pro及以上图片模型强制开启思考',
+                    children: h('div.space-y-3', [
+                        switchItem({
+                            label: '',
+                            description: '开启后将请求图片模型的思维链',
+                            checked: !!currentConfig.forceThinking,
+                            onChange: (checked) => {
+                                currentConfig.forceThinking = !!checked;
+                                setImageForceThinking(store, conv.id, !!checked, { silent: true });
+                            }
+                        })
+                    ])
+                }));
                 
                 // 2. 宽高比（可取消）
                 const aspectGrid = h('div.grid.grid-cols-4.gap-2');
@@ -2300,6 +2305,7 @@
     window.IdoFront.geminiChannel.setImageAspectRatio = setImageAspectRatio;
     window.IdoFront.geminiChannel.setImageSize = setImageSize;
     window.IdoFront.geminiChannel.setResponseModality = setResponseModality;
+    window.IdoFront.geminiChannel.setImageForceThinking = setImageForceThinking;
     window.IdoFront.geminiChannel.loadImageGenRules = loadImageGenRules;
     window.IdoFront.geminiChannel.saveImageGenRules = saveImageGenRules;
     window.IdoFront.geminiChannel.ASPECT_RATIO_OPTIONS = ASPECT_RATIO_OPTIONS;

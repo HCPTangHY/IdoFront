@@ -1480,6 +1480,10 @@
                     if (finalAssistantAttachments && finalAssistantAttachments.length > 0) {
                         updatePayload.attachments = finalAssistantAttachments;
                     }
+                    // Gemini 生图：思维链预览图（仅 UI 展示，不持久化、不回传）
+                    if (data && Array.isArray(data.thoughtAttachments) && data.thoughtAttachments.length > 0) {
+                        updatePayload.thoughtAttachments = data.thoughtAttachments;
+                    }
 
                     if (context && typeof context.updateMessageById === 'function') {
                         context.updateMessageById(assistantMessage.id, updatePayload);
@@ -1636,6 +1640,24 @@
 
                 if (attachments && Array.isArray(attachments) && attachments.length > 0) {
                     finalAssistantAttachments = attachments;
+                }
+
+                // ★ 非流式：立即把最终内容同步到 UI（否则 message card 仍是初始空内容，Markdown 也不会触发渲染）
+                if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+                    const updatePayload = {
+                        content: fullContent,
+                        reasoning: fullReasoning,
+                        streaming: false,
+                        reasoningEnded: true
+                    };
+                    if (finalAssistantAttachments && finalAssistantAttachments.length > 0) {
+                        updatePayload.attachments = finalAssistantAttachments;
+                    }
+                    if (typeof context.updateMessageById === 'function') {
+                        context.updateMessageById(assistantMessage.id, updatePayload);
+                    } else if (typeof context.updateLastMessage === 'function') {
+                        context.updateLastMessage(updatePayload);
+                    }
                 }
             }
             
@@ -1811,14 +1833,60 @@
                         try {
                             const normalized = await attachmentsApi.normalizeAttachmentsForState(finalAssistantAttachments, { source: 'assistant' });
                             if (normalized && Array.isArray(normalized.attachments) && normalized.attachments.length > 0) {
-                                assistantMessage.attachments = normalized.attachments;
+                                // ★ 验证：确保外置化后的附件确实可读（避免“看得见但切回分支就空”）
+                                let ok = true;
+                                for (const att of normalized.attachments) {
+                                    if (!att || !att.id) {
+                                        ok = false;
+                                        break;
+                                    }
+                                    // eslint-disable-next-line no-await-in-loop
+                                    const url = await attachmentsApi.getObjectUrl(att.id);
+                                    if (!url) {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+
+                                if (ok) {
+                                    assistantMessage.attachments = normalized.attachments;
+                                } else {
+                                    throw new Error('Attachment storage verification failed');
+                                }
                             } else {
                                 delete assistantMessage.attachments;
                             }
                         } catch (e) {
                             console.warn('[generateResponse] normalizeAttachmentsForState failed:', e);
-                            // 保底：不写入 attachments，避免持久化卡顿
-                            delete assistantMessage.attachments;
+
+                            // 保底：尽量不要把大图 base64 写回 core.chat.state（性能风险）。
+                            // 但如果附件总量很小，则允许以内联方式保留，避免“切回分支为空”。
+                            let total = 0;
+                            try {
+                                for (const a of finalAssistantAttachments) {
+                                    if (!a) continue;
+                                    if (typeof a.size === 'number') {
+                                        total += a.size;
+                                    } else if (typeof a.dataUrl === 'string') {
+                                        // base64 长度粗略换算
+                                        const b64 = a.dataUrl.split(',')[1] || '';
+                                        total += Math.round((b64.length * 3) / 4);
+                                    }
+                                }
+                            } catch (err) {
+                                total = 0;
+                            }
+
+                            const INLINE_FALLBACK_MAX_BYTES = 512 * 1024; // 512KB
+                            if (total > 0 && total <= INLINE_FALLBACK_MAX_BYTES) {
+                                assistantMessage.attachments = finalAssistantAttachments;
+                                if (!assistantMessage.metadata) assistantMessage.metadata = {};
+                                assistantMessage.metadata.attachmentsInlineFallback = true;
+                            } else {
+                                delete assistantMessage.attachments;
+                                if (!assistantMessage.metadata) assistantMessage.metadata = {};
+                                assistantMessage.metadata.attachmentsPersistFailed = true;
+                            }
                         }
                     }
                 }

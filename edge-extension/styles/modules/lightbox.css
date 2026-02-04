@@ -132,12 +132,59 @@
     object-fit: contain;
     border-radius: var(--ido-radius-lg);
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    transform: scale(0.9);
-    transition: transform var(--ido-transition-base);
+    /* transform 由 JS 接管（缩放/平移），避免与 CSS 动画冲突 */
+    transform: translate(0px, 0px) scale(1);
+    transition: none;
+    touch-action: none; /* 支持双指缩放/拖拽，不触发浏览器默认手势 */
+    user-select: none;
 }
 
-.ido-lightbox--visible .ido-lightbox__image {
-    transform: scale(1);
+/* ========================================
+   Lightbox 顶部工具栏（下载/缩放/关闭）
+   ======================================== */
+
+.ido-lightbox__toolbar {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    right: 1rem;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
+    z-index: 10000;
+}
+
+.ido-lightbox__btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(255, 255, 255, 0.12);
+    border: none;
+    border-radius: var(--ido-radius-full);
+    color: white;
+    cursor: pointer;
+    transition: background-color var(--ido-transition-base);
+}
+
+.ido-lightbox__btn:hover {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+.ido-lightbox__btn .material-symbols-outlined {
+    font-size: 1.5rem;
+}
+
+.ido-lightbox__zoom {
+    padding: 0.25rem 0.625rem;
+    border-radius: var(--ido-radius-full);
+    background-color: rgba(0, 0, 0, 0.45);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.75rem;
+    line-height: 1;
+    user-select: none;
 }
 
 /* ========================================
@@ -281,10 +328,8 @@
     .ido-lightbox__image {
         transition: none;
     }
-    
-    .ido-lightbox--visible .ido-lightbox__image {
-        transform: scale(1);
-    }
+
+    /* transform 由 JS 接管（缩放/平移），这里不强制覆盖 */
 }
 
 /* ========================================
@@ -347,4 +392,29 @@
 .ido-message__file-size {
     font-size: 0.6875rem;
     color: var(--ido-color-text-tertiary);
+}
+
+/* 文件下载按钮 */
+.ido-message__file-download {
+    width: 2.25rem;
+    height: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--ido-radius-full);
+    background-color: transparent;
+    color: var(--ido-color-text-tertiary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color var(--ido-transition-base), color var(--ido-transition-base);
+}
+
+.ido-message__file-download:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: var(--ido-color-text-primary);
+}
+
+.ido-message__file-download .material-symbols-outlined {
+    font-size: 1.25rem;
 }

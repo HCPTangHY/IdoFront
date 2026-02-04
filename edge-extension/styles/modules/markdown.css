@@ -49,6 +49,32 @@
     animation: fadeIn 0.2s ease-out;
 }
 
+/* 思维链中的预览图（如 Gemini 生图 thought 段返回） */
+.reasoning-images {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 120px));
+    gap: 0.5rem;
+    margin: 0 0 0.75rem 0;
+}
+
+.reasoning-images:empty {
+    display: none;
+}
+
+.reasoning-image-thumb {
+    width: 120px;
+    height: 120px;
+    object-fit: cover;
+    border-radius: 0.5rem;
+    border: 1px solid var(--reasoning-content-border);
+    cursor: pointer;
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+.reasoning-image-thumb:hover {
+    border-color: var(--ido-color-primary);
+}
+
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(-4px); }
     to { opacity: 1; transform: translateY(0); }
@@ -417,7 +443,9 @@
 }
 
 /* 修复思维链 Markdown 渲染后的空白问题 */
-.reasoning-content.markdown-body:not([data-needs-markdown]) {
+.reasoning-content.markdown-body:not([data-needs-markdown]),
+.reasoning-render-target.markdown-body:not([data-needs-markdown]),
+.reasoning-content:not([data-needs-markdown]) .reasoning-render-target:not([data-needs-markdown]) {
     white-space: normal;
 }
 

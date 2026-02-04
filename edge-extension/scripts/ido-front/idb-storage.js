@@ -592,14 +592,33 @@
                 }
             },
             // 插件数据存储的 localStorage 兜底实现
+            // 注意：localStorage 无法可靠保存 Blob（JSON.stringify 会变成 {} 丢数据）。
+            // 因此遇到 Blob 时转换为 dataUrl 字符串再存。
             async setPluginData(pluginId, key, value) {
                 try {
                     const all = await this.getAllPluginDataRaw();
                     if (!all[pluginId]) all[pluginId] = {};
-                    all[pluginId][key] = { value, updatedAt: Date.now() };
+
+                    let storedValue = value;
+                    if (value instanceof Blob) {
+                        storedValue = await new Promise((resolve, reject) => {
+                            try {
+                                const reader = new FileReader();
+                                reader.onload = () => resolve(reader.result);
+                                reader.onerror = () => reject(reader.error || new Error('readAsDataURL failed'));
+                                reader.readAsDataURL(value);
+                            } catch (e) {
+                                reject(e);
+                            }
+                        });
+                    }
+
+                    all[pluginId][key] = { value: storedValue, updatedAt: Date.now() };
                     localStorage.setItem(PLUGIN_DATA_FALLBACK_KEY, JSON.stringify(all));
                 } catch (error) {
                     console.error('localStorage 保存插件数据失败', error);
+                    // 重要：向上抛出，让调用方有机会做降级/提示（避免“静默丢附件”）
+                    throw error;
                 }
             },
             async getPluginData(pluginId, key) {

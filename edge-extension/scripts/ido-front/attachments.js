@@ -89,6 +89,11 @@
     function setCachedObjectUrl(id, url) {
         if (!id || !url) return;
 
+        // 只缓存 blob: objectURL，避免把 dataUrl（可能很大）常驻内存
+        if (typeof url !== 'string' || !url.startsWith('blob:')) {
+            return;
+        }
+
         // revoke old
         const existing = objectUrlCache.get(id);
         if (existing && existing !== url) {
@@ -159,17 +164,24 @@
         const type = normalizeMimeType(pickString(m.type, pickString(blob.type, '')));
         const source = pickString(m.source, undefined);
 
-        // 1) 优先存 Blob
+        // 1) 优先存 Blob（IndexedDB 支持结构化克隆 Blob）
+        // 2) 若环境退化到 localStorage 或底层写入异常，则回退为 dataUrl 字符串
         try {
             await setStoredValue(id, blob);
+
+            // ★ 验证：有些 fallback 实现可能“成功返回但实际丢数据”（例如 JSON.stringify(Blob) -> {})
+            const roundtrip = await getStoredValue(id);
+            const ok = (roundtrip instanceof Blob) || (typeof roundtrip === 'string' && roundtrip.startsWith('data:'));
+            if (!ok) {
+                throw new Error('Attachment storage verification failed (blob roundtrip)');
+            }
         } catch (e) {
-            // 2) fallback：如果落 Blob 失败（例如退化到 localStorage），存 dataUrl 字符串
-            console.warn('[attachments] saveBlob -> setPluginData(blob) failed, fallback to dataUrl string:', e);
+            console.warn('[attachments] saveBlob failed, fallback to dataUrl string:', e);
             const dataUrl = await blobToDataUrl(blob);
             await setStoredValue(id, dataUrl);
         }
 
-        // 缓存 objectURL（UI 使用）
+        // 缓存 objectURL（仅本会话使用；持久化仍以 pluginData 为准）
         try {
             const url = URL.createObjectURL(blob);
             setCachedObjectUrl(id, url);
@@ -191,12 +203,41 @@
         if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
             return null;
         }
-        const blob = await dataUrlToBlob(dataUrl);
+
         const m = meta && typeof meta === 'object' ? { ...meta } : {};
-        if (!m.type) {
-            m.type = extractMimeFromDataUrl(dataUrl) || blob.type;
+        const id = pickString(m.id, '') || createAttachmentId();
+
+        // 尝试从 dataUrl 提取 mime / 估算大小
+        const extractedMime = extractMimeFromDataUrl(dataUrl);
+        const type = normalizeMimeType(pickString(m.type, extractedMime));
+        const name = pickString(m.name, 'attachment');
+        const source = pickString(m.source, undefined);
+
+        let approximateSize = undefined;
+        try {
+            const b64 = String(dataUrl).split(',')[1] || '';
+            approximateSize = Math.round((b64.length * 3) / 4);
+        } catch (e) {
+            approximateSize = undefined;
         }
-        return saveBlob(blob, m);
+
+        // 优先落 Blob（更省空间/更适合 objectURL），失败则直接保存 dataUrl 字符串
+        try {
+            const blob = await dataUrlToBlob(dataUrl);
+            const meta2 = { ...m, id, name, type: type || blob.type, source };
+            return await saveBlob(blob, meta2);
+        } catch (e) {
+            console.warn('[attachments] saveDataUrl -> dataUrlToBlob failed, store as raw dataUrl string:', e);
+            await setStoredValue(id, dataUrl);
+            const ref = {
+                id,
+                name,
+                type: type || extractedMime || '',
+                size: approximateSize
+            };
+            if (source) ref.source = source;
+            return ref;
+        }
     }
 
     async function getBlob(id) {
@@ -240,15 +281,25 @@
         }
 
         const p = (async () => {
-            const blob = await getBlob(id);
-            if (!blob) return null;
-            try {
-                const url = URL.createObjectURL(blob);
-                setCachedObjectUrl(id, url);
-                return url;
-            } catch (e) {
-                return null;
+            const value = await getStoredValue(id);
+            if (!value) return null;
+
+            // 如果存的是 dataUrl 字符串，直接返回即可（img.src 可用），避免再转 Blob
+            if (typeof value === 'string' && value.startsWith('data:')) {
+                return value;
             }
+
+            if (value instanceof Blob) {
+                try {
+                    const url = URL.createObjectURL(value);
+                    setCachedObjectUrl(id, url);
+                    return url;
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            return null;
         })();
 
         pendingObjectUrl.set(id, p);

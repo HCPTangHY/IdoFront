@@ -50,11 +50,31 @@ const FrameworkMessages = (function() {
 
     /**
      * 打开图片 Lightbox
+     * - 点击背景/空白关闭
+     * - 支持滚轮/触控缩放、拖拽平移
+     * - 支持下载
      */
     function openLightbox(images, currentIndex) {
         if (!images || images.length === 0) return;
 
-        let currentIdx = currentIndex;
+        const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+
+        let currentIdx = Math.max(0, Math.min(currentIndex || 0, images.length - 1));
+        let scale = 1;
+        let translateX = 0;
+        let translateY = 0;
+
+        // pointer state (pan / pinch)
+        const pointers = new Map();
+        let isPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+        let panStartTx = 0;
+        let panStartTy = 0;
+        let pinchStartDist = 0;
+        let pinchStartScale = 1;
+
+        const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
         const lightbox = document.createElement('div');
         lightbox.className = 'ido-lightbox';
@@ -66,42 +86,62 @@ const FrameworkMessages = (function() {
         const img = document.createElement('img');
         img.className = 'ido-lightbox__image';
         img.alt = images[currentIdx].name || 'Image';
+        img.draggable = false;
 
-        // 支持附件外置化：如果没有 dataUrl，则按 attachment.id 从 IdoFront.attachments 取 objectURL
-        const initialSrc = images[currentIdx].dataUrl;
-        if (initialSrc) {
-            img.src = initialSrc;
-        } else if (
-            images[currentIdx].id &&
-            window.IdoFront &&
-            window.IdoFront.attachments &&
-            typeof window.IdoFront.attachments.getObjectUrl === 'function'
-        ) {
-            window.IdoFront.attachments.getObjectUrl(images[currentIdx].id).then((url) => {
-                if (url) img.src = url;
-            }).catch(() => {
-                // ignore
-            });
-        }
+        const toolbar = document.createElement('div');
+        toolbar.className = 'ido-lightbox__toolbar';
 
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'ido-lightbox__close';
-        closeBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
-        closeBtn.onclick = closeLightbox;
+        const makeBtn = (icon, title, onClick) => {
+            const b = document.createElement('button');
+            b.className = 'ido-lightbox__btn';
+            b.title = title;
+            b.innerHTML = `<span class="material-symbols-outlined">${icon}</span>`;
+            b.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (typeof onClick === 'function') onClick();
+            };
+            return b;
+        };
+
+        const zoomLabel = document.createElement('div');
+        zoomLabel.className = 'ido-lightbox__zoom';
+        zoomLabel.textContent = '100%';
+
+        const closeBtn = makeBtn('close', '关闭 (Esc)', () => closeLightbox());
+        const zoomInBtn = makeBtn('zoom_in', '放大 (滚轮/双指)', () => setScale(scale * 1.25));
+        const zoomOutBtn = makeBtn('zoom_out', '缩小', () => setScale(scale / 1.25));
+        const resetBtn = makeBtn('restart_alt', '重置', () => setScale(1));
+        const downloadBtn = makeBtn('download', '下载', () => downloadCurrent());
+
+        toolbar.appendChild(downloadBtn);
+        toolbar.appendChild(zoomOutBtn);
+        toolbar.appendChild(zoomInBtn);
+        toolbar.appendChild(resetBtn);
+        toolbar.appendChild(zoomLabel);
+        toolbar.appendChild(closeBtn);
 
         content.appendChild(img);
-        content.appendChild(closeBtn);
+        content.appendChild(toolbar);
 
         if (images.length > 1) {
             const prevBtn = document.createElement('button');
             prevBtn.className = 'ido-lightbox__nav ido-lightbox__nav--prev';
             prevBtn.innerHTML = '<span class="material-symbols-outlined">chevron_left</span>';
-            prevBtn.onclick = () => navigateLightbox(-1);
+            prevBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                navigateLightbox(-1);
+            };
 
             const nextBtn = document.createElement('button');
             nextBtn.className = 'ido-lightbox__nav ido-lightbox__nav--next';
             nextBtn.innerHTML = '<span class="material-symbols-outlined">chevron_right</span>';
-            nextBtn.onclick = () => navigateLightbox(1);
+            nextBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                navigateLightbox(1);
+            };
 
             const counter = document.createElement('div');
             counter.className = 'ido-lightbox__counter';
@@ -120,6 +160,94 @@ const FrameworkMessages = (function() {
             lightbox.classList.add('ido-lightbox--visible');
         });
 
+        function updateZoomLabel() {
+            zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+        }
+
+        function applyTransform() {
+            img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+            img.style.cursor = scale > 1 ? (isPanning ? 'grabbing' : 'grab') : 'zoom-in';
+            updateZoomLabel();
+        }
+
+        function setScale(nextScale) {
+            const prev = scale;
+            scale = clamp(nextScale, 1, 6);
+            if (scale === 1) {
+                translateX = 0;
+                translateY = 0;
+            } else if (prev === 1 && scale > 1) {
+                // 初次放大时，保持居中
+                translateX = 0;
+                translateY = 0;
+            }
+            applyTransform();
+        }
+
+        async function setImageSrc(idx) {
+            img.alt = images[idx].name || 'Image';
+            img.removeAttribute('src');
+
+            const src = images[idx].dataUrl;
+            if (src) {
+                img.src = src;
+                return;
+            }
+
+            if (images[idx].id && attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
+                try {
+                    const url = await attachmentsApi.getObjectUrl(images[idx].id);
+                    if (url) img.src = url;
+                } catch (e) {
+                    // ignore
+                }
+            }
+        }
+
+        function resetTransform() {
+            scale = 1;
+            translateX = 0;
+            translateY = 0;
+            applyTransform();
+        }
+
+        async function downloadCurrent() {
+            const att = images[currentIdx];
+            const filename = (att && att.name ? att.name : `image_${currentIdx + 1}`).replace(/[\\/:*?"<>|]/g, '_');
+
+            try {
+                // 优先走 dataUrl
+                if (att && typeof att.dataUrl === 'string' && att.dataUrl.startsWith('data:')) {
+                    const a = document.createElement('a');
+                    a.href = att.dataUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    return;
+                }
+
+                // 其次走 Blob（外置化）
+                if (att && att.id && attachmentsApi && typeof attachmentsApi.getBlob === 'function') {
+                    const blob = await attachmentsApi.getBlob(att.id);
+                    if (blob) {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        setTimeout(() => {
+                            try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
+                        }, 0);
+                    }
+                }
+            } catch (e) {
+                console.warn('[lightbox] download failed:', e);
+            }
+        }
+
         function handleKeydown(e) {
             if (e.key === 'Escape') {
                 closeLightbox();
@@ -127,39 +255,115 @@ const FrameworkMessages = (function() {
                 navigateLightbox(-1);
             } else if (e.key === 'ArrowRight' && images.length > 1) {
                 navigateLightbox(1);
+            } else if ((e.key === '+' || e.key === '=') && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                setScale(scale * 1.1);
+            } else if (e.key === '-' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                setScale(scale / 1.1);
+            } else if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                setScale(1);
             }
         }
 
         document.addEventListener('keydown', handleKeydown);
 
-        lightbox.onclick = (e) => {
+        // 点击背景/空白关闭（lightbox 背景 or content 空白）
+        lightbox.addEventListener('click', (e) => {
             if (e.target === lightbox) {
                 closeLightbox();
             }
+        });
+        content.addEventListener('click', (e) => {
+            if (e.target === content) {
+                closeLightbox();
+            }
+        });
+
+        // 滚轮缩放
+        lightbox.addEventListener('wheel', (e) => {
+            // 避免滚动页面/侧边栏
+            e.preventDefault();
+            const factor = e.deltaY < 0 ? 1.12 : 0.89;
+            setScale(scale * factor);
+        }, { passive: false });
+
+        // 双击快速缩放
+        img.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (scale > 1) {
+                setScale(1);
+            } else {
+                setScale(2);
+            }
+        });
+
+        // Pointer: pan / pinch
+        img.addEventListener('pointerdown', (e) => {
+            try {
+                img.setPointerCapture(e.pointerId);
+            } catch (err) {
+                // ignore
+            }
+
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            if (pointers.size === 1 && scale > 1) {
+                isPanning = true;
+                panStartX = e.clientX;
+                panStartY = e.clientY;
+                panStartTx = translateX;
+                panStartTy = translateY;
+                applyTransform();
+            } else if (pointers.size === 2) {
+                const arr = Array.from(pointers.values());
+                const dx = arr[0].x - arr[1].x;
+                const dy = arr[0].y - arr[1].y;
+                pinchStartDist = Math.hypot(dx, dy) || 1;
+                pinchStartScale = scale;
+                isPanning = false;
+            }
+        });
+
+        img.addEventListener('pointermove', (e) => {
+            if (!pointers.has(e.pointerId)) return;
+            pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            if (pointers.size === 1) {
+                if (!isPanning || scale <= 1) return;
+                translateX = panStartTx + (e.clientX - panStartX);
+                translateY = panStartTy + (e.clientY - panStartY);
+                applyTransform();
+            } else if (pointers.size === 2) {
+                const arr = Array.from(pointers.values());
+                const dx = arr[0].x - arr[1].x;
+                const dy = arr[0].y - arr[1].y;
+                const dist = Math.hypot(dx, dy) || 1;
+                const next = pinchStartScale * (dist / pinchStartDist);
+                setScale(next);
+            }
+        });
+
+        const clearPointer = (e) => {
+            pointers.delete(e.pointerId);
+            if (pointers.size < 2) {
+                pinchStartDist = 0;
+            }
+            if (pointers.size === 0) {
+                isPanning = false;
+                applyTransform();
+            }
         };
+        img.addEventListener('pointerup', clearPointer);
+        img.addEventListener('pointercancel', clearPointer);
+        img.addEventListener('pointerleave', clearPointer);
 
         function navigateLightbox(direction) {
             currentIdx = (currentIdx + direction + images.length) % images.length;
-            img.alt = images[currentIdx].name || 'Image';
-
-            const nextSrc = images[currentIdx].dataUrl;
-            if (nextSrc) {
-                img.src = nextSrc;
-            } else {
-                img.removeAttribute('src');
-                if (
-                    images[currentIdx].id &&
-                    window.IdoFront &&
-                    window.IdoFront.attachments &&
-                    typeof window.IdoFront.attachments.getObjectUrl === 'function'
-                ) {
-                    window.IdoFront.attachments.getObjectUrl(images[currentIdx].id).then((url) => {
-                        if (url) img.src = url;
-                    }).catch(() => {
-                        // ignore
-                    });
-                }
-            }
+            resetTransform();
+            void setImageSrc(currentIdx);
 
             const counter = document.getElementById('lightbox-counter');
             if (counter) {
@@ -169,12 +373,21 @@ const FrameworkMessages = (function() {
 
         function closeLightbox() {
             document.removeEventListener('keydown', handleKeydown);
-            lightbox.classList.remove('ido-lightbox--visible');
+            try {
+                lightbox.removeEventListener('wheel', () => {});
+            } catch (e) {
+                // ignore
+            }
 
+            lightbox.classList.remove('ido-lightbox--visible');
             setTimeout(() => {
                 lightbox.remove();
-            }, 300);
+            }, 200);
         }
+
+        // init
+        resetTransform();
+        void setImageSrc(currentIdx);
     }
 
     /**
@@ -494,12 +707,22 @@ const FrameworkMessages = (function() {
 
         const content = document.createElement('div');
         content.className = 'reasoning-content markdown-body';
-        
+
+        // 思维链图片（如 Gemini 生图时在 thought 段返回的预览图）：只用于 UI 展示，不参与 Markdown 渲染
+        const imagesContainer = document.createElement('div');
+        imagesContainer.className = 'reasoning-images';
+        content.appendChild(imagesContainer);
+
+        // Markdown 渲染目标（避免 innerHTML 覆盖掉 imagesContainer）
+        const renderTarget = document.createElement('div');
+        renderTarget.className = 'reasoning-render-target';
+        content.appendChild(renderTarget);
+
         if (options.renderMarkdownSync && markdown) {
-            markdown.renderSync(content, reasoning || '');
+            markdown.renderSync(renderTarget, reasoning || '');
         } else {
-            content.textContent = reasoning || '';
-            content.dataset.needsMarkdown = 'true';
+            renderTarget.textContent = reasoning || '';
+            renderTarget.dataset.needsMarkdown = 'true';
         }
 
         reasoningBlock.appendChild(toggle);
@@ -579,6 +802,7 @@ const FrameworkMessages = (function() {
             pdfAttachments.forEach((attachment) => {
                 const fileItem = document.createElement('div');
                 fileItem.className = 'ido-message__file-item';
+                fileItem.title = '点击打开，右侧下载';
                 
                 const icon = document.createElement('span');
                 icon.className = 'material-symbols-outlined ido-message__file-icon';
@@ -602,9 +826,64 @@ const FrameworkMessages = (function() {
                 
                 info.appendChild(name);
                 info.appendChild(size);
+
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'ido-message__file-download';
+                downloadBtn.title = '下载';
+                downloadBtn.innerHTML = '<span class="material-symbols-outlined">download</span>';
+
+                const resolveUrl = async () => {
+                    if (attachment && typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
+                        return attachment.dataUrl;
+                    }
+                    if (
+                        attachment && attachment.id &&
+                        window.IdoFront &&
+                        window.IdoFront.attachments &&
+                        typeof window.IdoFront.attachments.getObjectUrl === 'function'
+                    ) {
+                        return await window.IdoFront.attachments.getObjectUrl(attachment.id);
+                    }
+                    return null;
+                };
+
+                const safeName = (attachment && attachment.name ? attachment.name : 'file.pdf').replace(/[\\/:*?"<>|]/g, '_');
+
+                fileItem.onclick = async () => {
+                    try {
+                        const url = await resolveUrl();
+                        if (!url) return;
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.target = '_blank';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                    } catch (e) {
+                        console.warn('[attachments] open pdf failed:', e);
+                    }
+                };
+
+                downloadBtn.onclick = async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                        const url = await resolveUrl();
+                        if (!url) return;
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = safeName;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                    } catch (err) {
+                        console.warn('[attachments] download pdf failed:', err);
+                    }
+                };
                 
                 fileItem.appendChild(icon);
                 fileItem.appendChild(info);
+                fileItem.appendChild(downloadBtn);
                 
                 pdfContainer.appendChild(fileItem);
             });
@@ -854,7 +1133,7 @@ const FrameworkMessages = (function() {
         const container = card.querySelector('.ido-message__container');
         if (!container) return;
 
-        const { text, reasoning, toolCalls, streaming, reasoningEnded } = update;
+        const { text, reasoning, toolCalls, streaming, reasoningEnded, thoughtAttachments } = update;
 
         let reasoningBlock = container.querySelector('.reasoning-block');
         let toolCallsContainer = container.querySelector('.tool-calls-container');
@@ -869,8 +1148,9 @@ const FrameworkMessages = (function() {
             container.appendChild(contentDiv);
         }
 
-        // 处理思维链
-        if (reasoning) {
+        // 处理思维链（以及 Gemini 生图 thought 段的预览图：只做 UI 展示，不参与存储/回传）
+        const hasThoughtImages = Array.isArray(thoughtAttachments) && thoughtAttachments.length > 0;
+        if (reasoning || hasThoughtImages) {
             if (!reasoningBlock) {
                 reasoningBlock = document.createElement('div');
                 reasoningBlock.className = 'reasoning-block';
@@ -903,6 +1183,16 @@ const FrameworkMessages = (function() {
                 const content = document.createElement('div');
                 content.className = 'reasoning-content markdown-body';
 
+                const imagesEl = document.createElement('div');
+                imagesEl.className = 'reasoning-images';
+                content.appendChild(imagesEl);
+
+                const renderTarget = document.createElement('div');
+                renderTarget.className = 'reasoning-render-target';
+                // 默认标记为待渲染（流式时最终统一渲染；非流式会在后续 update/renderSync 中清理）
+                renderTarget.dataset.needsMarkdown = 'true';
+                content.appendChild(renderTarget);
+
                 reasoningBlock.appendChild(toggle);
                 reasoningBlock.appendChild(content);
 
@@ -910,10 +1200,50 @@ const FrameworkMessages = (function() {
                 container.insertBefore(reasoningBlock, contentDiv);
             }
 
-            const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
-            if (reasoningContentDiv && markdown) {
-                markdown.renderSync(reasoningContentDiv, reasoning);
-                reasoningContentDiv.removeAttribute('data-needs-markdown');
+            // 保存/更新（仅 UI session 内）
+            if (hasThoughtImages) {
+                message.thoughtAttachments = thoughtAttachments;
+            }
+
+            // 渲染 thought 图片缩略图（放在思维链折叠区里）
+            const thoughtList = Array.isArray(message.thoughtAttachments) ? message.thoughtAttachments : null;
+            if (thoughtList && thoughtList.length > 0) {
+                const contentEl = reasoningBlock.querySelector('.reasoning-content');
+                const imagesEl = contentEl && contentEl.querySelector('.reasoning-images');
+                if (imagesEl) {
+                    imagesEl.innerHTML = '';
+                    thoughtList.forEach((att, idx) => {
+                        const thumb = document.createElement('img');
+                        thumb.className = 'reasoning-image-thumb';
+                        thumb.alt = (att && att.name) ? att.name : `预览图 ${idx + 1}`;
+                        thumb.loading = 'lazy';
+
+                        const src = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
+                        if (src) {
+                            thumb.src = src;
+                        }
+
+                        thumb.onclick = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openLightbox(thoughtList, idx);
+                        };
+
+                        imagesEl.appendChild(thumb);
+                    });
+                }
+            }
+
+            const reasoningTarget = reasoningBlock.querySelector('.reasoning-render-target') || reasoningBlock.querySelector('.reasoning-content');
+            if (reasoningTarget) {
+                // 流式过程中不做 Markdown 渲染，避免频繁全量 render（性能开销大）
+                if (markdown && !streaming) {
+                    markdown.renderSync(reasoningTarget, reasoning || '');
+                    reasoningTarget.removeAttribute('data-needs-markdown');
+                } else {
+                    reasoningTarget.textContent = reasoning || '';
+                    reasoningTarget.dataset.needsMarkdown = 'true';
+                }
             }
         }
 
@@ -951,11 +1281,20 @@ const FrameworkMessages = (function() {
         }
 
         // 更新正文
-        if (contentSpan && message.role !== 'user' && text && markdown) {
-            markdown.renderSync(contentSpan, text);
-            contentSpan.removeAttribute('data-needs-markdown');
-        } else if (contentSpan) {
-            contentSpan.textContent = text;
+        if (contentSpan) {
+            const safeText = typeof text === 'string' ? text : '';
+            if (message.role !== 'user') {
+                // 流式过程中不做 Markdown 渲染，最终由 finalizeStreamingMessage 统一渲染
+                if (markdown && !streaming) {
+                    markdown.renderSync(contentSpan, safeText);
+                    contentSpan.removeAttribute('data-needs-markdown');
+                } else {
+                    contentSpan.textContent = safeText;
+                    contentSpan.dataset.needsMarkdown = 'true';
+                }
+            } else {
+                contentSpan.textContent = safeText;
+            }
         }
 
         // 处理工具调用
@@ -1022,6 +1361,7 @@ const FrameworkMessages = (function() {
         let toolCalls = null;
         let streaming = false;
         let reasoningEnded = false;
+        let thoughtAttachments;
 
         if (typeof textOrObj === 'object' && textOrObj !== null) {
             text = textOrObj.content || '';
@@ -1031,6 +1371,9 @@ const FrameworkMessages = (function() {
             }
             if (Object.prototype.hasOwnProperty.call(textOrObj, 'toolCalls')) {
                 toolCalls = textOrObj.toolCalls;
+            }
+            if (Object.prototype.hasOwnProperty.call(textOrObj, 'thoughtAttachments')) {
+                thoughtAttachments = textOrObj.thoughtAttachments;
             }
             streaming = !!textOrObj.streaming;
             reasoningEnded = !!textOrObj.reasoningEnded;
@@ -1044,11 +1387,14 @@ const FrameworkMessages = (function() {
         if (typeof attachments !== 'undefined') {
             msg.attachments = attachments;
         }
+        if (typeof thoughtAttachments !== 'undefined') {
+            msg.thoughtAttachments = thoughtAttachments;
+        }
         if (toolCalls !== null) {
             msg.toolCalls = toolCalls;
         }
 
-        pendingUpdatesById.set(messageId, { text, reasoning, toolCalls, streaming, reasoningEnded });
+        pendingUpdatesById.set(messageId, { text, reasoning, toolCalls, streaming, reasoningEnded, thoughtAttachments });
 
         if (!rafPendingById.has(messageId)) {
             rafPendingById.add(messageId);
@@ -1094,7 +1440,12 @@ const FrameworkMessages = (function() {
             reasoningEnded = !!textOrObj.reasoningEnded;
         }
 
-        pendingUpdate = { text, reasoning, toolCalls, streaming, reasoningEnded };
+        let thoughtAttachments;
+        if (typeof textOrObj === 'object' && textOrObj !== null && Object.prototype.hasOwnProperty.call(textOrObj, 'thoughtAttachments')) {
+            thoughtAttachments = textOrObj.thoughtAttachments;
+        }
+
+        pendingUpdate = { text, reasoning, toolCalls, streaming, reasoningEnded, thoughtAttachments };
 
         if (!rafUpdatePending) {
             rafUpdatePending = true;
@@ -1112,7 +1463,7 @@ const FrameworkMessages = (function() {
     function performUIUpdate(update) {
         if (!update) return;
 
-        const { text, reasoning, toolCalls, streaming, reasoningEnded } = update;
+        const { text, reasoning, toolCalls, streaming, reasoningEnded, thoughtAttachments } = update;
         const lastMsg = state.messages[state.messages.length - 1];
 
         const lastCard = getLastMessageCard();
@@ -1134,8 +1485,9 @@ const FrameworkMessages = (function() {
             container.appendChild(contentDiv);
         }
 
-        // 处理思维链
-        if (reasoning) {
+        // 处理思维链（以及 Gemini thought 预览图）
+        const hasThoughtImages = Array.isArray(thoughtAttachments) && thoughtAttachments.length > 0;
+        if (reasoning || hasThoughtImages) {
             if (!reasoningBlock) {
                 reasoningBlock = document.createElement('div');
                 reasoningBlock.className = 'reasoning-block';
@@ -1168,6 +1520,15 @@ const FrameworkMessages = (function() {
                 const content = document.createElement('div');
                 content.className = 'reasoning-content markdown-body';
 
+                const imagesEl = document.createElement('div');
+                imagesEl.className = 'reasoning-images';
+                content.appendChild(imagesEl);
+
+                const renderTarget = document.createElement('div');
+                renderTarget.className = 'reasoning-render-target';
+                renderTarget.dataset.needsMarkdown = 'true';
+                content.appendChild(renderTarget);
+
                 reasoningBlock.appendChild(toggle);
                 reasoningBlock.appendChild(content);
 
@@ -1175,10 +1536,42 @@ const FrameworkMessages = (function() {
                 container.insertBefore(reasoningBlock, contentDiv);
             }
 
-            const reasoningContentDiv = reasoningBlock.querySelector('.reasoning-content');
-            if (reasoningContentDiv && markdown) {
-                markdown.renderSync(reasoningContentDiv, reasoning);
-                reasoningContentDiv.removeAttribute('data-needs-markdown');
+            if (hasThoughtImages) {
+                lastMsg.thoughtAttachments = thoughtAttachments;
+            }
+
+            const thoughtList = Array.isArray(lastMsg.thoughtAttachments) ? lastMsg.thoughtAttachments : null;
+            if (thoughtList && thoughtList.length > 0) {
+                const contentEl = reasoningBlock.querySelector('.reasoning-content');
+                const imagesEl = contentEl && contentEl.querySelector('.reasoning-images');
+                if (imagesEl) {
+                    imagesEl.innerHTML = '';
+                    thoughtList.forEach((att, idx) => {
+                        const thumb = document.createElement('img');
+                        thumb.className = 'reasoning-image-thumb';
+                        thumb.alt = (att && att.name) ? att.name : `预览图 ${idx + 1}`;
+                        thumb.loading = 'lazy';
+                        const src = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
+                        if (src) thumb.src = src;
+                        thumb.onclick = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openLightbox(thoughtList, idx);
+                        };
+                        imagesEl.appendChild(thumb);
+                    });
+                }
+            }
+
+            const reasoningTarget = reasoningBlock.querySelector('.reasoning-render-target') || reasoningBlock.querySelector('.reasoning-content');
+            if (reasoningTarget) {
+                if (markdown && !streaming) {
+                    markdown.renderSync(reasoningTarget, reasoning || '');
+                    reasoningTarget.removeAttribute('data-needs-markdown');
+                } else {
+                    reasoningTarget.textContent = reasoning || '';
+                    reasoningTarget.dataset.needsMarkdown = 'true';
+                }
             }
         }
 
@@ -1223,11 +1616,20 @@ const FrameworkMessages = (function() {
         }
 
         // 更新正文
-        if (contentSpan && lastMsg.role !== 'user' && text && markdown) {
-            markdown.renderSync(contentSpan, text);
-            contentSpan.removeAttribute('data-needs-markdown');
-        } else if (contentSpan) {
-            contentSpan.textContent = text;
+        if (contentSpan) {
+            const safeText = typeof text === 'string' ? text : '';
+            if (lastMsg.role !== 'user') {
+                // 流式过程中不做 Markdown 渲染，最终由 finalizeStreamingMessage 统一渲染
+                if (markdown && !streaming) {
+                    markdown.renderSync(contentSpan, safeText);
+                    contentSpan.removeAttribute('data-needs-markdown');
+                } else {
+                    contentSpan.textContent = safeText;
+                    contentSpan.dataset.needsMarkdown = 'true';
+                }
+            } else {
+                contentSpan.textContent = safeText;
+            }
         }
 
         // 处理工具调用（在正文之后、附件之前）
@@ -1373,13 +1775,13 @@ const FrameworkMessages = (function() {
         }
 
         // 渲染思维链 Markdown
-        const reasoningContent = container.querySelector('.reasoning-content[data-needs-markdown="true"]');
-        if (reasoningContent && markdown) {
-            const reasoningText = reasoningContent.textContent || '';
+        const reasoningTarget = container.querySelector('.reasoning-render-target[data-needs-markdown="true"]');
+        if (reasoningTarget && markdown) {
+            const reasoningText = reasoningTarget.textContent || '';
             if (reasoningText) {
-                markdown.renderSync(reasoningContent, reasoningText);
+                markdown.renderSync(reasoningTarget, reasoningText);
             }
-            reasoningContent.removeAttribute('data-needs-markdown');
+            reasoningTarget.removeAttribute('data-needs-markdown');
         }
 
         // 渲染正文 Markdown
@@ -1473,13 +1875,13 @@ const FrameworkMessages = (function() {
         }
 
         // 渲染思维链 Markdown
-        const reasoningContent = container.querySelector('.reasoning-content[data-needs-markdown="true"]');
-        if (reasoningContent && markdown) {
-            const reasoningText = reasoningContent.textContent || '';
+        const reasoningTarget = container.querySelector('.reasoning-render-target[data-needs-markdown="true"]');
+        if (reasoningTarget && markdown) {
+            const reasoningText = reasoningTarget.textContent || '';
             if (reasoningText) {
-                markdown.renderSync(reasoningContent, reasoningText);
+                markdown.renderSync(reasoningTarget, reasoningText);
             }
-            reasoningContent.removeAttribute('data-needs-markdown');
+            reasoningTarget.removeAttribute('data-needs-markdown');
         }
 
         // 渲染正文 Markdown
