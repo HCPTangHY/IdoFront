@@ -20,6 +20,26 @@ const FrameworkMessages = (function() {
     let rafUpdatePending = false;
     let pendingUpdate = null;
 
+    // 流式 Markdown 渲染节流（兼顾实时体验与性能）
+    const STREAM_MD_MIN_INTERVAL_MS = 160;
+    const STREAM_MD_MAX_CHARS = 6000;
+
+    function canStreamRenderMarkdown(message, kind, text) {
+        if (!markdown) return false;
+        if (!text || typeof text !== 'string') return false;
+        if (text.length > STREAM_MD_MAX_CHARS) return false;
+
+        const now = Date.now();
+        const key = kind === 'reasoning' ? '_streamReasoningMdLastAt' : '_streamContentMdLastAt';
+        const lastAt = message && typeof message === 'object' ? (message[key] || 0) : 0;
+        if (now - lastAt < STREAM_MD_MIN_INTERVAL_MS) return false;
+
+        if (message && typeof message === 'object') {
+            message[key] = now;
+        }
+        return true;
+    }
+
     /**
      * 初始化依赖
      */
@@ -1237,11 +1257,13 @@ const FrameworkMessages = (function() {
             const reasoningTarget = reasoningBlock.querySelector('.reasoning-render-target') || reasoningBlock.querySelector('.reasoning-content');
             if (reasoningTarget) {
                 // 流式过程中不做 Markdown 渲染，避免频繁全量 render（性能开销大）
-                if (markdown && !streaming) {
-                    markdown.renderSync(reasoningTarget, reasoning || '');
+                const safeReasoning = reasoning || '';
+                const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(message, 'reasoning', safeReasoning));
+                if (shouldRenderMd) {
+                    markdown.renderSync(reasoningTarget, safeReasoning);
                     reasoningTarget.removeAttribute('data-needs-markdown');
                 } else {
-                    reasoningTarget.textContent = reasoning || '';
+                    reasoningTarget.textContent = safeReasoning;
                     reasoningTarget.dataset.needsMarkdown = 'true';
                 }
             }
@@ -1284,8 +1306,9 @@ const FrameworkMessages = (function() {
         if (contentSpan) {
             const safeText = typeof text === 'string' ? text : '';
             if (message.role !== 'user') {
-                // 流式过程中不做 Markdown 渲染，最终由 finalizeStreamingMessage 统一渲染
-                if (markdown && !streaming) {
+                // 流式时做“节流的实时 Markdown 渲染”，否则仅更新纯文本，最终由 finalize 兜底渲染
+                const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(message, 'content', safeText));
+                if (shouldRenderMd) {
                     markdown.renderSync(contentSpan, safeText);
                     contentSpan.removeAttribute('data-needs-markdown');
                 } else {
@@ -1565,11 +1588,13 @@ const FrameworkMessages = (function() {
 
             const reasoningTarget = reasoningBlock.querySelector('.reasoning-render-target') || reasoningBlock.querySelector('.reasoning-content');
             if (reasoningTarget) {
-                if (markdown && !streaming) {
-                    markdown.renderSync(reasoningTarget, reasoning || '');
+                const safeReasoning = reasoning || '';
+                const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(lastMsg, 'reasoning', safeReasoning));
+                if (shouldRenderMd) {
+                    markdown.renderSync(reasoningTarget, safeReasoning);
                     reasoningTarget.removeAttribute('data-needs-markdown');
                 } else {
-                    reasoningTarget.textContent = reasoning || '';
+                    reasoningTarget.textContent = safeReasoning;
                     reasoningTarget.dataset.needsMarkdown = 'true';
                 }
             }
@@ -1619,8 +1644,9 @@ const FrameworkMessages = (function() {
         if (contentSpan) {
             const safeText = typeof text === 'string' ? text : '';
             if (lastMsg.role !== 'user') {
-                // 流式过程中不做 Markdown 渲染，最终由 finalizeStreamingMessage 统一渲染
-                if (markdown && !streaming) {
+                // 流式时做“节流的实时 Markdown 渲染”，否则仅更新纯文本，最终由 finalize 兜底渲染
+                const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(lastMsg, 'content', safeText));
+                if (shouldRenderMd) {
                     markdown.renderSync(contentSpan, safeText);
                     contentSpan.removeAttribute('data-needs-markdown');
                 } else {
@@ -1775,7 +1801,9 @@ const FrameworkMessages = (function() {
         }
 
         // 渲染思维链 Markdown
-        const reasoningTarget = container.querySelector('.reasoning-render-target[data-needs-markdown="true"]');
+        const reasoningTarget =
+            container.querySelector('.reasoning-render-target[data-needs-markdown="true"]')
+            || container.querySelector('.reasoning-content[data-needs-markdown="true"]');
         if (reasoningTarget && markdown) {
             const reasoningText = reasoningTarget.textContent || '';
             if (reasoningText) {
@@ -1839,6 +1867,16 @@ const FrameworkMessages = (function() {
         const lastMsg = state.messages[state.messages.length - 1];
         const lastMsgId = lastMsg?.id;
 
+        // ★ 关键修复：使用 updateMessageById 时，最终一次更新可能还在 RAF 队列里。
+        // finalize 若不先 flush，会出现“流式结束后也没渲染 Markdown”。
+        if (lastMsgId) {
+            const pendingById = pendingUpdatesById.get(lastMsgId);
+            if (pendingById) {
+                pendingUpdatesById.delete(lastMsgId);
+                performUIUpdateOnTarget(lastMsg, lastCard, pendingById);
+            }
+        }
+
         // 停止思维链计时器（如果还有运行中的）
         const reasoningBlock = container.querySelector('.reasoning-block');
         if (reasoningBlock && reasoningBlock.dataset.timerId) {
@@ -1875,7 +1913,9 @@ const FrameworkMessages = (function() {
         }
 
         // 渲染思维链 Markdown
-        const reasoningTarget = container.querySelector('.reasoning-render-target[data-needs-markdown="true"]');
+        const reasoningTarget =
+            container.querySelector('.reasoning-render-target[data-needs-markdown="true"]')
+            || container.querySelector('.reasoning-content[data-needs-markdown="true"]');
         if (reasoningTarget && markdown) {
             const reasoningText = reasoningTarget.textContent || '';
             if (reasoningText) {
