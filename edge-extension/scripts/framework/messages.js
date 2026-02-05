@@ -1256,14 +1256,17 @@ const FrameworkMessages = (function() {
 
             const reasoningTarget = reasoningBlock.querySelector('.reasoning-render-target') || reasoningBlock.querySelector('.reasoning-content');
             if (reasoningTarget) {
-                // 流式过程中不做 Markdown 渲染，避免频繁全量 render（性能开销大）
                 const safeReasoning = reasoning || '';
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(message, 'reasoning', safeReasoning));
                 if (shouldRenderMd) {
                     markdown.renderSync(reasoningTarget, safeReasoning);
                     reasoningTarget.removeAttribute('data-needs-markdown');
+                    message._lastRenderedReasoningText = safeReasoning;
                 } else {
-                    reasoningTarget.textContent = safeReasoning;
+                    // 已经渲染过就不要回退成纯文本（会闪烁）；下次节流窗口到再渲染
+                    if (typeof message._lastRenderedReasoningText !== 'string') {
+                        reasoningTarget.textContent = safeReasoning;
+                    }
                     reasoningTarget.dataset.needsMarkdown = 'true';
                 }
             }
@@ -1306,13 +1309,17 @@ const FrameworkMessages = (function() {
         if (contentSpan) {
             const safeText = typeof text === 'string' ? text : '';
             if (message.role !== 'user') {
-                // 流式时做“节流的实时 Markdown 渲染”，否则仅更新纯文本，最终由 finalize 兜底渲染
+                // 流式时做“节流的实时 Markdown 渲染”。
+                // 重要：如果已经渲染过 Markdown，节流期间不要回退成纯文本，否则会闪烁。
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(message, 'content', safeText));
                 if (shouldRenderMd) {
                     markdown.renderSync(contentSpan, safeText);
                     contentSpan.removeAttribute('data-needs-markdown');
+                    message._lastRenderedContentText = safeText;
                 } else {
-                    contentSpan.textContent = safeText;
+                    if (typeof message._lastRenderedContentText !== 'string') {
+                        contentSpan.textContent = safeText;
+                    }
                     contentSpan.dataset.needsMarkdown = 'true';
                 }
             } else {
@@ -1593,8 +1600,11 @@ const FrameworkMessages = (function() {
                 if (shouldRenderMd) {
                     markdown.renderSync(reasoningTarget, safeReasoning);
                     reasoningTarget.removeAttribute('data-needs-markdown');
+                    lastMsg._lastRenderedReasoningText = safeReasoning;
                 } else {
-                    reasoningTarget.textContent = safeReasoning;
+                    if (typeof lastMsg._lastRenderedReasoningText !== 'string') {
+                        reasoningTarget.textContent = safeReasoning;
+                    }
                     reasoningTarget.dataset.needsMarkdown = 'true';
                 }
             }
@@ -1644,13 +1654,17 @@ const FrameworkMessages = (function() {
         if (contentSpan) {
             const safeText = typeof text === 'string' ? text : '';
             if (lastMsg.role !== 'user') {
-                // 流式时做“节流的实时 Markdown 渲染”，否则仅更新纯文本，最终由 finalize 兜底渲染
+                // 流式时做“节流的实时 Markdown 渲染”。
+                // 重要：如果已经渲染过 Markdown，节流期间不要回退成纯文本，否则会闪烁。
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(lastMsg, 'content', safeText));
                 if (shouldRenderMd) {
                     markdown.renderSync(contentSpan, safeText);
                     contentSpan.removeAttribute('data-needs-markdown');
+                    lastMsg._lastRenderedContentText = safeText;
                 } else {
-                    contentSpan.textContent = safeText;
+                    if (typeof lastMsg._lastRenderedContentText !== 'string') {
+                        contentSpan.textContent = safeText;
+                    }
                     contentSpan.dataset.needsMarkdown = 'true';
                 }
             } else {
@@ -1800,24 +1814,26 @@ const FrameworkMessages = (function() {
             // ignore
         }
 
-        // 渲染思维链 Markdown
+        // 渲染思维链 Markdown（使用消息状态的原始文本，避免从已渲染 HTML 的 textContent 反推导致丢失 Markdown 语法）
         const reasoningTarget =
-            container.querySelector('.reasoning-render-target[data-needs-markdown="true"]')
-            || container.querySelector('.reasoning-content[data-needs-markdown="true"]');
+            container.querySelector('.reasoning-render-target')
+            || container.querySelector('.reasoning-content');
         if (reasoningTarget && markdown) {
-            const reasoningText = reasoningTarget.textContent || '';
-            if (reasoningText) {
+            const reasoningText = (msgState && typeof msgState.reasoning === 'string') ? msgState.reasoning : '';
+            if (reasoningText && msgState?._lastRenderedReasoningText !== reasoningText) {
                 markdown.renderSync(reasoningTarget, reasoningText);
+                msgState._lastRenderedReasoningText = reasoningText;
             }
             reasoningTarget.removeAttribute('data-needs-markdown');
         }
 
         // 渲染正文 Markdown
-        const contentSpan = container.querySelector('.message-content[data-needs-markdown="true"]');
-        if (contentSpan && markdown) {
-            const contentText = contentSpan.textContent || '';
-            if (contentText) {
+        const contentSpan = container.querySelector('.message-content');
+        if (contentSpan && markdown && msgState && msgState.role !== 'user') {
+            const contentText = (typeof msgState.text === 'string') ? msgState.text : '';
+            if (contentText && msgState._lastRenderedContentText !== contentText) {
                 markdown.renderSync(contentSpan, contentText);
+                msgState._lastRenderedContentText = contentText;
             }
             contentSpan.removeAttribute('data-needs-markdown');
         }
@@ -1912,24 +1928,26 @@ const FrameworkMessages = (function() {
             console.warn('Failed to read reasoningDuration from store:', e);
         }
 
-        // 渲染思维链 Markdown
+        // 渲染思维链 Markdown（使用消息状态的原始文本，避免从已渲染 HTML 的 textContent 反推导致丢失 Markdown 语法）
         const reasoningTarget =
-            container.querySelector('.reasoning-render-target[data-needs-markdown="true"]')
-            || container.querySelector('.reasoning-content[data-needs-markdown="true"]');
-        if (reasoningTarget && markdown) {
-            const reasoningText = reasoningTarget.textContent || '';
-            if (reasoningText) {
+            container.querySelector('.reasoning-render-target')
+            || container.querySelector('.reasoning-content');
+        if (reasoningTarget && markdown && lastMsg) {
+            const reasoningText = (typeof lastMsg.reasoning === 'string') ? lastMsg.reasoning : '';
+            if (reasoningText && lastMsg._lastRenderedReasoningText !== reasoningText) {
                 markdown.renderSync(reasoningTarget, reasoningText);
+                lastMsg._lastRenderedReasoningText = reasoningText;
             }
             reasoningTarget.removeAttribute('data-needs-markdown');
         }
 
         // 渲染正文 Markdown
-        const contentSpan = container.querySelector('.message-content[data-needs-markdown="true"]');
-        if (contentSpan && markdown) {
-            const contentText = contentSpan.textContent || '';
-            if (contentText) {
+        const contentSpan = container.querySelector('.message-content');
+        if (contentSpan && markdown && lastMsg && lastMsg.role !== 'user') {
+            const contentText = (typeof lastMsg.text === 'string') ? lastMsg.text : '';
+            if (contentText && lastMsg._lastRenderedContentText !== contentText) {
                 markdown.renderSync(contentSpan, contentText);
+                lastMsg._lastRenderedContentText = contentText;
             }
             contentSpan.removeAttribute('data-needs-markdown');
         }
