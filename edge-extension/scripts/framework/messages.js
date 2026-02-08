@@ -22,22 +22,81 @@ const FrameworkMessages = (function() {
 
     // 流式 Markdown 渲染节流（兼顾实时体验与性能）
     const STREAM_MD_MIN_INTERVAL_MS = 160;
+    const STREAM_MD_CODE_MIN_INTERVAL_MS = 650;
     const STREAM_MD_MAX_CHARS = 6000;
+    const STREAM_MD_CODE_MAX_CHARS = 120000;
+    const STREAM_CODE_HINT_REGEX = /```|`[^`\n]{1,160}`|^\s{4,}\S/m;
 
     function canStreamRenderMarkdown(message, kind, text) {
         if (!markdown) return false;
         if (!text || typeof text !== 'string') return false;
-        if (text.length > STREAM_MD_MAX_CHARS) return false;
+
+        let minInterval = STREAM_MD_MIN_INTERVAL_MS;
+        if (text.length > STREAM_MD_MAX_CHARS) {
+            const looksLikeCode = STREAM_CODE_HINT_REGEX.test(text);
+            if (!looksLikeCode) return false;
+            if (text.length > STREAM_MD_CODE_MAX_CHARS) return false;
+            minInterval = STREAM_MD_CODE_MIN_INTERVAL_MS;
+        }
 
         const now = Date.now();
         const key = kind === 'reasoning' ? '_streamReasoningMdLastAt' : '_streamContentMdLastAt';
         const lastAt = message && typeof message === 'object' ? (message[key] || 0) : 0;
-        if (now - lastAt < STREAM_MD_MIN_INTERVAL_MS) return false;
+        if (now - lastAt < minInterval) return false;
 
         if (message && typeof message === 'object') {
             message[key] = now;
         }
         return true;
+    }
+
+    function buildStringSampleSignature(value) {
+        if (typeof value !== 'string') return '';
+        const len = value.length;
+        const head = value.slice(0, 24);
+        const tail = value.slice(Math.max(0, len - 24));
+        let checksum = 0;
+        const sampleCount = 24;
+        const step = Math.max(1, Math.floor(len / sampleCount));
+        for (let i = 0; i < len; i += step) {
+            checksum = ((checksum * 131) + value.charCodeAt(i)) >>> 0;
+        }
+        return `${len}:${head}|${tail}|${checksum.toString(36)}`;
+    }
+
+    function buildThoughtAttachmentsSignature(list) {
+        if (!Array.isArray(list) || list.length === 0) return '';
+        return list.map(att => {
+            if (!att || typeof att !== 'object') return 'x';
+            const id = att.id || '';
+            const name = att.name || '';
+            const type = att.type || '';
+            const source = att.source || '';
+            const size = att.size || 0;
+            const thoughtSig = att.thought_signature || att.thoughtSignature || '';
+            const dataSig = buildStringSampleSignature(att.dataUrl);
+            const refSig = buildStringSampleSignature(typeof att.url === 'string' ? att.url : (typeof att.path === 'string' ? att.path : ''));
+            return `${id}|${name}|${type}|${source}|${size}|${thoughtSig}|${dataSig}|${refSig}`;
+        }).join('::');
+    }
+
+    function rememberMarkdownSource(target, text) {
+        if (!target) return '';
+        const safeText = typeof text === 'string' ? text : '';
+        if (markdown && typeof markdown.rememberSource === 'function') {
+            markdown.rememberSource(target, safeText);
+        }
+        return safeText;
+    }
+
+    function markMarkdownPending(target, text, enqueueNow) {
+        if (!target) return '';
+        const safeText = rememberMarkdownSource(target, text);
+        target.dataset.needsMarkdown = 'true';
+        if (enqueueNow && markdown && typeof markdown.enqueueRender === 'function') {
+            markdown.enqueueRender(target, safeText);
+        }
+        return safeText;
     }
 
     /**
@@ -62,6 +121,11 @@ const FrameworkMessages = (function() {
      */
     function clearMessages() {
         state.messages = [];
+        pendingUpdate = null;
+        rafUpdatePending = false;
+        pendingUpdatesById.clear();
+        rafPendingById.clear();
+
         const ui = getUI();
         if (ui.chatStream) {
             ui.chatStream.innerHTML = '';
@@ -555,7 +619,7 @@ const FrameworkMessages = (function() {
                 markdown.renderSync(contentSpan, text || '');
             } else {
                 contentSpan.textContent = text || '';
-                contentSpan.dataset.needsMarkdown = 'true';
+                markMarkdownPending(contentSpan, text || '', false);
             }
         } else {
             contentSpan.textContent = text || '';
@@ -742,7 +806,7 @@ const FrameworkMessages = (function() {
             markdown.renderSync(renderTarget, reasoning || '');
         } else {
             renderTarget.textContent = reasoning || '';
-            renderTarget.dataset.needsMarkdown = 'true';
+            markMarkdownPending(renderTarget, reasoning || '', false);
         }
 
         reasoningBlock.appendChild(toggle);
@@ -1141,6 +1205,26 @@ const FrameworkMessages = (function() {
         return state.messages.findIndex(m => m && m.id === messageId);
     }
 
+    function trimMessagesAfter(messageId) {
+        const idx = findMessageIndexById(messageId);
+        if (idx < 0) return;
+
+        if (idx + 1 < state.messages.length) {
+            state.messages = state.messages.slice(0, idx + 1);
+        }
+
+        const aliveIds = new Set(state.messages.map(m => (m && m.id) ? m.id : null).filter(Boolean));
+        pendingUpdatesById.forEach((_, id) => {
+            if (!aliveIds.has(id)) pendingUpdatesById.delete(id);
+        });
+        rafPendingById.forEach(id => {
+            if (!aliveIds.has(id)) rafPendingById.delete(id);
+        });
+
+        pendingUpdate = null;
+        rafUpdatePending = false;
+    }
+
     function getMessageCardById(messageId) {
         if (!messageId) return null;
         const ui = getUI();
@@ -1210,7 +1294,7 @@ const FrameworkMessages = (function() {
                 const renderTarget = document.createElement('div');
                 renderTarget.className = 'reasoning-render-target';
                 // 默认标记为待渲染（流式时最终统一渲染；非流式会在后续 update/renderSync 中清理）
-                renderTarget.dataset.needsMarkdown = 'true';
+                markMarkdownPending(renderTarget, reasoning || '', false);
                 content.appendChild(renderTarget);
 
                 reasoningBlock.appendChild(toggle);
@@ -1231,26 +1315,30 @@ const FrameworkMessages = (function() {
                 const contentEl = reasoningBlock.querySelector('.reasoning-content');
                 const imagesEl = contentEl && contentEl.querySelector('.reasoning-images');
                 if (imagesEl) {
-                    imagesEl.innerHTML = '';
-                    thoughtList.forEach((att, idx) => {
-                        const thumb = document.createElement('img');
-                        thumb.className = 'reasoning-image-thumb';
-                        thumb.alt = (att && att.name) ? att.name : `预览图 ${idx + 1}`;
-                        thumb.loading = 'lazy';
+                    const currentSig = buildThoughtAttachmentsSignature(thoughtList);
+                    if (imagesEl.dataset.thoughtSig !== currentSig) {
+                        imagesEl.innerHTML = '';
+                        thoughtList.forEach((att, idx) => {
+                            const thumb = document.createElement('img');
+                            thumb.className = 'reasoning-image-thumb';
+                            thumb.alt = (att && att.name) ? att.name : `预览图 ${idx + 1}`;
+                            thumb.loading = 'lazy';
 
-                        const src = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
-                        if (src) {
-                            thumb.src = src;
-                        }
+                            const src = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
+                            if (src) {
+                                thumb.src = src;
+                            }
 
-                        thumb.onclick = (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openLightbox(thoughtList, idx);
-                        };
+                            thumb.onclick = (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openLightbox(thoughtList, idx);
+                            };
 
-                        imagesEl.appendChild(thumb);
-                    });
+                            imagesEl.appendChild(thumb);
+                        });
+                        imagesEl.dataset.thoughtSig = currentSig;
+                    }
                 }
             }
 
@@ -1259,15 +1347,17 @@ const FrameworkMessages = (function() {
                 const safeReasoning = reasoning || '';
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(message, 'reasoning', safeReasoning));
                 if (shouldRenderMd) {
-                    markdown.renderSync(reasoningTarget, safeReasoning);
+                    if (message._lastRenderedReasoningText !== safeReasoning) {
+                        markdown.renderSync(reasoningTarget, safeReasoning, { skipEnhance: streaming });
+                        message._lastRenderedReasoningText = safeReasoning;
+                    }
                     reasoningTarget.removeAttribute('data-needs-markdown');
-                    message._lastRenderedReasoningText = safeReasoning;
                 } else {
                     // 已经渲染过就不要回退成纯文本（会闪烁）；下次节流窗口到再渲染
                     if (typeof message._lastRenderedReasoningText !== 'string') {
                         reasoningTarget.textContent = safeReasoning;
                     }
-                    reasoningTarget.dataset.needsMarkdown = 'true';
+                    markMarkdownPending(reasoningTarget, safeReasoning, !streaming);
                 }
             }
         }
@@ -1313,14 +1403,16 @@ const FrameworkMessages = (function() {
                 // 重要：如果已经渲染过 Markdown，节流期间不要回退成纯文本，否则会闪烁。
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(message, 'content', safeText));
                 if (shouldRenderMd) {
-                    markdown.renderSync(contentSpan, safeText);
+                    if (message._lastRenderedContentText !== safeText) {
+                        markdown.renderSync(contentSpan, safeText, { skipEnhance: streaming });
+                        message._lastRenderedContentText = safeText;
+                    }
                     contentSpan.removeAttribute('data-needs-markdown');
-                    message._lastRenderedContentText = safeText;
                 } else {
                     if (typeof message._lastRenderedContentText !== 'string') {
                         contentSpan.textContent = safeText;
                     }
-                    contentSpan.dataset.needsMarkdown = 'true';
+                    markMarkdownPending(contentSpan, safeText, !streaming);
                 }
             } else {
                 contentSpan.textContent = safeText;
@@ -1556,7 +1648,7 @@ const FrameworkMessages = (function() {
 
                 const renderTarget = document.createElement('div');
                 renderTarget.className = 'reasoning-render-target';
-                renderTarget.dataset.needsMarkdown = 'true';
+                markMarkdownPending(renderTarget, reasoning || '', false);
                 content.appendChild(renderTarget);
 
                 reasoningBlock.appendChild(toggle);
@@ -1575,21 +1667,25 @@ const FrameworkMessages = (function() {
                 const contentEl = reasoningBlock.querySelector('.reasoning-content');
                 const imagesEl = contentEl && contentEl.querySelector('.reasoning-images');
                 if (imagesEl) {
-                    imagesEl.innerHTML = '';
-                    thoughtList.forEach((att, idx) => {
-                        const thumb = document.createElement('img');
-                        thumb.className = 'reasoning-image-thumb';
-                        thumb.alt = (att && att.name) ? att.name : `预览图 ${idx + 1}`;
-                        thumb.loading = 'lazy';
-                        const src = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
-                        if (src) thumb.src = src;
-                        thumb.onclick = (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openLightbox(thoughtList, idx);
-                        };
-                        imagesEl.appendChild(thumb);
-                    });
+                    const currentSig = buildThoughtAttachmentsSignature(thoughtList);
+                    if (imagesEl.dataset.thoughtSig !== currentSig) {
+                        imagesEl.innerHTML = '';
+                        thoughtList.forEach((att, idx) => {
+                            const thumb = document.createElement('img');
+                            thumb.className = 'reasoning-image-thumb';
+                            thumb.alt = (att && att.name) ? att.name : `预览图 ${idx + 1}`;
+                            thumb.loading = 'lazy';
+                            const src = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
+                            if (src) thumb.src = src;
+                            thumb.onclick = (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openLightbox(thoughtList, idx);
+                            };
+                            imagesEl.appendChild(thumb);
+                        });
+                        imagesEl.dataset.thoughtSig = currentSig;
+                    }
                 }
             }
 
@@ -1598,14 +1694,16 @@ const FrameworkMessages = (function() {
                 const safeReasoning = reasoning || '';
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(lastMsg, 'reasoning', safeReasoning));
                 if (shouldRenderMd) {
-                    markdown.renderSync(reasoningTarget, safeReasoning);
+                    if (lastMsg._lastRenderedReasoningText !== safeReasoning) {
+                        markdown.renderSync(reasoningTarget, safeReasoning, { skipEnhance: streaming });
+                        lastMsg._lastRenderedReasoningText = safeReasoning;
+                    }
                     reasoningTarget.removeAttribute('data-needs-markdown');
-                    lastMsg._lastRenderedReasoningText = safeReasoning;
                 } else {
                     if (typeof lastMsg._lastRenderedReasoningText !== 'string') {
                         reasoningTarget.textContent = safeReasoning;
                     }
-                    reasoningTarget.dataset.needsMarkdown = 'true';
+                    markMarkdownPending(reasoningTarget, safeReasoning, !streaming);
                 }
             }
         }
@@ -1658,14 +1756,16 @@ const FrameworkMessages = (function() {
                 // 重要：如果已经渲染过 Markdown，节流期间不要回退成纯文本，否则会闪烁。
                 const shouldRenderMd = markdown && (!streaming || canStreamRenderMarkdown(lastMsg, 'content', safeText));
                 if (shouldRenderMd) {
-                    markdown.renderSync(contentSpan, safeText);
+                    if (lastMsg._lastRenderedContentText !== safeText) {
+                        markdown.renderSync(contentSpan, safeText, { skipEnhance: streaming });
+                        lastMsg._lastRenderedContentText = safeText;
+                    }
                     contentSpan.removeAttribute('data-needs-markdown');
-                    lastMsg._lastRenderedContentText = safeText;
                 } else {
                     if (typeof lastMsg._lastRenderedContentText !== 'string') {
                         contentSpan.textContent = safeText;
                     }
-                    contentSpan.dataset.needsMarkdown = 'true';
+                    markMarkdownPending(contentSpan, safeText, !streaming);
                 }
             } else {
                 contentSpan.textContent = safeText;
@@ -1825,6 +1925,9 @@ const FrameworkMessages = (function() {
                 msgState._lastRenderedReasoningText = reasoningText;
             }
             reasoningTarget.removeAttribute('data-needs-markdown');
+            if (typeof markdown.enhanceCodeBlocks === 'function') {
+                markdown.enhanceCodeBlocks(reasoningTarget);
+            }
         }
 
         // 渲染正文 Markdown
@@ -1836,6 +1939,9 @@ const FrameworkMessages = (function() {
                 msgState._lastRenderedContentText = contentText;
             }
             contentSpan.removeAttribute('data-needs-markdown');
+            if (typeof markdown.enhanceCodeBlocks === 'function') {
+                markdown.enhanceCodeBlocks(contentSpan);
+            }
         }
 
         // 移除该消息的流式指示器
@@ -1939,6 +2045,9 @@ const FrameworkMessages = (function() {
                 lastMsg._lastRenderedReasoningText = reasoningText;
             }
             reasoningTarget.removeAttribute('data-needs-markdown');
+            if (typeof markdown.enhanceCodeBlocks === 'function') {
+                markdown.enhanceCodeBlocks(reasoningTarget);
+            }
         }
 
         // 渲染正文 Markdown
@@ -1950,6 +2059,9 @@ const FrameworkMessages = (function() {
                 lastMsg._lastRenderedContentText = contentText;
             }
             contentSpan.removeAttribute('data-needs-markdown');
+            if (typeof markdown.enhanceCodeBlocks === 'function') {
+                markdown.enhanceCodeBlocks(contentSpan);
+            }
         }
 
         // 移除加载指示器
@@ -2016,6 +2128,7 @@ const FrameworkMessages = (function() {
         openLightbox,
         createStatsBar,
         createBranchSwitcher,
+        trimMessagesAfter,
         switchToBranch,
         // 暴露状态供调试
         state

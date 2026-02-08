@@ -11,13 +11,52 @@ const FrameworkMarkdown = (function() {
     // 渲染队列与调度
     const renderQueue = [];
     let renderHandle = null;
+    const sourceByTarget = new WeakMap();
+    const renderedSourceByTarget = new WeakMap();
     
     const scheduleIdle = (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function')
-        ? (cb => window.requestIdleCallback(cb))
+        ? (cb => window.requestIdleCallback(cb, { timeout: 120 }))
         : (cb => setTimeout(() => cb({
             didTimeout: true,
             timeRemaining: () => 50
         }), 16));
+
+    const scheduleSoon = (cb => setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 50 }), 60));
+
+    const IDLE_BATCH_BUDGET_MS = 12;
+    const IDLE_BATCH_MAX_TASKS = 1;
+    const IDLE_MIN_TIME_REMAINING_MS = 8;
+    const MAX_CODE_HIGHLIGHT_CHARS = 12000;
+    const MAX_CODE_HIGHLIGHT_LINES = 400;
+
+    function rememberSource(target, markdownText) {
+        if (!target) return '';
+        const safeText = typeof markdownText === 'string' ? markdownText : '';
+        sourceByTarget.set(target, safeText);
+        return safeText;
+    }
+
+    function getRememberedSource(target, fallbackText) {
+        if (!target) return '';
+        if (sourceByTarget.has(target)) {
+            return sourceByTarget.get(target) || '';
+        }
+        return typeof fallbackText === 'string' ? fallbackText : '';
+    }
+
+    function isLargeCodeBlock(text) {
+        if (typeof text !== 'string' || text.length === 0) return false;
+        if (text.length > MAX_CODE_HIGHLIGHT_CHARS) return true;
+
+        let lines = 1;
+        for (let i = 0; i < text.length; i += 1) {
+            if (text.charCodeAt(i) === 10) {
+                lines += 1;
+                if (lines > MAX_CODE_HIGHLIGHT_LINES) return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * 获取或初始化 markdown-it 实例
@@ -36,6 +75,10 @@ const FrameworkMarkdown = (function() {
             typographer: true,
             breaks: false,
             highlight: function(str, lang) {
+                if (isLargeCodeBlock(str)) {
+                    return md.utils.escapeHtml(str);
+                }
+
                 if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
                     try {
                         return hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
@@ -71,6 +114,7 @@ const FrameworkMarkdown = (function() {
      */
     function preprocessLatex(text) {
         if (typeof katex === 'undefined' || !text) return text;
+        if (text.indexOf('$') === -1) return text;
 
         const codeBlocks = [];
         // 提取代码块并用占位符替换
@@ -195,23 +239,35 @@ const FrameworkMarkdown = (function() {
     /**
      * 同步渲染 Markdown（用于流式更新）
      */
-    function renderSync(target, markdownText) {
+    function renderSync(target, markdownText, options) {
+        if (!target) return;
+        const renderOptions = options && typeof options === 'object' ? options : {};
+
+        const safeText = typeof markdownText === 'string' ? markdownText : '';
+        rememberSource(target, safeText);
+
         const mdInstance = getMarkdownIt();
-        if (!target || !mdInstance) {
-            if (target) target.textContent = markdownText || '';
+        if (!mdInstance) {
+            target.textContent = safeText;
+            target.dataset.needsMarkdown = 'true';
+            enqueueRender(target, safeText);
             return;
         }
 
-        const safeText = typeof markdownText === 'string' ? markdownText : '';
-
         try {
-            const preprocessed = preprocessLatex(safeText);
+            const preprocessed = preprocessLatex(getRememberedSource(target, safeText));
             target.innerHTML = mdInstance.render(preprocessed);
             target.classList.add('markdown-body');
-            enhanceCodeBlocks(target);
+            const skipEnhance = !!renderOptions.skipEnhance || isLargeCodeBlock(safeText);
+            if (!skipEnhance) {
+                enhanceCodeBlocks(target);
+            }
+            renderedSourceByTarget.set(target, getRememberedSource(target, safeText));
+            target.removeAttribute('data-needs-markdown');
         } catch (err) {
             console.warn('Markdown sync render failed:', err);
             target.textContent = safeText;
+            renderedSourceByTarget.set(target, safeText);
         }
     }
 
@@ -220,7 +276,12 @@ const FrameworkMarkdown = (function() {
      */
     function enqueueRender(target, markdownText) {
         if (!target) return;
-        const safeText = typeof markdownText === 'string' ? markdownText : '';
+        const safeText = rememberSource(target, markdownText);
+        if (renderedSourceByTarget.get(target) === safeText) {
+            target.removeAttribute('data-needs-markdown');
+            return;
+        }
+
         if (!target.textContent) {
             target.textContent = safeText;
         }
@@ -246,19 +307,23 @@ const FrameworkMarkdown = (function() {
         renderHandle = null;
         const mdInstance = getMarkdownIt();
         if (!mdInstance) {
-            renderQueue.length = 0;
+            if (renderQueue.length > 0) renderHandle = scheduleSoon(processRenderQueue);
             return;
         }
 
         const start = performance.now();
         const hasDeadline = deadline && typeof deadline.timeRemaining === 'function';
+        let processedCount = 0;
 
         while (renderQueue.length > 0) {
-            if (hasDeadline && deadline.timeRemaining() < 5) break;
-            if (!hasDeadline && performance.now() - start > 12) break;
+            const elapsed = performance.now() - start;
+            if (elapsed > IDLE_BATCH_BUDGET_MS) break;
+            if (processedCount >= IDLE_BATCH_MAX_TASKS) break;
+            if (hasDeadline && deadline.timeRemaining() < IDLE_MIN_TIME_REMAINING_MS) break;
 
             const { target, markdownText } = renderQueue.shift();
             if (!target) continue;
+            processedCount += 1;
             
             const isAttached = typeof target.isConnected === 'boolean'
                 ? target.isConnected
@@ -266,12 +331,23 @@ const FrameworkMarkdown = (function() {
             if (!isAttached) continue;
 
             try {
-                const preprocessed = preprocessLatex(markdownText || '');
+                const sourceText = getRememberedSource(target, markdownText || '');
+                if (renderedSourceByTarget.get(target) === sourceText) {
+                    target.removeAttribute('data-needs-markdown');
+                    continue;
+                }
+
+                const preprocessed = preprocessLatex(sourceText);
                 target.innerHTML = mdInstance.render(preprocessed);
-                enhanceCodeBlocks(target);
+                if (!isLargeCodeBlock(sourceText)) {
+                    enhanceCodeBlocks(target);
+                }
+                renderedSourceByTarget.set(target, sourceText);
             } catch (err) {
                 console.warn('Markdown render failed:', err);
-                target.textContent = markdownText || '';
+                const fallbackSource = getRememberedSource(target, markdownText || '');
+                target.textContent = fallbackSource;
+                renderedSourceByTarget.set(target, fallbackSource);
             } finally {
                 target.classList.add('markdown-body');
                 target.removeAttribute('data-needs-markdown');
@@ -294,7 +370,7 @@ const FrameworkMarkdown = (function() {
         if (pendingElements.length === 0) return;
 
         pendingElements.forEach(element => {
-            const text = element.textContent || '';
+            const text = getRememberedSource(element, element.textContent || '');
             enqueueRender(element, text);
         });
     }
@@ -303,6 +379,7 @@ const FrameworkMarkdown = (function() {
         getMarkdownIt,
         renderSync,
         enqueueRender,
+        rememberSource,
         renderAllPending,
         preprocessLatex,
         enhanceCodeBlocks,

@@ -471,6 +471,7 @@
                 });
             }
             nextAssistant.toolCalls = toolCalls;
+            nextAssistant.updatedAt = Date.now();
             store.persist();
 
             // 工具开始执行时，停止该条消息的“流式三点”指示器
@@ -489,6 +490,7 @@
 
             for (const tc of toolCalls) {
                 toolCallTypes.updateStatus(tc, 'running');
+                nextAssistant.updatedAt = Date.now();
                 if (toolCallRenderer && shouldRenderUI(conv.id, nextAssistant.id)) {
                     toolCallRenderer.updateUI(nextAssistant.id, tc.id, { status: 'running' });
                 }
@@ -502,6 +504,7 @@
                         const enabled = store.getToolStateForConversation(conv.id, def.id);
                         if (!enabled) {
                             toolCallTypes.updateStatus(tc, 'error', null, '该工具在当前会话已禁用');
+                            nextAssistant.updatedAt = Date.now();
                             if (toolCallRenderer && shouldRenderUI(conv.id, nextAssistant.id)) {
                                 toolCallRenderer.updateUI(nextAssistant.id, tc.id, {
                                     status: tc.status,
@@ -517,11 +520,14 @@
                     const result = await toolRegistry.execute(tc.name, tc.args);
                     if (result.success) {
                         toolCallTypes.updateStatus(tc, 'success', result.result);
+                        nextAssistant.updatedAt = Date.now();
                     } else {
                         toolCallTypes.updateStatus(tc, 'error', null, result.error);
+                        nextAssistant.updatedAt = Date.now();
                     }
                 } catch (e) {
                     toolCallTypes.updateStatus(tc, 'error', null, e.message);
+                    nextAssistant.updatedAt = Date.now();
                 }
 
                 if (toolCallRenderer && shouldRenderUI(conv.id, nextAssistant.id)) {
@@ -1680,6 +1686,7 @@
                         });
                     }
                     assistantMessage.toolCalls = toolCalls;
+                    assistantMessage.updatedAt = Date.now();
 
                     // ========== 提前结束该条消息的流式 UI（思维链计时/三点） ==========
                     if (!finalizedBeforeTools) {
@@ -1739,6 +1746,7 @@
                     for (const tc of toolCalls) {
                         // 更新状态为执行中
                         toolCallTypes.updateStatus(tc, 'running');
+                        assistantMessage.updatedAt = Date.now();
                         if (toolCallRenderer && shouldRenderUI(conv.id, assistantMessage.id)) {
                             toolCallRenderer.updateUI(assistantMessage.id, tc.id, { status: 'running' });
                         }
@@ -1752,6 +1760,7 @@
                                 const enabled = store.getToolStateForConversation(conv.id, def.id);
                                 if (!enabled) {
                                     toolCallTypes.updateStatus(tc, 'error', null, '该工具在当前会话已禁用');
+                                    assistantMessage.updatedAt = Date.now();
                                     if (toolCallRenderer && shouldRenderUI(conv.id, assistantMessage.id)) {
                                         toolCallRenderer.updateUI(assistantMessage.id, tc.id, {
                                             status: tc.status,
@@ -1769,11 +1778,14 @@
                             
                             if (result.success) {
                                 toolCallTypes.updateStatus(tc, 'success', result.result);
+                                assistantMessage.updatedAt = Date.now();
                             } else {
                                 toolCallTypes.updateStatus(tc, 'error', null, result.error);
+                                assistantMessage.updatedAt = Date.now();
                             }
                         } catch (execError) {
                             toolCallTypes.updateStatus(tc, 'error', null, execError.message);
+                            assistantMessage.updatedAt = Date.now();
                         }
                         
                         // 更新 UI

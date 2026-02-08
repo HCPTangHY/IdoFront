@@ -109,6 +109,7 @@
             finalizeStreamingMessage: (...args) => messages.finalizeStreamingMessage(...args),
             finalizeStreamingMessageById: (...args) => messages.finalizeStreamingMessageById(...args),
             renderAllPendingMarkdown: (...args) => messages.renderAllPendingMarkdown(...args),
+            trimMessagesAfter: (...args) => messages.trimMessagesAfter(...args),
             clearMessages: (...args) => messages.clearMessages(...args),
             addLoadingIndicator: (...args) => messages.addLoadingIndicator(...args),
             removeLoadingIndicator: (...args) => messages.removeLoadingIndicator(...args),

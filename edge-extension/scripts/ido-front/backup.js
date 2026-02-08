@@ -14,6 +14,138 @@
     const BACKUP_VERSION = 1;
     const BACKUP_MAGIC = 'IdoFront_Backup';
 
+    // 导出保护阈值：避免超大字段（尤其 dataUrl / 运行时缓存）导致 JSON.stringify 崩溃
+    const MAX_BACKUP_STRING_CHARS = 500000; // 约 500KB/字段
+    const MAX_BACKUP_ARRAY_ITEMS = 5000;
+    const MAX_BACKUP_DEPTH = 20;
+
+    function isLikelyDataUrl(value) {
+        return typeof value === 'string' && value.startsWith('data:') && value.includes(';base64,');
+    }
+
+    function truncateString(value, maxChars) {
+        if (typeof value !== 'string') return '';
+        if (value.length <= maxChars) return value;
+        return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
+    }
+
+    function sanitizeAttachmentRef(att) {
+        if (!att || typeof att !== 'object') return null;
+        return {
+            id: att.id,
+            name: att.name,
+            type: att.type,
+            size: att.size,
+            source: att.source
+        };
+    }
+
+    function sanitizeValueForBackup(value, depth, seen) {
+        if (value === null || value === undefined) return value;
+
+        const t = typeof value;
+        if (t === 'number' || t === 'boolean') return value;
+        if (t === 'string') {
+            if (isLikelyDataUrl(value)) {
+                return `[omitted dataUrl, length=${value.length}]`;
+            }
+            return truncateString(value, MAX_BACKUP_STRING_CHARS);
+        }
+        if (t !== 'object') return undefined;
+
+        if (depth >= MAX_BACKUP_DEPTH) {
+            return '[omitted: max depth reached]';
+        }
+
+        if (seen.has(value)) {
+            return '[omitted: circular reference]';
+        }
+        seen.add(value);
+
+        if (Array.isArray(value)) {
+            return value
+                .slice(0, MAX_BACKUP_ARRAY_ITEMS)
+                .map(item => sanitizeValueForBackup(item, depth + 1, seen))
+                .filter(v => typeof v !== 'undefined');
+        }
+
+        const out = {};
+        const keys = Object.keys(value).slice(0, MAX_BACKUP_ARRAY_ITEMS);
+        for (const key of keys) {
+            // runtime 临时字段，不进入备份
+            if (key === 'thoughtAttachments') continue;
+            if (key.startsWith('_')) continue;
+            if (key === 'dataUrl' || key === 'blob' || key === 'file' || key === 'arrayBuffer' || key === 'objectUrl' || key === 'previewUrl') continue;
+
+            const sanitized = sanitizeValueForBackup(value[key], depth + 1, seen);
+            if (typeof sanitized !== 'undefined') {
+                out[key] = sanitized;
+            }
+        }
+        return out;
+    }
+
+    function sanitizeMessageForBackup(msg) {
+        if (!msg || typeof msg !== 'object') return null;
+        const out = {
+            id: msg.id,
+            role: msg.role,
+            content: truncateString(typeof msg.content === 'string' ? msg.content : '', MAX_BACKUP_STRING_CHARS),
+            createdAt: msg.createdAt,
+            timestamp: msg.timestamp,
+            parentId: msg.parentId
+        };
+
+        if (typeof msg.reasoning === 'string') {
+            out.reasoning = truncateString(msg.reasoning, MAX_BACKUP_STRING_CHARS);
+        }
+
+        if (Array.isArray(msg.attachments)) {
+            out.attachments = msg.attachments.map(sanitizeAttachmentRef).filter(Boolean);
+        }
+
+        if (msg.modelName) out.modelName = msg.modelName;
+        if (msg.channelName) out.channelName = msg.channelName;
+        if (msg.plugin) out.plugin = sanitizeValueForBackup(msg.plugin, 0, new WeakSet());
+        if (msg.metadata) out.metadata = sanitizeValueForBackup(msg.metadata, 0, new WeakSet());
+        if (msg.toolCalls) out.toolCalls = sanitizeValueForBackup(msg.toolCalls, 0, new WeakSet());
+        if (msg.toolResults) out.toolResults = sanitizeValueForBackup(msg.toolResults, 0, new WeakSet());
+
+        return out;
+    }
+
+    function sanitizeConversationForBackup(conv) {
+        if (!conv || typeof conv !== 'object') return null;
+        return {
+            id: conv.id,
+            title: conv.title,
+            createdAt: conv.createdAt,
+            updatedAt: conv.updatedAt,
+            personaId: conv.personaId,
+            selectedChannelId: conv.selectedChannelId,
+            selectedModel: conv.selectedModel,
+            streamOverride: conv.streamOverride,
+            reasoningEffort: conv.reasoningEffort,
+            activeBranchMap: sanitizeValueForBackup(conv.activeBranchMap || {}, 0, new WeakSet()),
+            titleEditedByUser: !!conv.titleEditedByUser,
+            titleGeneratedByAI: !!conv.titleGeneratedByAI,
+            metadata: sanitizeValueForBackup(conv.metadata || null, 0, new WeakSet()),
+            messages: Array.isArray(conv.messages) ? conv.messages.map(sanitizeMessageForBackup).filter(Boolean) : []
+        };
+    }
+
+    function safeStringifyBackup(backupObject) {
+        try {
+            // 使用紧凑 JSON，避免 pretty-print 造成额外内存放大
+            return JSON.stringify(backupObject);
+        } catch (e) {
+            if (e && e.name === 'RangeError') {
+                throw new Error('备份数据体积过大（可能包含超长文本或异常字段），请先清理超大对话后重试。');
+            }
+            throw e;
+        }
+    }
+
     /**
      * 获取当前时间的格式化字符串（用于文件名）
      */
@@ -93,24 +225,28 @@
         }
 
         // 1. 构建基础备份数据
+        const sanitizedConversations = Array.isArray(store.state.conversations)
+            ? store.state.conversations.map(sanitizeConversationForBackup).filter(Boolean)
+            : [];
+
         const backup = {
             _magic: BACKUP_MAGIC,
             _version: BACKUP_VERSION,
             _exportedAt: new Date().toISOString(),
             _stats: {
-                conversationCount: store.state.conversations?.length || 0,
+                conversationCount: sanitizedConversations.length,
                 personaCount: store.state.personas?.length || 0,
                 channelCount: store.state.channels?.length || 0
             },
-            // 核心数据
-            personas: store.state.personas || [],
+            // 核心数据（均做过清洗，避免运行时脏字段造成导出崩溃）
+            personas: sanitizeValueForBackup(store.state.personas || [], 0, new WeakSet()),
             activePersonaId: store.state.activePersonaId,
-            personaLastActiveConversationIdMap: store.state.personaLastActiveConversationIdMap || {},
-            conversations: store.state.conversations || [],
+            personaLastActiveConversationIdMap: sanitizeValueForBackup(store.state.personaLastActiveConversationIdMap || {}, 0, new WeakSet()),
+            conversations: sanitizedConversations,
             activeConversationId: store.state.activeConversationId,
-            channels: store.state.channels || [],
-            pluginStates: store.state.pluginStates || {},
-            settings: store.state.settings || {},
+            channels: sanitizeValueForBackup(store.state.channels || [], 0, new WeakSet()),
+            pluginStates: sanitizeValueForBackup(store.state.pluginStates || {}, 0, new WeakSet()),
+            settings: sanitizeValueForBackup(store.state.settings || {}, 0, new WeakSet()),
             // 附件数据（稍后填充）
             attachments: {}
         };
@@ -144,7 +280,7 @@
         }
 
         // 3. 序列化并下载
-        const json = JSON.stringify(backup, null, 2);
+        const json = safeStringifyBackup(backup);
         const filename = `IdoFront_Backup_${getTimestamp()}.json`;
         downloadFile(json, filename, 'application/json');
 

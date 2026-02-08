@@ -298,6 +298,12 @@
                         
                         // 更新锚点消息的分支切换器（它的分支信息可能已改变）
                         updateMessageBranchSwitcher(anchorEl, activePath[anchorIndex], childrenMap);
+
+                        // 同步 FrameworkMessages 内部状态，避免分支来回切换后 state.messages 残留旧分支消息
+                        // 导致同 id 消息命中旧对象（进而出现 Markdown/代码块不再刷新）。
+                        if (context.trimMessagesAfter) {
+                            context.trimMessagesAfter(options.focusMessageId);
+                        }
                     }
                 } else {
                     preserveScrollTop = chatStream.scrollTop;

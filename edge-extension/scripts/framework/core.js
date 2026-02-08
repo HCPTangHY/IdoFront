@@ -314,6 +314,7 @@ const FrameworkCore = (function() {
             finalizeStreamingMessage: messages ? messages.finalizeStreamingMessage : null,
             finalizeStreamingMessageById: messages ? messages.finalizeStreamingMessageById : null,
             renderAllPendingMarkdown: messages ? messages.renderAllPendingMarkdown : null,
+            trimMessagesAfter: messages ? messages.trimMessagesAfter : null,
             clearMessages: messages ? messages.clearMessages : null,
             addLoadingIndicator: messages ? messages.addLoadingIndicator : null,
             removeLoadingIndicator: messages ? messages.removeLoadingIndicator : null,
