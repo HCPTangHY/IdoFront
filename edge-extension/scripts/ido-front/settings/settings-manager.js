@@ -66,6 +66,36 @@
     // 主面板异步更新排队标记，避免同一宏任务内重复重建
     let pendingMainUpdate = false;
 
+    function applyUrlStateFromParams(params) {
+        if (!params || typeof params.get !== 'function') {
+            return false;
+        }
+
+        const mode = String(params.get('mode') || '').trim().toLowerCase();
+        const settingsTab = String(params.get('settings_tab') || '').trim();
+
+        if (mode !== 'settings') {
+            return false;
+        }
+
+        if (settingsTab) {
+            activeSettingsTab = settingsTab;
+        }
+
+        // 切换到设置模式
+        toggleSettingsMode();
+        return true;
+    }
+
+    window.IdoFront.settingsManager.applyUrlStateFromCurrentLocation = function() {
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            return applyUrlStateFromParams(params);
+        } catch (e) {
+            return false;
+        }
+    };
+
     /**
      * 注册设置标签页
      * @param {Object} tab - 标签配置
@@ -254,17 +284,7 @@
             
             // 监听状态恢复事件
             context.events.on('restore-state-from-url', (params) => {
-                const mode = params.get('mode');
-                const settingsTab = params.get('settings_tab');
-                
-                if (mode === 'settings') {
-                    // 恢复设置标签页
-                    if (settingsTab) {
-                        activeSettingsTab = settingsTab;
-                    }
-                    // 切换到设置模式
-                    toggleSettingsMode();
-                }
+                applyUrlStateFromParams(params);
             });
         }
 

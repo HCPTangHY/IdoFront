@@ -7,6 +7,24 @@
     const store = window.IdoFront.store;
     let context = null; // Framework instance
 
+    function getStartupFlags() {
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const rawRecovery = params.get('recovery') || params.get('safe') || '';
+            const recoveryValue = String(rawRecovery).trim().toLowerCase();
+            return {
+                recoveryMode:
+                    recoveryValue === '1' ||
+                    recoveryValue === 'true' ||
+                    recoveryValue === 'yes' ||
+                    recoveryValue === 'on',
+                mode: String(params.get('mode') || '').trim().toLowerCase()
+            };
+        } catch (e) {
+            return { recoveryMode: false, mode: '' };
+        }
+    }
+
     /**
      * 初始化 IdoFront
      * @param {Object} frameworkInstance - Framework 实例
@@ -14,6 +32,8 @@
      */
     window.IdoFront.init = async function(frameworkInstance) {
         context = frameworkInstance;
+        const startup = getStartupFlags();
+        const isRecoveryMode = startup.recoveryMode;
         
         // 1. 初始化 Store（异步）
         await store.init();
@@ -59,9 +79,13 @@
         }
  
         if (pluginLoader && pluginLoader.init) {
-            await pluginLoader.init(context, store);
+            if (!isRecoveryMode) {
+                await pluginLoader.init(context, store);
+            } else {
+                console.warn('[main] Recovery mode: 跳过外部插件初始化');
+            }
         }
- 
+
         // 初始化 AI 服务模块
         if (titleGenerator && titleGenerator.init) {
             titleGenerator.init(store);
@@ -91,9 +115,23 @@
             mcpSettings.init(context, store);
         }
 
+        // framework 在 IdoFront 初始化前就会触发一次 restore-state-from-url，
+        // 因此这里主动再应用一次 URL 状态，确保 mode=settings 能生效。
+        if (settingsManager && typeof settingsManager.applyUrlStateFromCurrentLocation === 'function') {
+            settingsManager.applyUrlStateFromCurrentLocation();
+        }
+
         // 3. 同步初始 UI
         if (conversationActions && conversationActions.syncUI) {
-            conversationActions.syncUI();
+            const shouldSkipInitialSync = isRecoveryMode || startup.mode === 'settings';
+            if (!shouldSkipInitialSync) {
+                conversationActions.syncUI();
+            } else {
+                console.warn('[main] Skip initial conversation sync:', {
+                    recovery: isRecoveryMode,
+                    mode: startup.mode
+                });
+            }
         }
 
         console.log('IdoFront Core (Modular) Initialized');
