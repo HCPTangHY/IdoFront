@@ -721,16 +721,18 @@
         }
 
         async #loadNormalizedState() {
-            const transaction = this.db.transaction([META_STORE, CONVERSATIONS_STORE, MESSAGES_STORE], 'readonly');
+            const transaction = this.db.transaction([META_STORE, CONVERSATIONS_STORE], 'readonly');
             const metaStore = transaction.objectStore(META_STORE);
             const convStore = transaction.objectStore(CONVERSATIONS_STORE);
-            const msgStore = transaction.objectStore(MESSAGES_STORE);
 
-            const [metaRows, convRows, msgRows] = await Promise.all([
+            const [metaRows, convRows] = await Promise.all([
                 this.#requestToPromise(metaStore.getAll()),
-                this.#requestToPromise(convStore.getAll()),
-                this.#requestToPromise(msgStore.getAll())
+                this.#requestToPromise(convStore.getAll())
             ]);
+
+            const msgTx = this.db.transaction([MESSAGES_STORE], 'readonly');
+            const msgStore = msgTx.objectStore(MESSAGES_STORE);
+            const msgCount = await this.#requestToPromise(msgStore.count());
 
             const metaMap = new Map();
             (metaRows || []).forEach(row => {
@@ -741,17 +743,37 @@
 
             const appMeta = metaMap.get(APP_META_KEY) || null;
             const hasNormalizedMarker = !!(appMeta && appMeta._normalizedMagic === NORMALIZED_MAGIC);
-            const hasAnyData = (convRows && convRows.length > 0) || (msgRows && msgRows.length > 0) || hasNormalizedMarker;
+            const hasAnyData = (convRows && convRows.length > 0) || (msgCount && msgCount > 0) || hasNormalizedMarker;
             if (!hasAnyData) return null;
 
             const messagesByConversation = new Map();
-            (msgRows || []).forEach(msg => {
-                if (!msg || !msg.conversationId) return;
-                if (!messagesByConversation.has(msg.conversationId)) {
-                    messagesByConversation.set(msg.conversationId, []);
-                }
-                messagesByConversation.get(msg.conversationId).push(msg);
-            });
+            if (msgCount && msgCount > 0) {
+                await new Promise((resolve, reject) => {
+                    const request = msgStore.openCursor();
+                    request.onsuccess = (event) => {
+                        const cursor = event && event.target ? event.target.result : null;
+                        if (!cursor) {
+                            resolve();
+                            return;
+                        }
+
+                        const msg = cursor.value;
+                        if (msg && msg.conversationId) {
+                            let list = messagesByConversation.get(msg.conversationId);
+                            if (!list) {
+                                list = [];
+                                messagesByConversation.set(msg.conversationId, list);
+                            }
+                            list.push(msg);
+                        }
+
+                        cursor.continue();
+                    };
+                    request.onerror = () => {
+                        reject(request.error || new Error('读取消息游标失败'));
+                    };
+                });
+            }
 
             messagesByConversation.forEach(list => {
                 list.sort((a, b) => {

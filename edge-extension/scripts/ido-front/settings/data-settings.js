@@ -405,9 +405,13 @@
             progressArea.innerHTML = '<div class="text-sm text-gray-500">正在准备数据...</div>';
         }
 
+        const includeAttachments = window.confirm(
+            '是否在备份中包含附件（图片/PDF）？\n\n选择“确定”=完整备份（体积大，耗时长）\n选择“取消”=仅文本与配置（更快更稳，适合紧急导出）'
+        );
+
         try {
             const stats = await backup.exportAll({
-                includeAttachments: true,
+                includeAttachments,
                 onProgress: (current, total, message) => {
                     if (progressArea) {
                         const percent = total > 0 ? Math.round((current / total) * 100) : 0;
@@ -425,7 +429,7 @@
                 progressArea.innerHTML = `
                     <div class="text-sm text-green-600 flex items-center gap-1">
                         <span class="material-symbols-outlined text-[16px]">check_circle</span>
-                        导出完成！共 ${stats.conversationCount} 个对话，${stats.attachmentCount || 0} 个附件
+                        导出完成！共 ${stats.conversationCount} 个对话，${stats.attachmentCount || 0} 个附件（${includeAttachments ? '含附件' : '不含附件'}）
                     </div>
                 `;
                 setTimeout(() => {

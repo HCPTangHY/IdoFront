@@ -93,6 +93,8 @@
             if (this._initPromise) return this._initPromise;
 
             this._initPromise = (async () => {
+                const isRecoveryMode = this._isRecoveryMode();
+
                 await this.restore();
 
                 // 尽力申请持久化存储，降低浏览器存储压力下被回收的概率
@@ -100,7 +102,17 @@
 
                 // 附件外置化迁移：把历史消息中的 base64 dataUrl 挪到 pluginData (Blob) 存储，
                 // 避免 core.chat.state 写入 IndexedDB 时发生秒级 structured clone 卡顿。
-                await this.migrateAttachmentsToBlobStorage();
+                // ⚠️ 不阻塞启动流程：移动端在大数据量场景下同步迁移容易导致白屏/闪退。
+                // 改为后台延迟执行，用户可先进入页面做导出等关键操作。
+                if (!isRecoveryMode) {
+                    setTimeout(() => {
+                        this.migrateAttachmentsToBlobStorage().catch(e => {
+                            console.warn('[store] 延迟附件迁移失败:', e);
+                        });
+                    }, 5000);
+                } else {
+                    console.warn('[store] Recovery mode: 跳过启动时附件迁移');
+                }
 
                 this.state.networkLogs = [];
                 if (this.state.conversations.length === 0) {
@@ -125,9 +137,13 @@
 
                 // 延迟执行附件垃圾回收（清理未被引用的图片）
                 // 使用 setTimeout 避免阻塞初始化流程
-                setTimeout(() => {
-                    this._runAttachmentsGC();
-                }, 10000); // 启动后 10 秒执行
+                if (!isRecoveryMode) {
+                    setTimeout(() => {
+                        this._runAttachmentsGC();
+                    }, 10000); // 启动后 10 秒执行
+                } else {
+                    console.warn('[store] Recovery mode: 跳过启动时附件 GC');
+                }
             })();
 
             return this._initPromise;
@@ -188,6 +204,17 @@
                     this.persistImmediately();
                 }
             });
+        },
+
+        _isRecoveryMode() {
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                const raw = params.get('recovery') || params.get('safe') || '';
+                const value = String(raw).trim().toLowerCase();
+                return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+            } catch (e) {
+                return false;
+            }
         },
 
         async _ensurePersistentStorage() {
@@ -1212,8 +1239,15 @@
             // 从根开始遍历
             const path = [];
             let currentParentId = 'root';
+            const visited = new Set();
+            let guard = 0;
+            const maxDepth = Math.max((conv.messages && conv.messages.length) || 0, 1) + 5;
             
             while (childrenMap[currentParentId] && childrenMap[currentParentId].length > 0) {
+                if (guard++ > maxDepth) {
+                    console.warn('[store] getActivePath: exceeded maxDepth, possible corrupted branch graph', { convId, currentParentId, maxDepth });
+                    break;
+                }
                 const children = childrenMap[currentParentId];
                 let selectedChild = null;
                 
@@ -1229,6 +1263,16 @@
                     // 更新 activeBranchMap
                     conv.activeBranchMap[currentParentId] = selectedChild.id;
                 }
+
+                if (!selectedChild || !selectedChild.id) {
+                    break;
+                }
+
+                if (visited.has(selectedChild.id)) {
+                    console.warn('[store] getActivePath: cycle detected, stop traversing', { convId, messageId: selectedChild.id });
+                    break;
+                }
+                visited.add(selectedChild.id);
                 
                 path.push(selectedChild);
                 currentParentId = selectedChild.id;
