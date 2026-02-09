@@ -426,11 +426,18 @@
             });
 
             if (progressArea) {
+                const downloadMethod = stats && stats._download ? stats._download.method : '';
+                const needsManualSave = downloadMethod && downloadMethod !== 'anchor-download';
                 progressArea.innerHTML = `
                     <div class="text-sm text-green-600 flex items-center gap-1">
                         <span class="material-symbols-outlined text-[16px]">check_circle</span>
                         导出完成！共 ${stats.conversationCount} 个对话，${stats.attachmentCount || 0} 个附件（${includeAttachments ? '含附件' : '不含附件'}）
                     </div>
+                    ${needsManualSave ? `
+                    <div class="text-xs text-amber-600 mt-2">
+                        当前浏览器可能不支持直接下载，已尝试在新页面打开文件。若未自动保存，请在新页面使用"分享/存储到文件"。
+                    </div>
+                    ` : ''}
                 `;
                 setTimeout(() => {
                     progressArea.classList.add('hidden');

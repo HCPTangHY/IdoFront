@@ -160,14 +160,64 @@
      */
     function downloadFile(content, filename, mimeType) {
         const blob = new Blob([content], { type: mimeType });
+        const nav = window.navigator || {};
+
+        // 兼容极少数旧环境
+        if (typeof nav.msSaveOrOpenBlob === 'function') {
+            nav.msSaveOrOpenBlob(blob, filename);
+            return { ok: true, method: 'msSaveOrOpenBlob' };
+        }
+
+        const ua = String(nav.userAgent || '').toLowerCase();
+        const isIOS = /iphone|ipad|ipod/.test(ua);
+
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        a.rel = 'noopener';
+
+        // 大多数桌面与 Android Chrome：直接下载
+        if (!isIOS && typeof a.download === 'string') {
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => {
+                URL.revokeObjectURL(url);
+            }, 1000);
+            return { ok: true, method: 'anchor-download' };
+        }
+
+        // iOS/Safari 常见：download 属性可能不生效，改为新开页或当前页打开
+        try {
+            const opened = window.open(url, '_blank');
+            if (!opened) {
+                window.location.href = url;
+            }
+            // 让用户有时间在新页分享/存储，再回收 URL
+            setTimeout(() => {
+                URL.revokeObjectURL(url);
+            }, 60 * 1000);
+            return { ok: true, method: opened ? 'window-open' : 'location-fallback' };
+        } catch (e) {
+            // 极端兜底：data URL（可能体积受限）
+            try {
+                const dataUrl = `data:${mimeType};charset=utf-8,${encodeURIComponent(String(content))}`;
+                const opened = window.open(dataUrl, '_blank');
+                if (!opened) {
+                    window.location.href = dataUrl;
+                }
+                return { ok: true, method: opened ? 'data-url-open' : 'data-url-location' };
+            } catch (e2) {
+                console.error('[backup] 下载触发失败:', e2);
+                try {
+                    URL.revokeObjectURL(url);
+                } catch (_) {
+                    // ignore
+                }
+                return { ok: false, method: 'failed', error: String(e2 && e2.message ? e2.message : e2) };
+            }
+        }
     }
 
     /**
@@ -282,11 +332,12 @@
         // 3. 序列化并下载
         const json = safeStringifyBackup(backup);
         const filename = `IdoFront_Backup_${getTimestamp()}.json`;
-        downloadFile(json, filename, 'application/json');
+        const downloadResult = downloadFile(json, filename, 'application/json');
 
         console.log(`[backup] Exported: ${backup._stats.conversationCount} conversations, ${backup._stats.attachmentCount || 0} attachments`);
+        console.log('[backup] Download result:', downloadResult);
 
-        return backup._stats;
+        return { ...backup._stats, _download: downloadResult };
     }
 
     /**
@@ -527,9 +578,10 @@
         const markdown = lines.join('\n');
         const safeTitle = (conv.title || 'conversation').replace(/[<>:"/\\|?*]/g, '_').slice(0, 50);
         const filename = `${safeTitle}_${getTimestamp()}.md`;
-        downloadFile(markdown, filename, 'text/markdown; charset=utf-8');
+        const downloadResult = downloadFile(markdown, filename, 'text/markdown; charset=utf-8');
 
         console.log(`[backup] Exported conversation as Markdown: ${activePath.length} messages`);
+        console.log('[backup] Download result:', downloadResult);
     }
 
     /**
@@ -603,9 +655,10 @@
         const json = JSON.stringify(exportData, null, 2);
         const safeTitle = (conv.title || 'conversation').replace(/[<>:"/\\|?*]/g, '_').slice(0, 50);
         const filename = `${safeTitle}_${getTimestamp()}.json`;
-        downloadFile(json, filename, 'application/json');
+        const downloadResult = downloadFile(json, filename, 'application/json');
 
         console.log(`[backup] Exported conversation as JSON: ${messages.length} messages, ${Object.keys(exportData.attachments).length} attachments`);
+        console.log('[backup] Download result:', downloadResult);
     }
 
     /**
