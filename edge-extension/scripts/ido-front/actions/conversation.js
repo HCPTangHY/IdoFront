@@ -14,6 +14,35 @@
     let store = null;
     let messageActions = null;
 
+    const RECOVERY_MAX_RENDER_MESSAGES = 120;
+
+    function isRecoveryMode() {
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            const raw = params.get('recovery') || params.get('safe') || '';
+            const value = String(raw).trim().toLowerCase();
+            return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function pickRenderPath(activePath) {
+        if (!Array.isArray(activePath)) return [];
+        if (!isRecoveryMode()) return activePath;
+        if (activePath.length <= RECOVERY_MAX_RENDER_MESSAGES) return activePath;
+
+        const sliced = activePath.slice(activePath.length - RECOVERY_MAX_RENDER_MESSAGES);
+        try {
+            console.warn(
+                `[conversation] Recovery mode: 仅渲染最近 ${RECOVERY_MAX_RENDER_MESSAGES} 条消息（总 ${activePath.length}）`
+            );
+        } catch (e) {
+            // ignore
+        }
+        return sliced;
+    }
+
     /**
      * 初始化对话管理模块
      */
@@ -235,6 +264,8 @@
             const typingMsgId = store.state.typingMessageId;
             const typingConvId = store.state.typingConversationId;
             const activePath = store.getActivePath(active.id);
+            const recoveryMode = isRecoveryMode();
+            const renderPath = pickRenderPath(activePath);
             const hasActiveGenerationInPath = typingMsgId && 
                 typingConvId === active.id && 
                 activePath.some(m => m.id === typingMsgId);
@@ -251,7 +282,7 @@
                 if (restored) {
                     // 缓存恢复成功后，检查是否有消息内容需要同步
                     // （可能在切换期间请求完成了）
-                    const needsRefresh = syncMessageContentFromStore(chatStream, activePath);
+                    const needsRefresh = syncMessageContentFromStore(chatStream, renderPath);
                     if (needsRefresh) {
                         // 内容不一致，失效缓存并继续执行全量重渲染
                         window.IdoFront.virtualList.invalidateCache(active.id);
@@ -282,7 +313,7 @@
                     anchorOffsetTop = anchorEl.getBoundingClientRect().top - chatStream.getBoundingClientRect().top;
                     
                     // 找到锚点消息在 activePath 中的位置
-                    const anchorIndex = activePath.findIndex(m => m.id === options.focusMessageId);
+                    const anchorIndex = renderPath.findIndex(m => m.id === options.focusMessageId);
                     if (anchorIndex !== -1) {
                         startIndex = anchorIndex + 1; // 从锚点的下一条开始更新
                         
@@ -297,7 +328,7 @@
                         toRemove.forEach(el => el.remove());
                         
                         // 更新锚点消息的分支切换器（它的分支信息可能已改变）
-                        updateMessageBranchSwitcher(anchorEl, activePath[anchorIndex], childrenMap);
+                        updateMessageBranchSwitcher(anchorEl, renderPath[anchorIndex], childrenMap);
 
                         // 同步 FrameworkMessages 内部状态，避免分支来回切换后 state.messages 残留旧分支消息
                         // 导致同 id 消息命中旧对象（进而出现 Markdown/代码块不再刷新）。
@@ -329,10 +360,10 @@
             const fragment = document.createDocumentFragment();
             
             // 分支切换时使用异步渲染，减少主线程阻塞
-            const useAsyncMarkdown = options.asyncMarkdown || options.incrementalFromParent;
+            const useAsyncMarkdown = options.asyncMarkdown || options.incrementalFromParent || recoveryMode;
             
-            for (let idx = startIndex; idx < activePath.length; idx++) {
-                const msg = activePath[idx];
+            for (let idx = startIndex; idx < renderPath.length; idx++) {
+                const msg = renderPath[idx];
                 renderSingleMessage(msg, fragment, childrenMap, useAsyncMarkdown);
             }
             
@@ -366,7 +397,7 @@
             updateHeader(active);
             
             // 批量渲染所有历史消息的 Markdown（性能优化）
-            if (context.renderAllPendingMarkdown) {
+            if (context.renderAllPendingMarkdown && !recoveryMode) {
                 // 使用 requestAnimationFrame 确保 DOM 已更新
                 requestAnimationFrame(() => {
                     context.renderAllPendingMarkdown();

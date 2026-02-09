@@ -9,11 +9,6 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    # 只在以下情况执行：推送 tag / 手动触发 / commit message 以 v 版本号开头
-    if: |
-      startsWith(github.ref, 'refs/tags/v') ||
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.head_commit.message, 'v')
 
     permissions:
       contents: read

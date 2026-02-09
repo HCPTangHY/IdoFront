@@ -157,6 +157,8 @@ try {
   console.warn('⚠️  无法读取 manifest.json 版本号');
 }
 
+const assetVersion = `${appVersion}-${Date.now()}`;
+
 // 5. 添加头部和尾部
 const preamble = `// IdoFront Web Bundle
 // Version: ${appVersion}
@@ -264,6 +266,16 @@ const indexDest = path.join(WEB_DIST_DIR, 'index.html');
 if (fs.existsSync(indexTemplate)) {
   fs.copyFileSync(indexTemplate, indexDest);
   console.log(`✅ 拷贝: index.html (模板)`);
+
+  // 为静态资源追加版本参数，减少移动端缓存导致的“已修复代码未生效”问题
+  try {
+    let html = fs.readFileSync(indexDest, 'utf8');
+    html = html.replace(/src="tailwind\.js(?:\?[^"]*)?"/g, `src="tailwind.js?v=${assetVersion}"`);
+    html = html.replace(/src="app\.js(?:\?[^"]*)?"/g, `src="app.js?v=${assetVersion}"`);
+    fs.writeFileSync(indexDest, html, 'utf8');
+  } catch (e) {
+    console.warn('⚠️  index.html 资源版本参数注入失败:', e.message);
+  }
 } else {
   // 自动生成
   const sidepanelPath = path.join(EXTENSION_DIR, 'sidepanel.html');
@@ -273,7 +285,7 @@ if (fs.existsSync(indexTemplate)) {
   html = html.replace(/<script\s+src="scripts\/[^"]+"><\/script>\s*/g, '');
   
   // 添加新脚本
-  html = html.replace('</body>', '  <script src="tailwind.js"></script>\n  <script src="app.js"></script>\n</body>');
+  html = html.replace('</body>', `  <script src="tailwind.js?v=${assetVersion}"></script>\n  <script src="app.js?v=${assetVersion}"></script>\n</body>`);
   
   // 添加 favicon
   html = html.replace('</head>', '  <link rel="icon" href="icons/icon-32.png">\n</head>');
