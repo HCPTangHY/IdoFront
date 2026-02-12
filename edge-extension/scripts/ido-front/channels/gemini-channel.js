@@ -341,6 +341,7 @@
 
         const opt = (options && typeof options === 'object') ? options : {};
         // Gemini 生图模型可能在 thought 段返回预览图：默认不记录/不展示/不回传
+        const skipInlineData = !!opt.skipInlineData;
         const dropThoughtImages = !!opt.dropThoughtImages;
         const inlineDataSource = (typeof opt.inlineDataSource === 'string' && opt.inlineDataSource)
             ? opt.inlineDataSource
@@ -433,6 +434,10 @@
             // Support both camelCase (JS SDK) and snake_case (REST API) formats
             const inlineData = part.inlineData || part.inline_data;
             if (inlineData) {
+                if (skipInlineData) {
+                    continue;
+                }
+
                 const mimeType = inlineData.mimeType || inlineData.mime_type;
                 const data = inlineData.data;
 
@@ -1136,6 +1141,12 @@
                     let lastFinishReason = null;
                     let streamUsageMetadata = null; // 流式响应中的 usage 信息
                     let lastGroundingMetadata = null; // 流式响应中的 grounding 信息
+                    // Gemini 生图模型中，inlineData 可能非常大。
+                    // 一旦检测到 inlineData，流式阶段仅在结束时做一次完整解析，
+                    // 避免每个 chunk 都重建 dataUrl 导致 Android WebView 内存峰值。
+                    let imageStreamHasInlineData = false;
+                    const streamPreviewPartsOpt = isImageGenModel ? { ...partsToContentOpt, skipInlineData: true } : partsToContentOpt;
+
                     let lastUrlContextMetadata = null; // 流式响应中的 URL context 信息
 
                     try {
@@ -1186,11 +1197,31 @@
                                             const newParts = candidate.content.parts;
                                             const thoughtSignature = candidate.thoughtSignature;
                                             
+                                            if (isImageGenModel && Array.isArray(newParts) && newParts.length > 0) {
+                                                const hasInlineData = newParts.some(part => {
+                                                    if (!part || typeof part !== 'object') return false;
+                                                    return !!(part.inlineData || part.inline_data);
+                                                });
+                                                if (hasInlineData) {
+                                                    imageStreamHasInlineData = true;
+                                                }
+                                            }
+
                                             // Accumulate parts incrementally
                                             accumulatedParts = accumulatedParts.concat(newParts);
                                             lastThoughtSignature = thoughtSignature;
+
+                                            if (isImageGenModel && imageStreamHasInlineData && !lastFinishReason) {
+                                                // 生图流式中，出现 inlineData 后先不做逐帧 attachments 回放，
+                                                // 只在结束时解析一次完整结果。
+                                                continue;
+                                            }
+
+                                            const parseOpt = (isImageGenModel && !lastFinishReason)
+                                                ? streamPreviewPartsOpt
+                                                : partsToContentOpt;
                                             
-                                            const { content, reasoning, attachments, thoughtAttachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts, partsToContentOpt);
+                                            const { content, reasoning, attachments, thoughtAttachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint } = partsToContent(accumulatedParts, parseOpt);
                                             
                                             const updateData = {
                                                 content: content,

@@ -116,6 +116,176 @@ const FrameworkMessages = (function() {
         return layout ? layout.getUI() : {};
     }
 
+    function getAndroidFilesystem() {
+        try {
+            const cap = window.Capacitor;
+            if (!cap) return null;
+            const isNative = typeof cap.isNativePlatform === 'function'
+                ? cap.isNativePlatform()
+                : !!cap.isNative;
+            const platform = typeof cap.getPlatform === 'function'
+                ? cap.getPlatform()
+                : null;
+            if (!isNative || platform !== 'android') return null;
+
+            const pluginsRef = cap.Plugins || {};
+            const filesystem = pluginsRef.Filesystem;
+            if (!filesystem || typeof filesystem.writeFile !== 'function') return null;
+            return filesystem;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function showDownloadToast(message) {
+        try {
+            const toast = window.Framework && window.Framework.ui && window.Framework.ui.showToast;
+            if (typeof toast === 'function') {
+                toast(message, 2200);
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function getFileExtFromMime(mimeType) {
+        const map = {
+            'image/png': 'png',
+            'image/jpeg': 'jpg',
+            'image/jpg': 'jpg',
+            'image/webp': 'webp',
+            'image/gif': 'gif',
+            'application/pdf': 'pdf'
+        };
+        return map[String(mimeType || '').toLowerCase()] || '';
+    }
+
+    function normalizeDownloadFilename(name, fallbackName, mimeType) {
+        const fallback = (fallbackName && String(fallbackName).trim()) || 'download';
+        let safe = (name && String(name).trim()) || fallback;
+        safe = safe.replace(/[\\/:*?"<>|]/g, '_');
+        if (!safe) safe = fallback;
+
+        const hasExt = /\.[a-zA-Z0-9]{1,8}$/.test(safe);
+        if (!hasExt) {
+            const ext = getFileExtFromMime(mimeType);
+            if (ext) safe += `.${ext}`;
+        }
+        return safe;
+    }
+
+    function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            try {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const result = String(reader.result || '');
+                    const base64 = result.split(',')[1] || '';
+                    resolve(base64);
+                };
+                reader.onerror = () => reject(reader.error || new Error('blobToBase64 failed'));
+                reader.readAsDataURL(blob);
+            } catch (e) {
+                reject(e);
+            }
+        });
+    }
+
+    async function resolveAttachmentBlob(attachment, attachmentsApi) {
+        if (!attachment || typeof attachment !== 'object') return null;
+
+        if (attachment.id && attachmentsApi && typeof attachmentsApi.getBlob === 'function') {
+            const storedBlob = await attachmentsApi.getBlob(attachment.id);
+            if (storedBlob) return storedBlob;
+        }
+
+        if (typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
+            const resp = await fetch(attachment.dataUrl);
+            if (resp.ok) return await resp.blob();
+        }
+
+        return null;
+    }
+
+    async function resolveAttachmentUrl(attachment, attachmentsApi) {
+        if (!attachment || typeof attachment !== 'object') return null;
+        if (typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
+            return attachment.dataUrl;
+        }
+        if (attachment.id && attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
+            return await attachmentsApi.getObjectUrl(attachment.id);
+        }
+        return null;
+    }
+
+    function triggerLinkDownload(url, filename) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+
+    async function saveBlobToAndroidDownloads(blob, filename) {
+        const filesystem = getAndroidFilesystem();
+        if (!filesystem || !blob) return null;
+
+        const base64 = await blobToBase64(blob);
+        if (!base64) return null;
+
+        const targets = [
+            { path: `Download/${filename}`, directory: 'EXTERNAL_STORAGE', recursive: true },
+            { path: `Download/${filename}`, directory: 'EXTERNAL', recursive: true },
+            { path: filename, directory: 'DOCUMENTS', recursive: true },
+            { path: filename, directory: 'CACHE', recursive: true }
+        ];
+
+        for (const target of targets) {
+            try {
+                const result = await filesystem.writeFile({
+                    path: target.path,
+                    data: base64,
+                    directory: target.directory,
+                    recursive: !!target.recursive
+                });
+                return result && result.uri ? result.uri : target.path;
+            } catch (e) {
+                // continue fallback
+            }
+        }
+        return null;
+    }
+
+    async function downloadAttachment(attachment, options) {
+        const opts = (options && typeof options === 'object') ? options : {};
+        const attachmentsApi = opts.attachmentsApi || (window.IdoFront && window.IdoFront.attachments);
+        const mimeType = (attachment && attachment.type) || opts.mimeType || 'application/octet-stream';
+        const filename = normalizeDownloadFilename(opts.filename || (attachment && attachment.name), opts.fallbackName || 'download', mimeType);
+
+        const hasAndroidFilesystem = !!getAndroidFilesystem();
+        if (hasAndroidFilesystem) {
+            // Android App：优先使用 Filesystem 保存到本地目录
+            try {
+                const blob = await resolveAttachmentBlob(attachment, attachmentsApi);
+                if (blob) {
+                    const saved = await saveBlobToAndroidDownloads(blob, filename);
+                    if (saved) {
+                        showDownloadToast('已保存到本地文件');
+                        return true;
+                    }
+                }
+            } catch (e) {
+                console.warn('[messages] native download failed, fallback to browser:', e);
+            }
+        }
+
+        const url = await resolveAttachmentUrl(attachment, attachmentsApi);
+        if (!url) return false;
+        triggerLinkDownload(url, filename);
+        return true;
+    }
+
     /**
      * 清空所有消息
      */
@@ -297,35 +467,17 @@ const FrameworkMessages = (function() {
 
         async function downloadCurrent() {
             const att = images[currentIdx];
-            const filename = (att && att.name ? att.name : `image_${currentIdx + 1}`).replace(/[\\/:*?"<>|]/g, '_');
+            const fallbackName = `image_${currentIdx + 1}`;
 
             try {
-                // 优先走 dataUrl
-                if (att && typeof att.dataUrl === 'string' && att.dataUrl.startsWith('data:')) {
-                    const a = document.createElement('a');
-                    a.href = att.dataUrl;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    return;
-                }
-
-                // 其次走 Blob（外置化）
-                if (att && att.id && attachmentsApi && typeof attachmentsApi.getBlob === 'function') {
-                    const blob = await attachmentsApi.getBlob(att.id);
-                    if (blob) {
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        setTimeout(() => {
-                            try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
-                        }, 0);
-                    }
+                const ok = await downloadAttachment(att, {
+                    filename: att && att.name,
+                    fallbackName,
+                    mimeType: att && att.type,
+                    attachmentsApi
+                });
+                if (!ok) {
+                    console.warn('[lightbox] download failed: no available attachment source');
                 }
             } catch (e) {
                 console.warn('[lightbox] download failed:', e);
@@ -931,7 +1083,7 @@ const FrameworkMessages = (function() {
                     return null;
                 };
 
-                const safeName = (attachment && attachment.name ? attachment.name : 'file.pdf').replace(/[\\/:*?"<>|]/g, '_');
+                const safeName = normalizeDownloadFilename(attachment && attachment.name, 'file.pdf', attachment && attachment.type);
 
                 fileItem.onclick = async () => {
                     try {
@@ -952,14 +1104,15 @@ const FrameworkMessages = (function() {
                     e.preventDefault();
                     e.stopPropagation();
                     try {
-                        const url = await resolveUrl();
-                        if (!url) return;
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = safeName;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
+                        const ok = await downloadAttachment(attachment, {
+                            filename: safeName,
+                            fallbackName: 'file.pdf',
+                            mimeType: attachment && attachment.type,
+                            attachmentsApi: window.IdoFront && window.IdoFront.attachments
+                        });
+                        if (!ok) {
+                            console.warn('[attachments] download pdf failed: no available attachment source');
+                        }
                     } catch (err) {
                         console.warn('[attachments] download pdf failed:', err);
                     }
