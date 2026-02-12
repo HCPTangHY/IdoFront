@@ -70,7 +70,83 @@
         const attachmentDataUrlCache = new Map();
         const toolCallTypes = window.IdoFront.toolCallTypes;
 
+        const pickRawAttachments = (message) => {
+            if (!message) return null;
+            if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+                return message.attachments;
+            }
+            if (message.metadata && Array.isArray(message.metadata.attachments) && message.metadata.attachments.length > 0) {
+                return message.metadata.attachments;
+            }
+            return null;
+        };
+
         const isGemini = channelConfig && (channelConfig.type === 'gemini' || channelConfig.type === 'gemini-deep-research');
+
+        // Gemini 生图会在多轮编辑中快速累积大图历史，Android WebView 容易在拼装 payload 时内存峰值过高。
+        // 这里仅保留最近 N 条“带附件消息”的附件进入 payload，旧消息保留文本上下文。
+        let isGeminiImageGen = false;
+        let isAndroidNative = false;
+        let isAndroidWeb = false;
+
+        try {
+            const cap = window.Capacitor;
+            if (cap) {
+                const nativeFlag = typeof cap.isNativePlatform === 'function'
+                    ? cap.isNativePlatform()
+                    : !!cap.isNative;
+                const platform = typeof cap.getPlatform === 'function' ? cap.getPlatform() : null;
+                isAndroidNative = !!nativeFlag && platform === 'android';
+            }
+        } catch (e) {
+            isAndroidNative = false;
+        }
+
+        try {
+            const ua = (typeof navigator !== 'undefined' && navigator.userAgent)
+                ? String(navigator.userAgent)
+                : '';
+            isAndroidWeb = /Android/i.test(ua);
+        } catch (e) {
+            isAndroidWeb = false;
+        }
+
+        if (isGemini) {
+            try {
+                const geminiChannel = window.IdoFront && window.IdoFront.geminiChannel;
+                const currentModel = (channelConfig && channelConfig.model) || conv.selectedModel || '';
+                if (geminiChannel && typeof geminiChannel.supportsImageGeneration === 'function') {
+                    isGeminiImageGen = !!geminiChannel.supportsImageGeneration(currentModel, channelConfig);
+                }
+            } catch (e) {
+                isGeminiImageGen = false;
+            }
+        }
+
+        // Android 原生 App + Android Web 浏览器都启用限制，降低多轮改图时内存峰值。
+        const shouldLimitGeminiImageAttachments = isGeminiImageGen && (isAndroidNative || isAndroidWeb);
+        // 默认只携带最近 1 条带附件消息、且最多 1 张图。
+        // 多轮改图场景通常只需要上一轮结果；这样可显著降低 Android 内存峰值。
+        const GEMINI_IMAGE_ATTACHMENT_MESSAGE_LIMIT = 1;
+        const GEMINI_IMAGE_ATTACHMENTS_PER_MESSAGE = 1;
+
+        let geminiImageAttachmentMessageIds = null;
+        if (shouldLimitGeminiImageAttachments) {
+            geminiImageAttachmentMessageIds = new Set();
+            let picked = 0;
+            for (let i = activePath.length - 1; i >= 0; i -= 1) {
+                const item = activePath[i];
+                if (!item || item.id === excludeMessageId || item.role === 'tool') continue;
+                const atts = pickRawAttachments(item);
+                if (!atts || atts.length === 0) continue;
+
+                geminiImageAttachmentMessageIds.add(item.id);
+                picked += 1;
+                if (picked >= GEMINI_IMAGE_ATTACHMENT_MESSAGE_LIMIT) {
+                    break;
+                }
+            }
+        }
 
         for (const m of activePath) {
             if (!m || m.id === excludeMessageId) continue;
@@ -81,9 +157,17 @@
             const msg = { role: m.role, content: m.content };
 
             // 附件：从 store 的轻量引用解析为 dataUrl
-            const rawAttachments = Array.isArray(m.attachments) && m.attachments.length > 0
-                ? m.attachments
-                : (m.metadata && Array.isArray(m.metadata.attachments) ? m.metadata.attachments : null);
+            let rawAttachments = pickRawAttachments(m);
+
+            if (shouldLimitGeminiImageAttachments && rawAttachments && rawAttachments.length > 0) {
+                // 仅保留最近 N 条带附件消息的附件，降低多轮改图时的内存占用。
+                if (!geminiImageAttachmentMessageIds || !geminiImageAttachmentMessageIds.has(m.id)) {
+                    rawAttachments = null;
+                } else if (rawAttachments.length > GEMINI_IMAGE_ATTACHMENTS_PER_MESSAGE) {
+                    // 单条消息附件也限制数量，避免一次携带过多高分辨率图。
+                    rawAttachments = rawAttachments.slice(-GEMINI_IMAGE_ATTACHMENTS_PER_MESSAGE);
+                }
+            }
 
             if (rawAttachments && rawAttachments.length > 0) {
                 if (!msg.metadata) msg.metadata = {};

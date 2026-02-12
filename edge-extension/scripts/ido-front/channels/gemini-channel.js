@@ -521,6 +521,64 @@
     }
 
     /**
+     * 过滤流式 parts 中的 thought 预览图 base64，降低 Android WebView 内存峰值。
+     * - 仅在 dropThoughtImages=true 时生效
+     * - 保留 thought/text/signature 等轻量字段
+     */
+    function sanitizeStreamParts(parts, options) {
+        if (!Array.isArray(parts) || parts.length === 0) return [];
+        const opt = (options && typeof options === 'object') ? options : {};
+        if (!opt.dropThoughtImages) {
+            return parts;
+        }
+
+        const out = [];
+        for (const part of parts) {
+            if (!part || typeof part !== 'object') {
+                out.push(part);
+                continue;
+            }
+
+            const inlineData = part.inlineData || part.inline_data;
+            if (!inlineData) {
+                out.push(part);
+                continue;
+            }
+
+            const mimeType = inlineData.mimeType || inlineData.mime_type;
+            const isThought = part.thought === true;
+            const isImage = typeof mimeType === 'string' && mimeType.startsWith('image/');
+
+            if (!isThought || !isImage) {
+                out.push(part);
+                continue;
+            }
+
+            // thought 图片仅用于中间推理预览，去掉 inlineData 但保留可能有用的签名/文本占位
+            const slimPart = {};
+            if (part.thought === true) {
+                slimPart.thought = true;
+            }
+            const thoughtSig = part.thoughtSignature || part.thought_signature;
+            if (typeof part.text === 'string') {
+                slimPart.text = part.text;
+            } else if (thoughtSig) {
+                // 保留一个空 text 占位，确保后续 partsToContent 可生成签名蓝图
+                slimPart.text = '';
+            }
+            if (thoughtSig) {
+                slimPart.thoughtSignature = thoughtSig;
+            }
+
+            if (Object.keys(slimPart).length > 0) {
+                out.push(slimPart);
+            }
+        }
+
+        return out;
+    }
+
+    /**
      * 判断 finishReason 是否表示正常结束
      * @param {string} finishReason - Gemini 的结束原因
      * @returns {boolean} 是否正常结束
@@ -1207,8 +1265,13 @@
                                                 }
                                             }
 
+                                            // 过滤 thought 预览图的大 base64，避免流式阶段内存膨胀
+                                            const incomingParts = isImageGenModel
+                                                ? sanitizeStreamParts(newParts, partsToContentOpt)
+                                                : newParts;
+
                                             // Accumulate parts incrementally
-                                            accumulatedParts = accumulatedParts.concat(newParts);
+                                            accumulatedParts = accumulatedParts.concat(incomingParts);
                                             lastThoughtSignature = thoughtSignature;
 
                                             if (isImageGenModel && imageStreamHasInlineData && !lastFinishReason) {
