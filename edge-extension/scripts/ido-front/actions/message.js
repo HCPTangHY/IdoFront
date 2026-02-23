@@ -668,11 +668,20 @@
         const timestamp = new Date(now).toISOString();
         const conv = store.ensureActiveConversation();
 
+        // 分层恢复场景：发送前确保当前会话历史已加载，避免把新消息挂到“空历史”上
+        if (conv && conv.messagesLoaded === false && typeof store.ensureConversationMessagesLoaded === 'function') {
+            try {
+                await store.ensureConversationMessagesLoaded(conv.id);
+            } catch (e) {
+                console.warn('[messageActions.send] ensureConversationMessagesLoaded failed:', conv.id, e);
+            }
+        }
+
         // 1. Create User Message
         const userMessage = {
             id: utils.createId('msg_u'),
             role: 'user',
-            content: text,
+            content: text || '',
             createdAt: now,
             timestamp,
             plugin: null
@@ -705,7 +714,7 @@
         // UI Update - 传递附件信息和ID
         if (context) {
             context.addMessage('user', {
-                content: text,
+                content: userMessage.content,
                 attachments: attachments,
                 id: userMessage.id
             });
@@ -1923,32 +1932,14 @@
                 assistantMessage.stats = stats;
 
                 // 将最终附件外置化后再落盘（避免把 base64 写进 core.chat.state）
+                // 性能优化：不在热路径逐个校验 objectUrl，可读性校验改为后台兜底处理。
                 if (finalAssistantAttachments && Array.isArray(finalAssistantAttachments) && finalAssistantAttachments.length > 0) {
                     const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
                     if (attachmentsApi && typeof attachmentsApi.normalizeAttachmentsForState === 'function') {
                         try {
                             const normalized = await attachmentsApi.normalizeAttachmentsForState(finalAssistantAttachments, { source: 'assistant' });
                             if (normalized && Array.isArray(normalized.attachments) && normalized.attachments.length > 0) {
-                                // ★ 验证：确保外置化后的附件确实可读（避免“看得见但切回分支就空”）
-                                let ok = true;
-                                for (const att of normalized.attachments) {
-                                    if (!att || !att.id) {
-                                        ok = false;
-                                        break;
-                                    }
-                                    // eslint-disable-next-line no-await-in-loop
-                                    const url = await attachmentsApi.getObjectUrl(att.id);
-                                    if (!url) {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-
-                                if (ok) {
-                                    assistantMessage.attachments = normalized.attachments;
-                                } else {
-                                    throw new Error('Attachment storage verification failed');
-                                }
+                                assistantMessage.attachments = normalized.attachments.filter(att => att && att.id);
                             } else {
                                 delete assistantMessage.attachments;
                             }
@@ -1987,8 +1978,22 @@
                     }
                 }
 
-                // AI 回复完成，立即保存（关键时刻）
-                store.persistImmediately();
+                // AI 回复完成：先让出主线程，随后尽快刷盘
+                // 避免在流结束同一帧执行写盘造成 UI 卡顿
+                store.persistSilent();
+                setTimeout(() => {
+                    try {
+                        store.persistImmediately();
+                    } catch (e) {
+                        console.warn('[generateResponse] deferred persistImmediately failed:', e);
+                        // 兜底至少标记一次普通持久化
+                        try {
+                            store.persist();
+                        } catch (_) {
+                            // ignore
+                        }
+                    }
+                }, 0);
                 
                 // 流式更新完成，解析 Markdown（仅在活跃路径上时）
                 // 如果已在 tool_calls 阶段提前 finalize，则不要再对“最后一条消息”调用 finalize（会误伤后续消息）
@@ -1999,10 +2004,14 @@
                 // 触发 AI 自动生成标题
                 const titleGenerator = window.IdoFront.titleGenerator;
                 if (titleGenerator && titleGenerator.shouldGenerate && titleGenerator.shouldGenerate(conv.id)) {
-                    // 异步执行，不阻塞主流程
-                    Promise.resolve().then(() => {
-                        titleGenerator.generate(conv.id);
-                    });
+                    if (typeof titleGenerator.scheduleGenerate === 'function') {
+                        titleGenerator.scheduleGenerate(conv.id);
+                    } else {
+                        // 兼容旧实现
+                        Promise.resolve().then(() => {
+                            titleGenerator.generate(conv.id);
+                        });
+                    }
                 }
             }
 
@@ -2081,6 +2090,183 @@
     // addAssistantMessage 函数已移除，不再需要
     // 所有消息创建都在 generateResponse 开始时完成
 
+    const LOG_MAX_TEXT_LENGTH = 2000;
+    const LOG_MAX_ATTACHMENTS = 6;
+    const LOG_MAX_TOOL_CALLS = 8;
+    const LOG_MAX_GEMINI_PARTS = 8;
+    const LOG_MAX_PAYLOAD_BYTES = 64 * 1024;
+
+    function truncateForLog(value, maxLen) {
+        if (typeof value !== 'string') return value;
+        if (value.length <= maxLen) return value;
+        return `${value.slice(0, maxLen)}... [truncated ${value.length - maxLen} chars]`;
+    }
+
+    function sanitizeAttachmentForLog(att) {
+        if (!att || typeof att !== 'object') return null;
+        return {
+            id: att.id || undefined,
+            name: att.name || att.filename || undefined,
+            type: att.type || att.mimeType || undefined,
+            size: Number.isFinite(att.size) ? att.size : undefined,
+            source: att.source || undefined,
+            // 仅记录是否存在大字段，不记录原文
+            hasDataUrl: typeof att.dataUrl === 'string',
+            dataUrlLength: typeof att.dataUrl === 'string' ? att.dataUrl.length : undefined
+        };
+    }
+
+    function sanitizeGeminiPartForLog(part) {
+        if (!part || typeof part !== 'object') return null;
+
+        const sanitized = {};
+
+        if (typeof part.text === 'string') {
+            sanitized.text = truncateForLog(part.text, LOG_MAX_TEXT_LENGTH);
+        }
+
+        if (part.inlineData && typeof part.inlineData === 'object') {
+            const inlineData = part.inlineData;
+            const rawData = typeof inlineData.data === 'string' ? inlineData.data : '';
+            sanitized.inlineData = {
+                mimeType: inlineData.mimeType || undefined,
+                data: rawData ? '[BASE64_TRUNCATED]' : undefined,
+                originalLength: rawData ? rawData.length : undefined
+            };
+        }
+
+        if (part.fileData && typeof part.fileData === 'object') {
+            sanitized.fileData = {
+                mimeType: part.fileData.mimeType || undefined,
+                fileUri: part.fileData.fileUri || undefined
+            };
+        }
+
+        return Object.keys(sanitized).length > 0 ? sanitized : null;
+    }
+
+    function sanitizeMessageMetadataForLog(meta) {
+        if (!meta || typeof meta !== 'object') return undefined;
+
+        const out = {};
+
+        if (Array.isArray(meta.attachments)) {
+            out.attachments = meta.attachments
+                .slice(0, LOG_MAX_ATTACHMENTS)
+                .map(sanitizeAttachmentForLog)
+                .filter(Boolean);
+        }
+
+        if (meta.gemini && typeof meta.gemini === 'object') {
+            const geminiOut = {};
+            const geminiMeta = meta.gemini;
+
+            if (geminiMeta.thoughtSignature) {
+                geminiOut.thoughtSignature = truncateForLog(String(geminiMeta.thoughtSignature), 400);
+            }
+            if (Array.isArray(geminiMeta.parts)) {
+                geminiOut.parts = geminiMeta.parts
+                    .slice(0, LOG_MAX_GEMINI_PARTS)
+                    .map(sanitizeGeminiPartForLog)
+                    .filter(Boolean);
+            }
+
+            if (Object.keys(geminiOut).length > 0) {
+                out.gemini = geminiOut;
+            }
+        }
+
+        if (meta.urlContextMetadata && typeof meta.urlContextMetadata === 'object') {
+            out.urlContextMetadata = meta.urlContextMetadata;
+        }
+        if (Array.isArray(meta.searchQueries)) {
+            out.searchQueries = meta.searchQueries.slice(0, 10).map(q => truncateForLog(String(q), 200));
+        }
+        if (Array.isArray(meta.citations)) {
+            out.citations = meta.citations.slice(0, 20);
+        }
+        if (meta.attachmentsInlineFallback) {
+            out.attachmentsInlineFallback = true;
+        }
+        if (meta.attachmentsPersistFailed) {
+            out.attachmentsPersistFailed = true;
+        }
+
+        return Object.keys(out).length > 0 ? out : undefined;
+    }
+
+    function sanitizeToolCallForLog(tc) {
+        if (!tc || typeof tc !== 'object') return null;
+        const fn = tc.function || {};
+        let argsText = '';
+        if (typeof fn.arguments === 'string') {
+            argsText = fn.arguments;
+        } else if (tc.args) {
+            try {
+                argsText = JSON.stringify(tc.args);
+            } catch (e) {
+                argsText = '[UNSERIALIZABLE_ARGS]';
+            }
+        }
+        return {
+            id: tc.id || undefined,
+            type: tc.type || undefined,
+            function: {
+                name: fn.name || tc.name || undefined,
+                arguments: truncateForLog(argsText, 1200)
+            }
+        };
+    }
+
+    function sanitizeChoiceForLog(choice) {
+        if (!choice || typeof choice !== 'object') return null;
+
+        const out = {
+            index: Number.isFinite(choice.index) ? choice.index : undefined,
+            finish_reason: choice.finish_reason || undefined
+        };
+
+        const message = choice.message;
+        if (message && typeof message === 'object') {
+            const msgOut = {
+                role: message.role || undefined,
+                content: truncateForLog(typeof message.content === 'string' ? message.content : '', LOG_MAX_TEXT_LENGTH)
+            };
+
+            if (typeof message.reasoning_content === 'string') {
+                msgOut.reasoning_content = truncateForLog(message.reasoning_content, LOG_MAX_TEXT_LENGTH);
+            }
+
+            if (Array.isArray(message.attachments)) {
+                msgOut.attachments = message.attachments
+                    .slice(0, LOG_MAX_ATTACHMENTS)
+                    .map(sanitizeAttachmentForLog)
+                    .filter(Boolean);
+            }
+
+            if (Array.isArray(message.tool_calls)) {
+                msgOut.tool_calls = message.tool_calls
+                    .slice(0, LOG_MAX_TOOL_CALLS)
+                    .map(sanitizeToolCallForLog)
+                    .filter(Boolean);
+            }
+
+            const meta = sanitizeMessageMetadataForLog(message.metadata);
+            if (meta) {
+                msgOut.metadata = meta;
+            }
+
+            out.message = msgOut;
+        }
+
+        // 删除 undefined 字段
+        Object.keys(out).forEach((key) => {
+            if (out[key] === undefined) delete out[key];
+        });
+
+        return out;
+    }
+
     /**
      * 精简响应数据用于日志记录，去除大型 base64 数据
      * @param {Object} response - 原始响应
@@ -2088,51 +2274,75 @@
      */
     function sanitizeResponseForLog(response) {
         if (!response || typeof response !== 'object') return response;
-        
+
         try {
-            // 深拷贝以避免修改原始数据
-            const sanitized = JSON.parse(JSON.stringify(response));
-            
-            // 处理 choices 中的 metadata
-            if (sanitized.choices && Array.isArray(sanitized.choices)) {
-                sanitized.choices.forEach(choice => {
-                    if (choice.message && choice.message.metadata) {
-                        const meta = choice.message.metadata;
-                        
-                        // 处理 Gemini 的 parts（可能包含 inlineData）
-                        if (meta.gemini && Array.isArray(meta.gemini.parts)) {
-                            meta.gemini.parts = meta.gemini.parts.map(part => {
-                                if (part.inlineData && part.inlineData.data) {
-                                    return {
-                                        inlineData: {
-                                            mimeType: part.inlineData.mimeType,
-                                            data: '[BASE64_TRUNCATED]',
-                                            originalLength: part.inlineData.data.length
-                                        }
-                                    };
-                                }
-                                return part;
-                            });
-                        }
-                        
-                        // 处理 attachments 中的 dataUrl
-                        if (Array.isArray(meta.attachments)) {
-                            meta.attachments = meta.attachments.map(att => ({
-                                name: att.name,
-                                type: att.type,
-                                size: att.size,
-                                source: att.source,
-                                dataUrl: att.dataUrl ? '[DATA_URL_TRUNCATED]' : undefined
-                            }));
-                        }
-                    }
-                });
+            const sanitized = {
+                id: response.id || undefined,
+                object: response.object || undefined,
+                created: response.created || undefined,
+                model: response.model || undefined,
+                provider: response.provider || undefined
+            };
+
+            if (response.usage && typeof response.usage === 'object') {
+                sanitized.usage = {
+                    prompt_tokens: response.usage.prompt_tokens,
+                    completion_tokens: response.usage.completion_tokens,
+                    total_tokens: response.usage.total_tokens
+                };
             }
-            
+
+            if (Array.isArray(response.choices)) {
+                sanitized.choices = response.choices
+                    .slice(0, 4)
+                    .map(sanitizeChoiceForLog)
+                    .filter(Boolean);
+            }
+
+            if (response.error) {
+                sanitized.error = {
+                    code: response.error.code,
+                    message: truncateForLog(String(response.error.message || ''), 500)
+                };
+            }
+
+            if (response.timing && typeof response.timing === 'object') {
+                sanitized.timing = response.timing;
+            }
+
+            Object.keys(sanitized).forEach((key) => {
+                if (sanitized[key] === undefined) delete sanitized[key];
+            });
+
+            const serialized = JSON.stringify(sanitized);
+            if (serialized.length > LOG_MAX_PAYLOAD_BYTES) {
+                const fallbackChoice = Array.isArray(sanitized.choices) && sanitized.choices[0]
+                    ? sanitized.choices[0]
+                    : null;
+                const fallbackMessage = fallbackChoice && fallbackChoice.message
+                    ? {
+                        role: fallbackChoice.message.role || undefined,
+                        content: truncateForLog(String(fallbackChoice.message.content || ''), 400)
+                    }
+                    : undefined;
+                return {
+                    id: sanitized.id,
+                    model: sanitized.model,
+                    usage: sanitized.usage,
+                    truncated: true,
+                    originalLength: serialized.length,
+                    choice: fallbackMessage ? { message: fallbackMessage } : undefined
+                };
+            }
+
             return sanitized;
         } catch (e) {
             console.warn('Failed to sanitize response for log:', e);
-            return response;
+            return {
+                id: response.id || undefined,
+                model: response.model || undefined,
+                error: 'sanitize_failed'
+            };
         }
     }
 

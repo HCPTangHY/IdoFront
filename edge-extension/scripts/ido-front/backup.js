@@ -253,6 +253,26 @@
         return ids;
     }
 
+    async function ensureConversationsHydrated(store) {
+        if (!store || !store.state || !Array.isArray(store.state.conversations)) return;
+
+        const hasUnloaded = store.state.conversations.some(conv => conv && conv.messagesLoaded === false);
+        if (!hasUnloaded) return;
+
+        if (typeof store._hydrateRemainingConversations === 'function') {
+            await store._hydrateRemainingConversations();
+            return;
+        }
+
+        if (typeof store.ensureConversationMessagesLoaded === 'function') {
+            for (const conv of store.state.conversations) {
+                if (!conv || !conv.id) continue;
+                // eslint-disable-next-line no-await-in-loop
+                await store.ensureConversationMessagesLoaded(conv.id);
+            }
+        }
+    }
+
     /**
      * 导出所有数据（完整备份）
      * 包含：对话、面具、渠道设置、插件状态、所有附件
@@ -273,6 +293,9 @@
         if (!store || !store.state) {
             throw new Error('Store 未初始化');
         }
+
+        // 分层恢复场景下，导出前确保所有会话消息已加载，避免导出不完整
+        await ensureConversationsHydrated(store);
 
         // 1. 构建基础备份数据
         const sanitizedConversations = Array.isArray(store.state.conversations)
@@ -499,6 +522,9 @@
             throw new Error('Store 未初始化');
         }
 
+        // 导出前确保会话消息已加载
+        await ensureConversationsHydrated(store);
+
         const targetId = convId || store.state.activeConversationId;
         const conv = store.state.conversations.find(c => c.id === targetId);
         if (!conv) {
@@ -604,6 +630,9 @@
         if (!store || !store.state) {
             throw new Error('Store 未初始化');
         }
+
+        // 导出前确保会话消息已加载
+        await ensureConversationsHydrated(store);
 
         const targetId = convId || store.state.activeConversationId;
         const conv = store.state.conversations.find(c => c.id === targetId);
@@ -746,7 +775,14 @@
             personaCount: store.state.personas?.length || 0,
             channelCount: store.state.channels?.length || 0,
             attachmentCount: attachmentIds.size,
-            messageCount: store.state.conversations?.reduce((sum, c) => sum + (c.messages?.length || 0), 0) || 0
+            messageCount: store.state.conversations?.reduce((sum, c) => {
+                if (!c) return sum;
+                if (Number.isFinite(c.messageCount)) {
+                    return sum + c.messageCount;
+                }
+                return sum + (Array.isArray(c.messages) ? c.messages.length : 0);
+            }, 0) || 0,
+            hasUnloadedConversations: store.state.conversations?.some(c => c && c.messagesLoaded === false) || false
         };
     }
 

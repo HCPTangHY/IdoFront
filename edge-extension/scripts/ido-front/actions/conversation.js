@@ -121,7 +121,7 @@
     /**
      * 选择对话
      */
-    window.IdoFront.conversationActions.select = function(id) {
+    window.IdoFront.conversationActions.select = async function(id) {
         const target = store.state.conversations.find(c => c.id === id);
         if (!target) return;
 
@@ -174,6 +174,15 @@
             }
         }
         
+        // 分层恢复：切换到未加载消息的会话时，先按需加载，避免渲染空白会话
+        if (typeof store.ensureConversationMessagesLoaded === 'function') {
+            try {
+                await store.ensureConversationMessagesLoaded(id);
+            } catch (e) {
+                console.warn('[Conversation] Failed to ensure conversation messages loaded:', id, e);
+            }
+        }
+
         // 【修复】切换对话是用户的明确操作，使用立即持久化防止关闭扩展窗口时状态丢失
         // persistImmediately 不会广播 updated 事件，符合避免不必要渲染的初衷
         store.persistImmediately();
@@ -256,6 +265,28 @@
         
         const active = store.getActiveConversation();
         if (active) {
+            if (active.messagesLoaded === false && typeof store.ensureConversationMessagesLoaded === 'function') {
+                if (context.clearMessages) context.clearMessages();
+                if (context.setSendButtonLoading) {
+                    context.setSendButtonLoading(false);
+                }
+
+                store.ensureConversationMessagesLoaded(active.id)
+                    .then(() => {
+                        syncUI(options);
+                    })
+                    .catch((e) => {
+                        console.warn('[Conversation] syncUI lazy-load failed:', e);
+                        // 避免无限重试循环：加载失败时降级为空会话展示
+                        active.messagesLoaded = true;
+                        if (!Array.isArray(active.messages)) active.messages = [];
+                        active.messageCount = 0;
+                        syncUI(options);
+                    });
+
+                return;
+            }
+
             const chatStream = document.getElementById('chat-stream');
             if (!chatStream) return;
             
@@ -685,6 +716,17 @@
             });
         
         const activeId = store.state.activeConversationId;
+
+        const vList = window.IdoFront && window.IdoFront.virtualList;
+        if (vList && typeof vList.diffUpdateConversationList === 'function') {
+            try {
+                vList.diffUpdateConversationList(personaConvs, listContainer, createConversationItem, activeId);
+                return;
+            } catch (e) {
+                console.warn('[Conversation] diffUpdateConversationList failed, fallback to full render:', e);
+            }
+        }
+
         renderConversationListFull(listContainer, personaConvs, activeId);
     }
 

@@ -616,6 +616,32 @@
             conversationSignatureCache.clear();
         }
 
+        async #loadConversationMessagesFromStore(conversationId) {
+            if (!conversationId) return [];
+
+            const transaction = this.db.transaction([MESSAGES_STORE], 'readonly');
+            const msgStore = transaction.objectStore(MESSAGES_STORE);
+
+            let request = null;
+            if (msgStore.indexNames && msgStore.indexNames.contains('by_conversation')) {
+                const index = msgStore.index('by_conversation');
+                request = index.getAll(conversationId);
+            } else {
+                request = msgStore.getAll();
+            }
+
+            const messages = (await this.#requestToPromise(request) || [])
+                .filter(msg => msg && msg.conversationId === conversationId);
+
+            messages.sort((a, b) => {
+                const ta = toTimestamp(a && a.createdAt);
+                const tb = toTimestamp(b && b.createdAt);
+                return ta - tb;
+            });
+
+            return messages;
+        }
+
         async #saveNormalizedState(state, options = {}) {
             const source = state && typeof state === 'object' ? state : {};
             const forceFull = !!options.forceFull;
@@ -665,12 +691,14 @@
                     convRecord.id = convId;
                     convRecord.__order = convOrder;
                     delete convRecord.messages;
+                    delete convRecord.messagesLoaded;
                     convStore.put(convRecord);
                 }
 
                 const prevMsgIds = this._conversationMessageIds.get(convId) || new Set();
-                const nextMsgIds = new Set();
-                const messages = Array.isArray(conv.messages) ? conv.messages : [];
+                const skipMessageSync = conv.messagesLoaded === false;
+                const nextMsgIds = skipMessageSync ? new Set(prevMsgIds) : new Set();
+                const messages = skipMessageSync ? [] : (Array.isArray(conv.messages) ? conv.messages : []);
 
                 messages.forEach(msg => {
                     if (!msg || !msg.id) return;
@@ -689,11 +717,13 @@
                     }
                 });
 
-                prevMsgIds.forEach(msgId => {
-                    if (!nextMsgIds.has(msgId)) {
-                        msgStore.delete([convId, msgId]);
-                    }
-                });
+                if (!skipMessageSync) {
+                    prevMsgIds.forEach(msgId => {
+                        if (!nextMsgIds.has(msgId)) {
+                            msgStore.delete([convId, msgId]);
+                        }
+                    });
+                }
 
                 nextConversationMessageIds.set(convId, nextMsgIds);
             });
@@ -785,8 +815,12 @@
 
             const conversations = (convRows || []).map(conv => ({
                 ...conv,
-                messages: messagesByConversation.get(conv.id) || []
+                messages: messagesByConversation.get(conv.id) || [],
+                messagesLoaded: true,
+                messageCount: (messagesByConversation.get(conv.id) || []).length
             }));
+
+
 
             conversations.sort((a, b) => {
                 const ao = Number.isFinite(a && a.__order) ? a.__order : Number.MAX_SAFE_INTEGER;
@@ -899,6 +933,128 @@
                 console.error('IndexedDB 加载错误:', error);
                 return null;
             }
+        }
+
+        /**
+         * 启动分层加载：仅加载元数据 + 会话概要 + 当前活跃会话消息
+         * 用于多会话场景缩短冷启动可交互时间
+         */
+        async loadBootState() {
+            try {
+                await this.init();
+
+                if (!this.#hasNormalizedStores()) {
+                    return await this.load();
+                }
+
+                const transaction = this.db.transaction([META_STORE, CONVERSATIONS_STORE, MESSAGES_STORE], 'readonly');
+                const metaStore = transaction.objectStore(META_STORE);
+                const convStore = transaction.objectStore(CONVERSATIONS_STORE);
+                const msgStore = transaction.objectStore(MESSAGES_STORE);
+
+                const [metaRows, convRows, msgCount] = await Promise.all([
+                    this.#requestToPromise(metaStore.getAll()),
+                    this.#requestToPromise(convStore.getAll()),
+                    this.#requestToPromise(msgStore.count())
+                ]);
+
+                const metaMap = new Map();
+                (metaRows || []).forEach(row => {
+                    if (row && typeof row.key === 'string') {
+                        metaMap.set(row.key, row.value);
+                    }
+                });
+
+                const appMeta = metaMap.get(APP_META_KEY) || null;
+                const hasNormalizedMarker = !!(appMeta && appMeta._normalizedMagic === NORMALIZED_MAGIC);
+                const hasAnyData = (convRows && convRows.length > 0) || (msgCount && msgCount > 0) || hasNormalizedMarker;
+                if (!hasAnyData) return null;
+
+                const orderedConversations = (convRows || []).slice().sort((a, b) => {
+                    const ao = Number.isFinite(a && a.__order) ? a.__order : Number.MAX_SAFE_INTEGER;
+                    const bo = Number.isFinite(b && b.__order) ? b.__order : Number.MAX_SAFE_INTEGER;
+                    if (ao !== bo) return ao - bo;
+                    const au = toTimestamp(a && a.updatedAt);
+                    const bu = toTimestamp(b && b.updatedAt);
+                    return bu - au;
+                });
+
+                let activeConversationId = appMeta && appMeta.activeConversationId ? appMeta.activeConversationId : null;
+                if (activeConversationId && !orderedConversations.some(conv => conv && conv.id === activeConversationId)) {
+                    activeConversationId = null;
+                }
+                if (!activeConversationId && orderedConversations.length > 0) {
+                    activeConversationId = orderedConversations[0].id;
+                }
+
+                const conversations = orderedConversations.map(conv => {
+                    const record = { ...conv };
+                    if (Object.prototype.hasOwnProperty.call(record, '__order')) {
+                        delete record.__order;
+                    }
+                    record.messages = [];
+                    record.messagesLoaded = false;
+                    if (!Number.isFinite(record.messageCount)) {
+                        record.messageCount = null;
+                    }
+                    return record;
+                });
+
+                if (activeConversationId) {
+                    const activeMessages = await this.#loadConversationMessagesFromStore(activeConversationId);
+                    const activeConv = conversations.find(conv => conv && conv.id === activeConversationId);
+                    if (activeConv) {
+                        activeConv.messages = activeMessages;
+                        activeConv.messagesLoaded = true;
+                        activeConv.messageCount = activeMessages.length;
+                    }
+                }
+
+                const state = {
+                    personas: Array.isArray(metaMap.get(PERSONAS_KEY)) ? metaMap.get(PERSONAS_KEY) : [],
+                    activePersonaId: appMeta && appMeta.activePersonaId ? appMeta.activePersonaId : null,
+                    personaLastActiveConversationIdMap: (appMeta && appMeta.personaLastActiveConversationIdMap && typeof appMeta.personaLastActiveConversationIdMap === 'object')
+                        ? appMeta.personaLastActiveConversationIdMap
+                        : {},
+                    conversations,
+                    activeConversationId,
+                    logs: sanitizeLogs(metaMap.get(LOGS_KEY)),
+                    channels: Array.isArray(metaMap.get(CHANNELS_KEY)) ? metaMap.get(CHANNELS_KEY) : [],
+                    pluginStates: metaMap.get(PLUGIN_STATES_KEY) && typeof metaMap.get(PLUGIN_STATES_KEY) === 'object' ? metaMap.get(PLUGIN_STATES_KEY) : {},
+                    settings: metaMap.get(SETTINGS_KEY) && typeof metaMap.get(SETTINGS_KEY) === 'object' ? metaMap.get(SETTINGS_KEY) : {},
+                    __partialState: true
+                };
+
+                this._persistedConversationIds.clear();
+                this._conversationMessageIds.clear();
+                this._conversationOrderCache.clear();
+                messageSignatureCache.clear();
+                conversationSignatureCache.clear();
+                this._metaSerializedCache.clear();
+
+                return state;
+            } catch (error) {
+                console.warn('[idb-storage] loadBootState failed, fallback to full load:', error);
+                return await this.load();
+            }
+        }
+
+        /**
+         * 按会话加载完整消息（供分层恢复后的按需读取）
+         */
+        async loadConversationMessages(conversationId) {
+            if (!conversationId) return [];
+            await this.init();
+
+            if (this.#hasNormalizedStores()) {
+                return await this.#loadConversationMessagesFromStore(conversationId);
+            }
+
+            const legacy = await this.#loadLegacyState();
+            const conv = legacy && Array.isArray(legacy.conversations)
+                ? legacy.conversations.find(c => c && c.id === conversationId)
+                : null;
+            return conv && Array.isArray(conv.messages) ? conv.messages : [];
         }
 
         /**

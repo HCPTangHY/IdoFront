@@ -34,8 +34,9 @@
         { value: 32768, label: '高', description: '32768 tokens' }
     ];
 
-    // thinkingLevel 选项（用于等级模式）- 四档：minimal/low/medium/high
+    // thinkingLevel 选项（用于等级模式）- 自动(-1) + 四档：minimal/low/medium/high
     const LEVEL_OPTIONS = [
+        { value: -1, label: '自动', description: '自动思考，不显式设置 thinkingLevel', color: '#94a3b8', bars: 0, icon: 'magic_button' },
         { value: 'minimal', label: '最小', description: '基础响应，不进行额外思考', color: '#94a3b8', bars: 1 },
         { value: 'low', label: '低', description: '轻度思考，平衡速度与质量', color: '#60a5fa', bars: 2 },
         { value: 'medium', label: '中', description: '适中思考，处理复杂逻辑', color: '#3b82f6', bars: 3 },
@@ -191,12 +192,27 @@
      * @returns {Object} 思考配置
      */
     function getThinkingConfig(conv) {
-        if (!conv) return { budget: -1, level: 'low' };
+        if (!conv) return { budget: -1, level: -1 };
         const geminiMeta = conv.metadata?.gemini || {};
+        const rawLevel = geminiMeta.thinkingLevel;
+        const level = (rawLevel === undefined || rawLevel === null || rawLevel === '' || rawLevel === '-1')
+            ? -1
+            : (typeof rawLevel === 'string' ? rawLevel.toLowerCase() : rawLevel);
         return {
             budget: geminiMeta.thinkingBudget !== undefined ? geminiMeta.thinkingBudget : -1,
-            level: geminiMeta.thinkingLevel || 'low'
+            level: level
         };
+    }
+
+    /**
+     * 规范化 thinkingLevel 值
+     * -1 表示自动/不显式设置
+     */
+    function normalizeThinkingLevel(level) {
+        if (level === -1 || level === '-1') return -1;
+        if (typeof level !== 'string') return -1;
+        const normalized = level.trim().toLowerCase();
+        return ['minimal', 'low', 'medium', 'high'].includes(normalized) ? normalized : -1;
     }
 
     // 思考设置器
@@ -978,26 +994,31 @@
             partsToContentOpt.inlineDataSource = isImageGenModel ? 'gemini-imagegen' : 'gemini-inlineData';
 
             // 说明：
-            // - 文本模型：thinking 由 thinkingBudget/thinkingLevel 控制
-            // - 图片模型：多数后端不允许设置 thinkingConfig（包括 thinkingBudget）。
-            //   因此这里仅提供一个开关：允许用户“尝试 includeThoughts（拿 thoughtSignature）”。
-            //   若后端不支持，将直接报错，由用户手动关闭开关后重试。
+            // - 文本模型与图片模型共用 budget/level 规则判断
+            // - budget=-1(自动) 不显式下发 thinkingBudget
+            // - level=-1(自动) 不显式下发 thinkingLevel
+            const isBudgetModel = useBudgetMode(model, config);
+            const isLevelModel = !isBudgetModel && useLevelMode(model, config);
 
-            const isBudgetModel = (!isImageGenModel && useBudgetMode(model, config));
-            const isLevelModel = (!isImageGenModel && useLevelMode(model, config));
+            const thinkingCfg = getThinkingConfig(activeConv);
 
             // 生图：是否尝试 includeThoughts（用于 thoughtSignature）- 默认开启
             const imageForceThinking = isImageGenModel && (geminiMeta.imageForceThinking !== false);
 
-            // 预算模型：budget>0 视为启用 thinking；-1(自动)/0(关闭) 则不启用。
+            // 预算模型：budget>0 视为启用 thinking；-1(自动)/0(关闭) 不启用
             const budget = isBudgetModel
-                ? ((geminiMeta.thinkingBudget !== undefined) ? geminiMeta.thinkingBudget : -1)
+                ? thinkingCfg.budget
                 : -1;
 
-            const wantsThinking = (
-                (isBudgetModel && typeof budget === 'number' && budget > 0) ||
-                (isLevelModel === true)
-            );
+            // 等级模型：level=-1(自动) 不启用
+            const level = isLevelModel
+                ? normalizeThinkingLevel(thinkingCfg.level)
+                : -1;
+
+            const hasBudgetThinking = isBudgetModel && typeof budget === 'number' && budget > 0;
+            const hasLevelThinking = isLevelModel && level !== -1;
+
+            const wantsThinking = hasBudgetThinking || hasLevelThinking;
 
             // includeThoughts：
             // - 文本模型：启用 thinking 时默认尝试
@@ -1038,23 +1059,16 @@
             // - thinking 可以开（预算/等级）
             // - includeThoughts 只有在历史可回放时才开（避免 400）
 
-            if (wantsThinking) {
-                if (isBudgetModel && typeof budget === 'number' && budget > 0) {
-                    thinkingConfig.thinkingBudget = budget;
-                } else if (isLevelModel) {
-                    const level = geminiMeta.thinkingLevel || 'low';
-                    thinkingConfig.thinkingLevel = level;
-                }
+            if (hasBudgetThinking) {
+                thinkingConfig.thinkingBudget = budget;
             }
 
-            // 图片模型：开启 includeThoughts 时，同时带上 thinkingBudget=-1（自动）。
-            // Vertex 要求：includeThoughts 只有在 thinking 启用时才允许。
+            if (hasLevelThinking) {
+                thinkingConfig.thinkingLevel = level;
+            }
+
             if (enableIncludeThoughts) {
                 thinkingConfig.includeThoughts = true;
-                // 如果还没设置 thinkingBudget/thinkingLevel，补一个 -1（自动）让 Vertex 认为 thinking 已启用
-                if (!thinkingConfig.thinkingBudget && !thinkingConfig.thinkingLevel) {
-                    thinkingConfig.thinkingBudget = -1;
-                }
             }
 
             // 将 thinkingConfig 合并到 generationConfig
@@ -1683,7 +1697,7 @@
                     LEVEL_OPTIONS.forEach(opt => {
                         body.appendChild(cardItem({
                             active: opt.value === thinkingCfg.level,
-                            visual: { bars: opt.bars },
+                            visual: opt.icon ? { icon: opt.icon } : { bars: opt.bars },
                             label: opt.label,
                             description: opt.description,
                             onClick: () => {
@@ -1768,8 +1782,8 @@
                     const preset = BUDGET_PRESETS.find(p => p.value === thinkingCfg.budget);
                     budgetBtnEl.textContent = preset?.label || `${thinkingCfg.budget}`;
                 } else {
-                    const opt = LEVEL_OPTIONS.find(o => o.value === thinkingCfg.level) || LEVEL_OPTIONS[1];
-                    budgetBtnEl.textContent = opt.label;
+                    const opt = LEVEL_OPTIONS.find(o => o.value === thinkingCfg.level) || LEVEL_OPTIONS.find(o => o.value === -1);
+                    budgetBtnEl.textContent = opt?.label || '自动';
                 }
             }
         }

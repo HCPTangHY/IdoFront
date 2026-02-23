@@ -29,6 +29,12 @@
         _activePathCache: {},
         // resume 信息（localStorage）去重缓存
         _resumeLastSerialized: null,
+        // 启动分层恢复：未完成全量消息水合前，禁止写回不完整 state
+        _bootHydrationPromise: null,
+        _bootHydrationDone: true,
+        _deferredPersistAfterHydrationScheduled: false,
+        _conversationLoadPromises: new Map(),
+        _usedBootSnapshot: false,
         
         state: {
             personas: [], // 面具列表
@@ -52,6 +58,7 @@
         // 统一状态源事件总线：所有对外的状态变更都通过 Store 自己发出
         events: {
             listeners: {},
+            _coalesced: {},
             on(event, callback) {
                 if (!this.listeners[event]) this.listeners[event] = [];
                 this.listeners[event].push(callback);
@@ -86,6 +93,32 @@
                         }
                     });
                 }
+            },
+            /**
+             * 合并同一帧内重复事件（默认用于 updated），避免高频写状态造成事件风暴
+             */
+            emitCoalesced(event, payload) {
+                if (!this.listeners[event] || this.listeners[event].length === 0) return;
+                if (!this._coalesced[event]) {
+                    this._coalesced[event] = { scheduled: false, payload: undefined };
+                }
+                const bucket = this._coalesced[event];
+                bucket.payload = payload;
+                if (bucket.scheduled) return;
+                bucket.scheduled = true;
+
+                const flush = () => {
+                    bucket.scheduled = false;
+                    const latestPayload = bucket.payload;
+                    bucket.payload = undefined;
+                    if (typeof this.emitAsync === 'function') {
+                        this.emitAsync(event, latestPayload);
+                    } else {
+                        this.emit(event, latestPayload);
+                    }
+                };
+
+                (window.requestAnimationFrame || ((cb) => setTimeout(cb, 16)))(flush);
             }
         },
 
@@ -158,6 +191,21 @@
             if (!attachmentsApi || typeof attachmentsApi.gc !== 'function') {
                 return;
             }
+
+            // 启动分层恢复期间，尚有会话消息未加载，直接 GC 会误判为“未引用”并错误删除附件。
+            if (this._isBootHydrating()) {
+                try {
+                    await this._bootHydrationPromise;
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            if (this.state.conversations.some(conv => conv && conv.messagesLoaded === false)) {
+                console.warn('[store] 跳过附件 GC：仍有未加载会话，避免误删附件');
+                return;
+            }
+
 
             try {
                 // 1. 遍历所有对话和消息，收集活跃的附件 ID
@@ -366,6 +414,20 @@
                 return;
             }
 
+            // 启动分层恢复期间，先等待全量消息水合，避免遗漏未加载会话中的附件迁移
+            if (this._isBootHydrating()) {
+                try {
+                    await this._bootHydrationPromise;
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            if (this.state.conversations.some(conv => conv && conv.messagesLoaded === false)) {
+                console.warn('[store] 跳过附件迁移：仍有未加载会话，等待后续时机');
+                return;
+            }
+
             if (!Array.isArray(this.state.conversations) || this.state.conversations.length === 0) {
                 return;
             }
@@ -481,14 +543,15 @@
          * 构建持久化快照（内部方法，避免重复代码）
          */
         _buildSnapshot() {
-            const MAX_LOGS = 200;
             return {
                 personas: this.state.personas,
                 activePersonaId: this.state.activePersonaId,
                 personaLastActiveConversationIdMap: this.state.personaLastActiveConversationIdMap,
                 conversations: this.state.conversations,
                 activeConversationId: this.state.activeConversationId,
-                logs: Array.isArray(this.state.logs) ? this.state.logs.slice(0, MAX_LOGS) : [],
+                // 性能优化：运行日志仅保留内存态，不再进入主状态快照，避免放大写盘与冷启动负担
+                // 兼容考虑：字段仍保留为空数组，避免旧读取逻辑出现类型分支
+                logs: [],
                 channels: this.state.channels,
                 pluginStates: this.state.pluginStates,
                 settings: this.state.settings
@@ -526,6 +589,105 @@
             } catch (e) {
                 return null;
             }
+        },
+
+        _isBootHydrating() {
+            return !!this._bootHydrationPromise && !this._bootHydrationDone;
+        },
+
+        _schedulePersistAfterHydration() {
+            if (!this._isBootHydrating()) return;
+            if (this._deferredPersistAfterHydrationScheduled) return;
+
+            this._deferredPersistAfterHydrationScheduled = true;
+            this._bootHydrationPromise
+                .catch(() => {
+                    // ignore
+                })
+                .finally(() => {
+                    this._deferredPersistAfterHydrationScheduled = false;
+                    if (!this._hasPendingWrite) return;
+
+                    const snapshot = this._pendingSnapshot || this._buildSnapshot();
+                    this._pendingSnapshot = null;
+                    this._hasPendingWrite = false;
+
+                    this._doSaveToIDB(snapshot).catch((e) => {
+                        console.warn('启动水合后补写状态失败:', e);
+                    });
+                });
+        },
+
+        async ensureConversationMessagesLoaded(convId) {
+            if (!convId) return [];
+
+            const conv = this.state.conversations.find(c => c && c.id === convId);
+            if (!conv) return [];
+            if (conv.messagesLoaded !== false) {
+                if (!Array.isArray(conv.messages)) conv.messages = [];
+                return conv.messages;
+            }
+
+            if (this._conversationLoadPromises.has(convId)) {
+                return this._conversationLoadPromises.get(convId);
+            }
+
+            const loader = (async () => {
+                try {
+                    const idb = window.IdoFront && window.IdoFront.idbStorage;
+                    if (idb && typeof idb.loadConversationMessages === 'function') {
+                        const messages = await idb.loadConversationMessages(convId);
+                        conv.messages = Array.isArray(messages) ? messages : [];
+                    } else if (!Array.isArray(conv.messages)) {
+                        conv.messages = [];
+                    }
+
+                    conv.messagesLoaded = true;
+                    conv.messageCount = conv.messages.length;
+                    this._invalidateActivePathCache(convId);
+                    return conv.messages;
+                } catch (e) {
+                    console.warn('[store] 按需加载会话消息失败:', convId, e);
+                    if (!Array.isArray(conv.messages)) conv.messages = [];
+                    conv.messagesLoaded = false;
+                    return conv.messages;
+                } finally {
+                    this._conversationLoadPromises.delete(convId);
+                }
+            })();
+
+            this._conversationLoadPromises.set(convId, loader);
+            return loader;
+        },
+
+        async _hydrateRemainingConversations() {
+            if (this._bootHydrationPromise) return this._bootHydrationPromise;
+
+            this._bootHydrationDone = false;
+            this._bootHydrationPromise = (async () => {
+                try {
+                    const unloaded = this.state.conversations
+                        .filter(conv => conv && conv.messagesLoaded === false)
+                        .map(conv => conv.id);
+
+                    for (const convId of unloaded) {
+                        // eslint-disable-next-line no-await-in-loop
+                        await this.ensureConversationMessagesLoaded(convId);
+
+                        // 让出主线程，避免连续批量加载阻塞 UI
+                        // eslint-disable-next-line no-await-in-loop
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                    }
+                } finally {
+                    this._bootHydrationDone = true;
+                }
+            })();
+
+            this._bootHydrationPromise.finally(() => {
+                this._bootHydrationPromise = null;
+            });
+
+            return this._bootHydrationPromise;
         },
 
         _applyResumeSnapshot(resume) {
@@ -613,6 +775,11 @@
             this._persistResume();
             // 触发 30 秒后台保存
             this.persistInBackground();
+            if (this._isBootHydrating()) {
+                // 启动分层恢复期间，待水合完成后尽快补写
+                this._schedulePersistAfterHydration();
+            }
+
             // 不触发事件
         },
 
@@ -623,13 +790,18 @@
             this._persistResume();
             // 触发 30 秒后台保存
             this.persistInBackground();
+            if (this._isBootHydrating()) {
+                // 启动分层恢复期间，待水合完成后尽快补写
+                this._schedulePersistAfterHydration();
+            }
+
 
             // 通知所有订阅者：状态已更新（单一数据源）
             if (this.events) {
-                if (typeof this.events.emitAsync === 'function') {
+                if (typeof this.events.emitCoalesced === 'function') {
+                    this.events.emitCoalesced('updated', this.state);
+                } else if (typeof this.events.emitAsync === 'function') {
                     this.events.emitAsync('updated', this.state);
-                } else if (typeof this.events.emit === 'function') {
-                    this.events.emit('updated', this.state);
                 }
             }
         },
@@ -644,9 +816,18 @@
                 this._persistTimer = null;
             }
             const snapshot = this._pendingSnapshot || this._buildSnapshot();
+            this._pendingSnapshot = snapshot;
+            this._hasPendingWrite = true;
+            this._persistResume();
+
+            if (this._isBootHydrating()) {
+                // 启动分层恢复期间，暂不写入不完整状态；待水合完成后补写
+                this._schedulePersistAfterHydration();
+                return;
+            }
+
             this._pendingSnapshot = null;
             this._hasPendingWrite = false;
-            this._persistResume();
 
             // 直接写入 IndexedDB（关键时刻必须保存）
             this._doSaveToIDB(snapshot).catch(e => {
@@ -664,6 +845,11 @@
             this._backgroundSaveTimer = setTimeout(() => {
                 this._backgroundSaveTimer = null;
                 if (this._hasPendingWrite) {
+                    if (this._isBootHydrating()) {
+                        this._schedulePersistAfterHydration();
+                        return;
+                    }
+
                     const snapshot = this._pendingSnapshot || this._buildSnapshot();
                     this._pendingSnapshot = null;
                     this._hasPendingWrite = false;
@@ -677,6 +863,10 @@
         async restore() {
             try {
                 let snapshot = null;
+                this._usedBootSnapshot = false;
+                this._bootHydrationPromise = null;
+                this._bootHydrationDone = true;
+                this._deferredPersistAfterHydrationScheduled = false;
 
                 async function loadFromChromeStorage(key) {
                     try {
@@ -695,7 +885,13 @@
                 // 1) 优先从 IndexedDB 加载
                 if (window.IdoFront.idbStorage) {
                     try {
-                        snapshot = await window.IdoFront.idbStorage.load();
+                        if (typeof window.IdoFront.idbStorage.loadBootState === 'function') {
+                            snapshot = await window.IdoFront.idbStorage.loadBootState();
+                            this._usedBootSnapshot = !!(snapshot && snapshot.__partialState);
+                        } else {
+                            snapshot = await window.IdoFront.idbStorage.load();
+                            this._usedBootSnapshot = false;
+                        }
                     } catch (error) {
                         console.warn('IndexedDB 加载失败，尝试 chrome.storage/localStorage:', error);
                     }
@@ -719,7 +915,21 @@
                 
                 if (snapshot) {
                     if (Array.isArray(snapshot.conversations)) {
-                        this.state.conversations = snapshot.conversations;
+                        this.state.conversations = snapshot.conversations
+                            .filter(conv => conv && typeof conv === 'object')
+                            .map(conv => {
+                                const normalized = { ...conv };
+                                if (!Array.isArray(normalized.messages)) {
+                                    normalized.messages = [];
+                                }
+                                if (typeof normalized.messagesLoaded !== 'boolean') {
+                                    normalized.messagesLoaded = true;
+                                }
+                                if (!Number.isFinite(normalized.messageCount)) {
+                                    normalized.messageCount = normalized.messages.length;
+                                }
+                                return normalized;
+                            });
                     }
                     if (Array.isArray(snapshot.personas)) {
                         this.state.personas = snapshot.personas;
@@ -728,9 +938,12 @@
                     if (snapshot.personaLastActiveConversationIdMap && typeof snapshot.personaLastActiveConversationIdMap === 'object') {
                         this.state.personaLastActiveConversationIdMap = snapshot.personaLastActiveConversationIdMap;
                     }
+
+                    // 若使用了分层启动快照，activeConversationId 先按快照恢复。
+                    // 后续 resume 可能覆盖为另一个会话（那时将按需加载其消息）。
                     this.state.activeConversationId = snapshot.activeConversationId || null;
                     if (Array.isArray(snapshot.logs)) {
-                        this.state.logs = snapshot.logs;
+                        this.state.logs = snapshot.logs.slice(0, 200);
                     }
                     if (Array.isArray(snapshot.channels)) {
                         this.state.channels = snapshot.channels;
@@ -747,6 +960,27 @@
                 const resume = this._loadResumeSnapshot();
                 if (resume) {
                     this._applyResumeSnapshot(resume);
+
+                    // resume 可能把 activeConversation 切到另一个尚未加载消息的会话，按需加载当前活跃会话
+                    if (this._usedBootSnapshot && this.state.activeConversationId) {
+                        try {
+                            await this.ensureConversationMessagesLoaded(this.state.activeConversationId);
+                        } catch (e) {
+                            console.warn('[store] 恢复活跃会话消息失败:', e);
+                        }
+                    }
+                }
+
+                const hasUnloadedConversations = this.state.conversations.some(conv => conv && conv.messagesLoaded === false);
+                if (this._usedBootSnapshot && hasUnloadedConversations) {
+                    this._bootHydrationDone = false;
+                    this._hydrateRemainingConversations().catch((e) => {
+                        console.warn('[store] 启动后台消息水合失败:', e);
+                    });
+                } else {
+                    this._bootHydrationDone = true;
+                    this._bootHydrationPromise = null;
+                    this._deferredPersistAfterHydrationScheduled = false;
                 }
             } catch (e) {
                 console.error('Storage load error:', e);
@@ -774,6 +1008,8 @@
                 createdAt: now,
                 updatedAt: now,
                 messages: [],
+                messagesLoaded: true,
+                messageCount: 0,
                 selectedChannelId: channelId, // 沿用当前对话的渠道
                 selectedModel: model, // 沿用当前对话的模型
                 personaId: this.state.activePersonaId, // 绑定当前面具
@@ -1035,6 +1271,8 @@
                  message.parentId = parentId;
                  
                  conv.messages.push(message);
+                 conv.messagesLoaded = true;
+                 conv.messageCount = conv.messages.length;
                  conv.updatedAt = Date.now();
                  
                  // 触发对话更新事件（用于侧边栏重新排序）
@@ -1061,11 +1299,18 @@
 
         addLog(logEntry) {
             this.state.logs.unshift(logEntry);
-            // 裁剪日志长度，避免状态过大
+            // 裁剪内存日志长度
             if (this.state.logs.length > 200) {
                 this.state.logs.length = 200;
             }
-            this.persist();
+            // 性能优化：日志不进入持久化主链路，避免高频日志放大写盘和 updated 事件
+            if (this.events) {
+                if (typeof this.events.emitCoalesced === 'function') {
+                    this.events.emitCoalesced('updated', this.state);
+                } else if (typeof this.events.emitAsync === 'function') {
+                    this.events.emitAsync('updated', this.state);
+                }
+            }
         },
 
         updateMessage(convId, msgId, updates) {
@@ -1162,6 +1407,7 @@
             }
             
             conv.updatedAt = Date.now();
+            conv.messageCount = conv.messages.length;
             this.persist();
         },
 
@@ -1173,6 +1419,7 @@
                     // Keep messages up to and including msgId
                     conv.messages = conv.messages.slice(0, index + 1);
                     conv.updatedAt = Date.now();
+                    conv.messageCount = conv.messages.length;
                     this.persist();
                 }
             }
@@ -1186,6 +1433,7 @@
                     // Remove this message and all following messages
                     conv.messages = conv.messages.slice(0, index);
                     conv.updatedAt = Date.now();
+                    conv.messageCount = conv.messages.length;
                     this.persist();
                     return true;
                 }
@@ -1534,6 +1782,8 @@
 
         deleteConversation(id) {
             this.state.conversations = this.state.conversations.filter(c => c.id !== id);
+            this._conversationLoadPromises.delete(id);
+            this._invalidateActivePathCache(id);
 
             // 清理“面具上次活跃会话”映射中指向被删除会话的条目
             if (this.state.personaLastActiveConversationIdMap && typeof this.state.personaLastActiveConversationIdMap === 'object') {

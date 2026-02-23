@@ -101,7 +101,7 @@
                 return window.IdoFront.geminiChannel.getThinkingConfig(conv);
             }
         }
-        return { budget: -1, level: 'none' };
+        return { budget: -1, level: -1 };
     }
     
     /**
@@ -309,10 +309,12 @@
                     thinkingConfig.include_thoughts = true;
                 } else if (isGeminiLevelModel(model)) {
                     // Level 模式 (Gemini 3 系列)：使用 thinking_level
-                    const level = thinkingCfg.level;
-                    thinkingConfig.thinking_level = level;
-                    // 始终启用思考摘要（思维链）
-                    thinkingConfig.include_thoughts = true;
+                    const level = (typeof thinkingCfg.level === 'string') ? thinkingCfg.level.trim().toLowerCase() : '';
+                    if (['minimal', 'low', 'medium', 'high'].includes(level)) {
+                        thinkingConfig.thinking_level = level;
+                        // 启用思考摘要（思维链）
+                        thinkingConfig.include_thoughts = true;
+                    }
                 }
                 
                 // 如果有配置，添加到 extra_body.google
