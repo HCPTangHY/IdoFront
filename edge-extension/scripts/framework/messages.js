@@ -148,6 +148,59 @@ const FrameworkMessages = (function() {
         }
     }
 
+    function isDataUrl(value) {
+        return typeof value === 'string' && value.startsWith('data:');
+    }
+
+    function getAttachmentDirectUrl(attachment) {
+        if (!attachment || typeof attachment !== 'object') return null;
+        const candidates = [attachment.dataUrl, attachment.url, attachment.src, attachment.path];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim()) {
+                return candidate.trim();
+            }
+        }
+        return null;
+    }
+
+    function getAttachmentAltText(attachment, fallbackText) {
+        const fallback = (fallbackText && String(fallbackText).trim()) || 'Image';
+        if (!attachment || typeof attachment !== 'object') return fallback;
+        const candidates = [attachment.alt, attachment.title, attachment.name];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim()) {
+                return candidate.trim();
+            }
+        }
+        return fallback;
+    }
+
+    function getAttachmentDisplayName(attachment, fallbackName) {
+        const fallback = (fallbackName && String(fallbackName).trim()) || 'download';
+        if (!attachment || typeof attachment !== 'object') return fallback;
+
+        const candidates = [attachment.name, attachment.title, attachment.alt];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim()) {
+                return candidate.trim();
+            }
+        }
+
+        const directUrl = getAttachmentDirectUrl(attachment);
+        if (directUrl && !isDataUrl(directUrl)) {
+            try {
+                const parsed = new URL(directUrl, window.location.href);
+                const filename = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
+                if (filename) return filename;
+            } catch (e) {
+                const raw = decodeURIComponent(String(directUrl).split(/[?#]/)[0].split('/').pop() || '');
+                if (raw) return raw;
+            }
+        }
+
+        return fallback;
+    }
+
     function getFileExtFromMime(mimeType) {
         const map = {
             'image/png': 'png',
@@ -199,9 +252,19 @@ const FrameworkMessages = (function() {
             if (storedBlob) return storedBlob;
         }
 
-        if (typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
-            const resp = await fetch(attachment.dataUrl);
+        const directUrl = getAttachmentDirectUrl(attachment);
+        if (isDataUrl(directUrl)) {
+            const resp = await fetch(directUrl);
             if (resp.ok) return await resp.blob();
+        }
+
+        if (directUrl) {
+            try {
+                const resp = await fetch(directUrl);
+                if (resp.ok) return await resp.blob();
+            } catch (e) {
+                // 远端图片可能因 CORS 无法获取 Blob，交给 URL 下载兜底
+            }
         }
 
         return null;
@@ -209,8 +272,9 @@ const FrameworkMessages = (function() {
 
     async function resolveAttachmentUrl(attachment, attachmentsApi) {
         if (!attachment || typeof attachment !== 'object') return null;
-        if (typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
-            return attachment.dataUrl;
+        const directUrl = getAttachmentDirectUrl(attachment);
+        if (directUrl) {
+            return directUrl;
         }
         if (attachment.id && attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
             return await attachmentsApi.getObjectUrl(attachment.id);
@@ -261,7 +325,9 @@ const FrameworkMessages = (function() {
         const opts = (options && typeof options === 'object') ? options : {};
         const attachmentsApi = opts.attachmentsApi || (window.IdoFront && window.IdoFront.attachments);
         const mimeType = (attachment && attachment.type) || opts.mimeType || 'application/octet-stream';
-        const filename = normalizeDownloadFilename(opts.filename || (attachment && attachment.name), opts.fallbackName || 'download', mimeType);
+        const fallbackName = (opts.fallbackName && String(opts.fallbackName).trim()) || 'download';
+        const requestedName = (opts.filename && String(opts.filename).trim()) || getAttachmentDisplayName(attachment, fallbackName);
+        const filename = normalizeDownloadFilename(requestedName, fallbackName, mimeType);
 
         const hasAndroidFilesystem = !!getAndroidFilesystem();
         if (hasAndroidFilesystem) {
@@ -339,7 +405,7 @@ const FrameworkMessages = (function() {
 
         const img = document.createElement('img');
         img.className = 'ido-lightbox__image';
-        img.alt = images[currentIdx].name || 'Image';
+        img.alt = getAttachmentAltText(images[currentIdx], 'Image');
         img.draggable = false;
 
         const toolbar = document.createElement('div');
@@ -439,22 +505,16 @@ const FrameworkMessages = (function() {
         }
 
         async function setImageSrc(idx) {
-            img.alt = images[idx].name || 'Image';
+            img.alt = getAttachmentAltText(images[idx], 'Image');
             img.removeAttribute('src');
 
-            const src = images[idx].dataUrl;
-            if (src) {
-                img.src = src;
-                return;
-            }
-
-            if (images[idx].id && attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
-                try {
-                    const url = await attachmentsApi.getObjectUrl(images[idx].id);
-                    if (url) img.src = url;
-                } catch (e) {
-                    // ignore
+            try {
+                const src = await resolveAttachmentUrl(images[idx], attachmentsApi);
+                if (src) {
+                    img.src = src;
                 }
+            } catch (e) {
+                // ignore
             }
         }
 
@@ -467,11 +527,11 @@ const FrameworkMessages = (function() {
 
         async function downloadCurrent() {
             const att = images[currentIdx];
-            const fallbackName = `image_${currentIdx + 1}`;
+            const fallbackName = getAttachmentDisplayName(att, `image_${currentIdx + 1}`);
 
             try {
                 const ok = await downloadAttachment(att, {
-                    filename: att && att.name,
+                    filename: getAttachmentDisplayName(att, fallbackName),
                     fallbackName,
                     mimeType: att && att.type,
                     attachmentsApi

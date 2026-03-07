@@ -236,6 +236,163 @@ const FrameworkMarkdown = (function() {
         });
     }
 
+    function openLightboxForMarkdownImages(images, currentIndex) {
+        const messagesApi = (typeof globalThis !== 'undefined' && globalThis.FrameworkMessages)
+            ? globalThis.FrameworkMessages
+            : null;
+        if (!messagesApi || typeof messagesApi.openLightbox !== 'function') {
+            return false;
+        }
+        messagesApi.openLightbox(images, currentIndex);
+        return true;
+    }
+
+    function inferImageMimeType(src) {
+        if (typeof src !== 'string' || !src) return '';
+
+        const dataMatch = src.match(/^data:([^;,]+)[;,]/i);
+        if (dataMatch && dataMatch[1]) {
+            return dataMatch[1].toLowerCase();
+        }
+
+        try {
+            const parsed = new URL(src, window.location.href);
+            const lower = String(parsed.pathname || '').toLowerCase();
+            if (lower.endsWith('.png')) return 'image/png';
+            if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+            if (lower.endsWith('.webp')) return 'image/webp';
+            if (lower.endsWith('.gif')) return 'image/gif';
+            if (lower.endsWith('.svg')) return 'image/svg+xml';
+        } catch (e) {
+            // ignore
+        }
+
+        return '';
+    }
+
+    function extractFilenameFromImageSrc(src) {
+        if (typeof src !== 'string' || !src || src.startsWith('data:')) return '';
+        try {
+            const parsed = new URL(src, window.location.href);
+            return decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
+        } catch (e) {
+            return decodeURIComponent(String(src).split(/[?#]/)[0].split('/').pop() || '');
+        }
+    }
+
+    function buildMarkdownImageLightboxItem(img, fallbackIndex) {
+        if (!img) return null;
+
+        const rawSrc = String(img.currentSrc || img.getAttribute('src') || '').trim();
+        if (!rawSrc) return null;
+
+        let normalizedSrc = rawSrc;
+        if (!rawSrc.startsWith('data:')) {
+            try {
+                normalizedSrc = new URL(rawSrc, window.location.href).href;
+            } catch (e) {
+                normalizedSrc = rawSrc;
+            }
+        }
+
+        const alt = String(img.getAttribute('alt') || '').trim();
+        const title = String(img.getAttribute('title') || '').trim();
+        const item = {
+            source: 'markdown',
+            name: extractFilenameFromImageSrc(normalizedSrc) || alt || title || `image_${fallbackIndex + 1}`,
+            alt: alt || title || `图片 ${fallbackIndex + 1}`,
+            title: title || alt || ''
+        };
+        const mimeType = inferImageMimeType(normalizedSrc);
+        if (mimeType) {
+            item.type = mimeType;
+        }
+
+        if (normalizedSrc.startsWith('data:')) {
+            item.dataUrl = normalizedSrc;
+        } else {
+            item.url = normalizedSrc;
+        }
+        return item;
+    }
+
+    function ensureMarkdownImageWrapper(img) {
+        if (!img || !img.parentElement) return null;
+
+        let wrapper = img.parentElement;
+        if (!wrapper.classList || !wrapper.classList.contains('ido-message__attachment-wrapper--markdown')) {
+            const parent = img.parentElement;
+            if (parent.tagName === 'A' && parent.childNodes.length === 1) {
+                wrapper = parent;
+            } else {
+                wrapper = document.createElement('span');
+                parent.insertBefore(wrapper, img);
+                wrapper.appendChild(img);
+            }
+        }
+
+        wrapper.classList.add('ido-message__attachment-wrapper', 'ido-message__attachment-wrapper--markdown');
+        wrapper.dataset.lightboxEnabled = 'true';
+
+        let overlay = wrapper.querySelector('.ido-message__attachment-overlay');
+        if (!overlay) {
+            overlay = document.createElement('span');
+            overlay.className = 'ido-message__attachment-overlay';
+            overlay.innerHTML = '<span class="material-symbols-outlined">zoom_in</span>';
+            wrapper.appendChild(overlay);
+        }
+
+        return wrapper;
+    }
+
+    function enhanceImages(container) {
+        if (!container || typeof container.querySelectorAll !== 'function') return;
+
+        const imageElements = Array.from(container.querySelectorAll('img'));
+        if (imageElements.length === 0) return;
+
+        const lightboxItems = [];
+        const lightboxIndexes = new WeakMap();
+        imageElements.forEach((img, index) => {
+            const item = buildMarkdownImageLightboxItem(img, index);
+            if (!item) return;
+            lightboxIndexes.set(img, lightboxItems.length);
+            lightboxItems.push(item);
+        });
+
+        if (lightboxItems.length === 0) return;
+
+        imageElements.forEach((img) => {
+            const lightboxIndex = lightboxIndexes.get(img);
+            if (typeof lightboxIndex !== 'number') return;
+
+            const wrapper = ensureMarkdownImageWrapper(img);
+            if (!wrapper) return;
+
+            img.dataset.lightboxEnabled = 'true';
+            img.draggable = false;
+            if (wrapper.tagName !== 'A' && !wrapper.hasAttribute('tabindex')) wrapper.tabIndex = 0;
+            if (wrapper.tagName !== 'A') wrapper.setAttribute('role', 'button');
+            wrapper.setAttribute('aria-label', `打开图片预览 ${lightboxIndex + 1}`);
+
+            wrapper.onclick = (event) => {
+                if (event && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
+                const opened = openLightboxForMarkdownImages(lightboxItems, lightboxIndex);
+                if (!opened) return;
+                event.preventDefault();
+                event.stopPropagation();
+            };
+
+            wrapper.onkeydown = (event) => {
+                if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
+                const opened = openLightboxForMarkdownImages(lightboxItems, lightboxIndex);
+                if (!opened) return;
+                event.preventDefault();
+                event.stopPropagation();
+            };
+        });
+    }
+
     /**
      * 同步渲染 Markdown（用于流式更新）
      */
@@ -262,6 +419,7 @@ const FrameworkMarkdown = (function() {
             if (!skipEnhance) {
                 enhanceCodeBlocks(target);
             }
+            enhanceImages(target);
             renderedSourceByTarget.set(target, getRememberedSource(target, safeText));
             target.removeAttribute('data-needs-markdown');
         } catch (err) {
@@ -342,6 +500,7 @@ const FrameworkMarkdown = (function() {
                 if (!isLargeCodeBlock(sourceText)) {
                     enhanceCodeBlocks(target);
                 }
+                enhanceImages(target);
                 renderedSourceByTarget.set(target, sourceText);
             } catch (err) {
                 console.warn('Markdown render failed:', err);

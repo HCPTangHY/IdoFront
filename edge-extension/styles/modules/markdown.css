@@ -406,6 +406,29 @@
     background-color: var(--ido-color-bg-primary);
 }
 
+.markdown-body .ido-message__attachment-wrapper--markdown {
+    display: inline-block;
+    max-width: 100%;
+    max-height: none;
+    vertical-align: top;
+}
+
+.markdown-body .ido-message__attachment-wrapper--markdown img {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: none;
+    object-fit: contain;
+    cursor: zoom-in;
+}
+
+.markdown-body .ido-message__attachment-wrapper--markdown:focus-visible,
+.markdown-body .ido-message__attachment-wrapper--markdown:focus-within {
+    outline: 2px solid var(--ido-color-primary);
+    outline-offset: 2px;
+}
+
 /* ========================================
    Task Lists
    ======================================== */
