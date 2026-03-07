@@ -1809,6 +1809,7 @@
             const store = getStore();
             if (store && store.events && typeof store.events.on === 'function') {
                 store.events.on('updated', updateAllGeminiControls);
+                store.events.on('conversation:switched', updateAllGeminiControls);
                 storeEventRegistered = true;
                 // 注册成功后立即更新一次
                 setTimeout(() => updateAllGeminiControls(), 0);

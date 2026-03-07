@@ -1128,6 +1128,7 @@
         setActivePersona(id) {
             const persona = this.state.personas.find(p => p.id === id);
             if (persona) {
+                const previousConversationId = this.state.activeConversationId || null;
                 this.state.activePersonaId = id;
 
                 if (!this.state.personaLastActiveConversationIdMap || typeof this.state.personaLastActiveConversationIdMap !== 'object') {
@@ -1170,8 +1171,22 @@
                 if (this.events) {
                     if (typeof this.events.emitAsync === 'function') {
                         this.events.emitAsync('persona:changed', id);
+                        if (previousConversationId !== (this.state.activeConversationId || null)) {
+                            this.events.emitAsync('conversation:switched', {
+                                previousConversationId,
+                                conversationId: this.state.activeConversationId || null,
+                                source: 'persona-change'
+                            });
+                        }
                     } else if (typeof this.events.emit === 'function') {
                         this.events.emit('persona:changed', id);
+                        if (previousConversationId !== (this.state.activeConversationId || null)) {
+                            this.events.emit('conversation:switched', {
+                                previousConversationId,
+                                conversationId: this.state.activeConversationId || null,
+                                source: 'persona-change'
+                            });
+                        }
                     }
                 }
             }

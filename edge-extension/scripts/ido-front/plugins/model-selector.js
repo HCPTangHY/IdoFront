@@ -23,6 +23,9 @@
         store.events.on('updated', () => {
             updateButtonState();
         });
+        store.events.on('conversation:switched', () => {
+            updateButtonState();
+        });
         
         // 监听渠道更新事件，自动刷新模型选择面板
         store.events.on('channels:updated', () => {

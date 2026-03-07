@@ -992,10 +992,12 @@
             
             const store = getStore();
             if (store && store.events && typeof store.events.on === 'function') {
-                store.events.on('updated', () => {
+                const refreshControls = () => {
                     updateReasoningControls();
                     updateGeminiThinkingControls();
-                });
+                };
+                store.events.on('updated', refreshControls);
+                store.events.on('conversation:switched', refreshControls);
                 storeEventRegistered = true;
             } else {
                 if (!ensureStoreEventRegistered.retryCount) {

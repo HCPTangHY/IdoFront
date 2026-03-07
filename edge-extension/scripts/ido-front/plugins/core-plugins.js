@@ -425,6 +425,7 @@
         // 监听全局状态变化，同步更新按钮显示（对话切换、模型变更等）
         if (store.events && typeof store.events.on === 'function') {
             store.events.on('updated', updateHeaderControls);
+            store.events.on('conversation:switched', updateHeaderControls);
         }
 
         // 向 INPUT_TOP 插槽（输入框上方工具栏）注册纯 UI 组件

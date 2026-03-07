@@ -87,6 +87,13 @@
                 const resolved = this.resolve(message, context);
                 return resolved && resolved.sendConstraint ? resolved.sendConstraint : null;
             },
+            decorateDisplayPayload(message, payload, context) {
+                const resolved = this.resolve(message, context);
+                if (resolved && typeof resolved.decorateDisplayPayload === 'function') {
+                    return resolved.decorateDisplayPayload(message, payload, context || {}) || payload;
+                }
+                return payload;
+            },
             renderInline(message, container, conv, context) {
                 const resolved = this.resolve(message, context || { conversation: conv });
                 if (resolved && typeof resolved.renderInline === 'function') {
@@ -930,6 +937,13 @@
         return getMessageById(conv, route.messageId);
     }
 
+    function getRouteRootMessage(conv, route) {
+        if (!conv || !route || !route.messageId) {
+            return null;
+        }
+        return getMessageById(conv, route.messageId);
+    }
+
     function deriveRouteStatus(route, message) {
         const rawStatus = route && route.status ? String(route.status) : '';
         if (rawStatus === 'error' || rawStatus === 'stopped' || rawStatus === 'completed' || rawStatus === 'running' || rawStatus === 'pending') {
@@ -1196,7 +1210,7 @@
         const group = findGroup(conv, groupId);
         const route = findRoute(group, routeId);
         const routeMessage = getMessageById(conv, route && route.messageId);
-        const selectedMessageId = route && (route.currentMessageId || route.messageId);
+        const selectedMessageId = route && route.messageId;
         if (!group || !route || !routeMessage) {
             return false;
         }
@@ -1743,14 +1757,14 @@
         insertAfter.insertAdjacentElement('afterend', groupEl);
     }
 
-    function ensureNodeGroupHost(messageCard) {
+    function ensureNodeGroupHost(messageCard, showMessageContent) {
         if (!messageCard) return null;
         const container = messageCard.querySelector('.ido-message__container');
         if (!container) return null;
         messageCard.classList.add('ido-message--multiroute');
         const content = container.querySelector('.ido-message__content');
         if (content) {
-            content.hidden = true;
+            content.hidden = showMessageContent !== true;
         }
         let host = container.querySelector('.ido-multiroute-node-host');
         if (!host) {
@@ -1762,7 +1776,9 @@
     }
 
     function renderGroupIntoMessageCard(messageCard, conv, group) {
-        const host = ensureNodeGroupHost(messageCard);
+        const selectedRoute = group && group.selectedRouteId ? findRoute(group, group.selectedRouteId) : null;
+        const selectedRootMessage = selectedRoute ? getRouteRootMessage(conv, selectedRoute) : null;
+        const host = ensureNodeGroupHost(messageCard, !!selectedRootMessage);
         if (!host) return null;
         let groupEl = host.querySelector(`[data-multiroute-group-id="${group.id}"]`);
         if (!groupEl) {
@@ -1823,6 +1839,27 @@
             includeInRequestContext: false,
             disableDomCache: true,
             sendConstraint: (!group || !group.selectedRouteId) ? { blocked: true, message: '请先在多路结果里选择要继续的一路' } : null,
+            decorateDisplayPayload: (targetMessage, payload, context) => {
+                const conv = context && context.conversation ? context.conversation : getActiveConversation();
+                const selectedRoute = group && group.selectedRouteId ? findRoute(group, group.selectedRouteId) : null;
+                const selectedRootMessage = selectedRoute ? getRouteRootMessage(conv, selectedRoute) : null;
+                if (!selectedRoute || !selectedRootMessage) {
+                    return payload;
+                }
+
+                payload.content = selectedRootMessage.content || '';
+                payload.createdAt = selectedRootMessage.createdAt || payload.createdAt;
+                payload.reasoning = selectedRootMessage.reasoning || undefined;
+                payload.reasoningDuration = selectedRootMessage.reasoningDuration;
+                payload.reasoningAccumulatedTime = selectedRootMessage.reasoningAccumulatedTime;
+                payload.reasoningSegmentStart = selectedRootMessage.reasoningSegmentStart;
+                payload.attachments = Array.isArray(selectedRootMessage.attachments) ? selectedRootMessage.attachments : undefined;
+                payload.toolCalls = Array.isArray(selectedRootMessage.toolCalls) && selectedRootMessage.toolCalls.length > 0 ? selectedRootMessage.toolCalls : undefined;
+                payload.modelName = selectedRootMessage.modelName || selectedRoute.model || payload.modelName;
+                payload.channelName = selectedRootMessage.channelName || selectedRoute.channelName || payload.channelName;
+                payload.stats = selectedRootMessage.stats || payload.stats;
+                return payload;
+            },
             renderInline: (targetMessage, container, conv) => renderMessageNode(targetMessage || message, container, conv)
         };
     }
@@ -2312,6 +2349,10 @@
         updateChipState();
     }
 
+    function handleConversationSwitched() {
+        updateChipState();
+    }
+
     window.IdoFront = window.IdoFront || {};
     window.IdoFront.multiRoute = window.IdoFront.multiRoute || {};
     window.IdoFront.multiRoute.PLUGIN_ID = PLUGIN_ID;
@@ -2359,6 +2400,7 @@
             const store = getStore();
             if (!storeSubscribed && store && store.events && typeof store.events.on === 'function') {
                 store.events.on('updated', handleStoreUpdated);
+                store.events.on('conversation:switched', handleConversationSwitched);
                 storeSubscribed = true;
             }
             migrateAllLegacyGroups('silent');
@@ -2378,6 +2420,7 @@
             const store = getStore();
             if (storeSubscribed && store && store.events && typeof store.events.off === 'function') {
                 store.events.off('updated', handleStoreUpdated);
+                store.events.off('conversation:switched', handleConversationSwitched);
                 storeSubscribed = false;
             }
             chipEl = null;

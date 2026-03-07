@@ -753,6 +753,7 @@
             const store = getStore();
             if (store && store.events && typeof store.events.on === 'function') {
                 store.events.on('updated', updateThinkingControls);
+                store.events.on('conversation:switched', updateThinkingControls);
                 storeEventRegistered = true;
                 setTimeout(() => updateThinkingControls(), 0);
             } else {

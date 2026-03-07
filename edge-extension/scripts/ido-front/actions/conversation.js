@@ -76,6 +76,28 @@
         return !!(behaviors && typeof behaviors.shouldDisableDomCache === 'function' && Array.isArray(messages) && messages.some((msg) => behaviors.shouldDisableDomCache(msg, { conversation: conv })));
     }
 
+    function decorateMessageDisplayPayload(msg, payload, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.decorateDisplayPayload === 'function') {
+            return behaviors.decorateDisplayPayload(msg, payload, { conversation: conv }) || payload;
+        }
+        return payload;
+    }
+
+    function emitConversationSwitched(previousConversationId, nextConversationId, source) {
+        if (!store || !store.events) return;
+        const payload = {
+            previousConversationId: previousConversationId || null,
+            conversationId: nextConversationId || null,
+            source: source || 'conversation-actions'
+        };
+        if (typeof store.events.emitAsync === 'function') {
+            store.events.emitAsync('conversation:switched', payload);
+        } else if (typeof store.events.emit === 'function') {
+            store.events.emit('conversation:switched', payload);
+        }
+    }
+
     /**
      * 初始化对话管理模块
      */
@@ -126,6 +148,7 @@
         const title = initialText && initialText.trim()
             ? initialText.trim().slice(0, DEMO_API_CONFIG.MAX_CONVERSATION_TITLE_LENGTH)
             : '新对话';
+        const previousConvId = store.state.activeConversationId;
         const conv = store.createConversationInternal(title);
         store.state.activeConversationId = conv.id;
         if (!store.state.personaLastActiveConversationIdMap || typeof store.state.personaLastActiveConversationIdMap !== 'object') {
@@ -143,6 +166,10 @@
             }
         } else {
             store.persist();
+        }
+
+        if (previousConvId !== conv.id) {
+            emitConversationSwitched(previousConvId, conv.id, 'conversation-create');
         }
 
         // 移动端自动关闭侧边栏
@@ -234,6 +261,10 @@
             context.events.emit('chat:conversation-selected', { conversationId: id });
         }
 
+        if (previousConvId !== id) {
+            emitConversationSwitched(previousConvId, id, 'conversation-select');
+        }
+
         // 移动端自动关闭侧边栏
         closeSidebarIfMobile();
     };
@@ -242,8 +273,13 @@
      * 删除对话
      */
     window.IdoFront.conversationActions.delete = function(id) {
+        const previousConvId = store.state.activeConversationId;
         store.deleteConversation(id);
         syncUI();
+        const nextConvId = store.state.activeConversationId || null;
+        if (previousConvId !== nextConvId) {
+            emitConversationSwitched(previousConvId, nextConvId, 'conversation-delete');
+        }
     };
 
     /**
@@ -630,6 +666,8 @@
             };
         }
         
+        decorateMessageDisplayPayload(msg, payload, store.getActiveConversation());
+
         context.addMessage(uiRole, payload, {
             noScroll: true,
             targetContainer: container,
