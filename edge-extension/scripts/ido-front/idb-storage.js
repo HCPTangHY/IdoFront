@@ -556,6 +556,51 @@
             store.put({ key, value, updatedAt: Date.now() });
         }
 
+        #primeConversationMessagesCache(conversationId, messages) {
+            if (!conversationId) return;
+
+            const prevMsgIds = this._conversationMessageIds.get(conversationId);
+            if (prevMsgIds) {
+                prevMsgIds.forEach(msgId => {
+                    messageSignatureCache.delete(`${conversationId}::${msgId}`);
+                });
+            }
+
+            const nextMsgIds = new Set();
+            const list = Array.isArray(messages) ? messages : EMPTY_ARRAY;
+            list.forEach(msg => {
+                if (!msg || !msg.id) return;
+                nextMsgIds.add(msg.id);
+                messageSignatureCache.set(`${conversationId}::${msg.id}`, getMessageFingerprint(msg));
+            });
+
+            this._conversationMessageIds.set(conversationId, nextMsgIds);
+        }
+
+        #deleteConversationMessages(msgStore, conversationId, knownMsgIds) {
+            if (!conversationId || !msgStore) return;
+
+            if (knownMsgIds && knownMsgIds.size > 0) {
+                knownMsgIds.forEach(msgId => {
+                    msgStore.delete([conversationId, msgId]);
+                });
+                return;
+            }
+
+            if (!msgStore.indexNames || !msgStore.indexNames.contains('by_conversation') || typeof IDBKeyRange === 'undefined') {
+                return;
+            }
+
+            const index = msgStore.index('by_conversation');
+            const request = index.openKeyCursor(IDBKeyRange.only(conversationId));
+            request.onsuccess = (event) => {
+                const cursor = event && event.target ? event.target.result : null;
+                if (!cursor) return;
+                msgStore.delete(cursor.primaryKey);
+                cursor.continue();
+            };
+        }
+
         #refreshDiffCacheFromState(state) {
             this._persistedConversationIds.clear();
             this._conversationMessageIds.clear();
@@ -571,13 +616,7 @@
                 this._conversationOrderCache.set(convId, index);
                 conversationSignatureCache.set(convId, getConversationFingerprint(conv));
                 const messages = Array.isArray(conv.messages) ? conv.messages : [];
-                const msgIdSet = new Set();
-                messages.forEach(msg => {
-                    if (!msg || !msg.id) return;
-                    msgIdSet.add(msg.id);
-                    messageSignatureCache.set(`${convId}::${msg.id}`, getMessageFingerprint(msg));
-                });
-                this._conversationMessageIds.set(convId, msgIdSet);
+                this.#primeConversationMessagesCache(convId, messages);
             });
         }
 
@@ -639,6 +678,7 @@
                 return ta - tb;
             });
 
+            this.#primeConversationMessagesCache(conversationId, messages);
             return messages;
         }
 
@@ -732,11 +772,7 @@
                 if (nextConversationIds.has(convId)) return;
                 convStore.delete(convId);
                 const oldMsgIds = this._conversationMessageIds.get(convId);
-                if (oldMsgIds) {
-                    oldMsgIds.forEach(msgId => {
-                        msgStore.delete([convId, msgId]);
-                    });
-                }
+                this.#deleteConversationMessages(msgStore, convId, oldMsgIds);
             });
 
             await this.#transactionToPromise(transaction);
@@ -1031,6 +1067,39 @@
                 messageSignatureCache.clear();
                 conversationSignatureCache.clear();
                 this._metaSerializedCache.clear();
+
+                const appMetaForCache = {
+                    activePersonaId: state.activePersonaId || null,
+                    activeConversationId: state.activeConversationId || null,
+                    personaLastActiveConversationIdMap: state.personaLastActiveConversationIdMap || {},
+                    _normalizedMagic: NORMALIZED_MAGIC,
+                    _normalizedVersion: NORMALIZED_VERSION
+                };
+                const cacheEntries = [
+                    [APP_META_KEY, appMetaForCache],
+                    [PERSONAS_KEY, state.personas],
+                    [CHANNELS_KEY, state.channels],
+                    [PLUGIN_STATES_KEY, state.pluginStates],
+                    [SETTINGS_KEY, state.settings],
+                    [LOGS_KEY, state.logs]
+                ];
+                cacheEntries.forEach(([key, value]) => {
+                    try {
+                        this._metaSerializedCache.set(key, JSON.stringify(value));
+                    } catch (e) {
+                        // ignore
+                    }
+                });
+
+                state.conversations.forEach((conv, index) => {
+                    if (!conv || !conv.id) return;
+                    this._persistedConversationIds.add(conv.id);
+                    this._conversationOrderCache.set(conv.id, index);
+                    if (conv.messagesLoaded !== false) {
+                        this.#primeConversationMessagesCache(conv.id, conv.messages);
+                        conversationSignatureCache.set(conv.id, getConversationFingerprint(conv));
+                    }
+                });
 
                 return state;
             } catch (error) {

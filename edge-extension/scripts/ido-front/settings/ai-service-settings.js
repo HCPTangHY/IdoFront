@@ -15,6 +15,11 @@
     window.IdoFront.aiServiceSettings.init = function(storeInstance, frameworkInstance) {
         store = storeInstance;
         context = frameworkInstance;
+
+        const modelPicker = window.IdoFront.modelPicker;
+        if (modelPicker && typeof modelPicker.init === 'function') {
+            modelPicker.init(context, store);
+        }
         
         const settingsManager = window.IdoFront.settingsManager;
         if (settingsManager && settingsManager.registerGeneralSection) {
@@ -134,182 +139,22 @@
      * 打开模型选择面板
      */
     function openModelSelector(onSelect) {
-        if (!context || !context.setCustomPanel) return;
-        
-        context.setCustomPanel('right', (container) => {
-            renderModelSelectorPanel(container, onSelect);
-        });
-        
-        context.togglePanel('right', true);
-    }
+        const modelPicker = window.IdoFront.modelPicker;
+        if (!modelPicker || typeof modelPicker.open !== 'function') return;
 
-    /**
-     * 渲染模型选择面板
-     */
-    function renderModelSelectorPanel(container, onSelect) {
-        // Header
-        const header = document.createElement('div');
-        header.className = 'ido-panel__header';
-        
-        const title = document.createElement('span');
-        title.className = 'ido-panel__title';
-        title.textContent = '选择总结模型';
-        
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'ido-icon-btn';
-        closeBtn.innerHTML = '<span class="material-symbols-outlined text-[20px]">close</span>';
-        closeBtn.onclick = () => {
-            context.togglePanel('right', false);
-        };
-        
-        header.appendChild(title);
-        header.appendChild(closeBtn);
-        container.appendChild(header);
-        
-        // Content
-        const content = document.createElement('div');
-        content.className = 'ido-panel__content';
-        
-        // 默认选项：使用当前对话模型
-        const defaultOption = document.createElement('button');
-        defaultOption.className = 'ido-list__item w-full text-left mb-4';
-        defaultOption.style.border = '1px dashed var(--ido-color-border)';
-        defaultOption.style.borderRadius = 'var(--ido-radius-md)';
-        
-        const currentChannelId = store.getSetting('titleGeneratorChannelId');
-        if (!currentChannelId) {
-            defaultOption.classList.add('ido-list__item--active');
-        }
-        
-        defaultOption.innerHTML = `
-            <div class="flex items-center gap-2">
-                <span class="material-symbols-outlined text-[18px]">auto_mode</span>
-                <span>使用当前对话模型</span>
-            </div>
-            <div class="text-xs text-gray-500 mt-1 ml-7">每次生成时使用当前对话所选的模型</div>
-        `;
-        
-        defaultOption.onclick = () => {
-            closeModelSelectorAndSave(null, null, onSelect);
-        };
-        
-        content.appendChild(defaultOption);
-        
-        // 分隔线
-        const divider = document.createElement('div');
-        divider.className = 'ido-divider';
-        divider.style.margin = 'var(--ido-spacing-md) 0';
-        content.appendChild(divider);
-        
-        // 指定模型标题
-        // const specifyTitle = document.createElement('div');
-        // specifyTitle.className = 'text-xs text-gray-500 mb-2';
-        // specifyTitle.textContent = '或选择指定模型：';
-        // content.appendChild(specifyTitle);
-        
-        // 渠道列表
-        const enabledChannels = store.state.channels.filter(c => c.enabled);
-        
-        if (enabledChannels.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'ido-empty';
-            empty.textContent = '无可用渠道，请先在设置中配置';
-            content.appendChild(empty);
-        } else {
-            enabledChannels.forEach(channel => {
-                const channelBlock = createChannelBlock(channel, onSelect);
-                content.appendChild(channelBlock);
-            });
-        }
-        
-        container.appendChild(content);
-    }
-
-    /**
-     * 创建渠道块
-     */
-    function createChannelBlock(channel, onSelect) {
-        const block = document.createElement('div');
-        block.style.marginBottom = 'var(--ido-spacing-lg)';
-        
-        // Channel Header
-        const channelHeader = document.createElement('div');
-        channelHeader.className = 'flex items-center gap-2 pb-2 border-b border-gray-100 mb-2';
-        
-        const channelName = document.createElement('span');
-        channelName.className = 'font-medium text-sm text-gray-700';
-        channelName.textContent = channel.name;
-        
-        const channelBadge = document.createElement('span');
-        channelBadge.className = 'ido-badge ido-badge--primary';
-        channelBadge.textContent = channel.type;
-        
-        channelHeader.appendChild(channelName);
-        channelHeader.appendChild(channelBadge);
-        block.appendChild(channelHeader);
-        
-        // Models List
-        const modelsList = document.createElement('div');
-        modelsList.className = 'ido-list';
-        
-        const currentChannelId = store.getSetting('titleGeneratorChannelId');
-        const currentModel = store.getSetting('titleGeneratorModel');
-        
-        if (!channel.models || channel.models.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'text-xs text-gray-400 py-2';
-            empty.textContent = '无可用模型';
-            modelsList.appendChild(empty);
-        } else {
-            channel.models.forEach(model => {
-                const item = document.createElement('button');
-                item.className = 'ido-list__item w-full text-left text-xs';
-                
-                const isSelected = currentChannelId === channel.id && currentModel === model;
-                if (isSelected) {
-                    item.classList.add('ido-list__item--active');
-                }
-                
-                item.textContent = model;
-                
-                item.onclick = () => {
-                    closeModelSelectorAndSave(channel.id, model, onSelect);
-                };
-                
-                modelsList.appendChild(item);
-            });
-        }
-        
-        block.appendChild(modelsList);
-        return block;
-    }
-
-    /**
-     * 关闭模型选择器并保存设置
-     */
-    function closeModelSelectorAndSave(channelId, model, onSelect) {
-        const layout = window.FrameworkLayout;
-        
-        if (layout && layout.customContainers && layout.customContainers.right) {
-            const container = layout.customContainers.right;
-            container.innerHTML = '';
-            container.dataset.hasCustomContent = 'false';
-            // 隐藏容器，避免看到默认面板内容在关闭过程中渲染
-            container.style.visibility = 'hidden';
-        }
-        
-        // 关闭面板
-        context.togglePanel('right', false);
-        
-        // 等面板关闭动画完成后恢复可见性并保存设置
-        setTimeout(() => {
-            if (layout && layout.customContainers && layout.customContainers.right) {
-                layout.customContainers.right.style.visibility = '';
+        modelPicker.open({
+            title: '选择总结模型',
+            allowFollowCurrent: true,
+            followCurrentLabel: '使用当前对话模型',
+            followCurrentDescription: '每次生成时使用当前对话所选的模型',
+            selectedChannelId: store.getSetting('titleGeneratorChannelId') || null,
+            selectedModel: store.getSetting('titleGeneratorModel') || null,
+            onSelect: (channelId, model) => {
+                store.setSetting('titleGeneratorChannelId', channelId);
+                store.setSetting('titleGeneratorModel', model);
+                if (onSelect) onSelect();
             }
-            store.setSetting('titleGeneratorChannelId', channelId);
-            store.setSetting('titleGeneratorModel', model);
-            if (onSelect) onSelect();
-        }, 300);
+        });
     }
 
     /**

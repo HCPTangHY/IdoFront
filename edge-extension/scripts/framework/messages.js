@@ -2278,6 +2278,7 @@ const FrameworkMessages = (function() {
         getMessageWrapperById,
         getLastMessageCard,
         getMessages,
+        createAttachmentsContainer,
         openLightbox,
         createStatsBar,
         createBranchSwitcher,

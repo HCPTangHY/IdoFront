@@ -25,9 +25,7 @@ const SCRIPT_ORDER = [
   'edge-extension/scripts/ido-front/plugins/model-selector.js',
   'edge-extension/scripts/ido-front/plugins/network-log-panel.js',
   'edge-extension/scripts/ido-front/plugins/file-upload.js',
-  'edge-extension/scripts/ido-front/plugins/image-gallery/core.js',
-  'edge-extension/scripts/ido-front/plugins/image-gallery/view.js',
-  'edge-extension/scripts/ido-front/plugins/image-gallery.js',
+  'edge-extension/scripts/ido-front/plugins/multi-route.js',
   'edge-extension/scripts/ido-front/plugins/core-plugins.js',
   'edge-extension/scripts/ido-front/plugins/theme-toggle.js',
 

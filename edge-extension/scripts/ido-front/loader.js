@@ -53,15 +53,15 @@
         // 4. Actions 模块（依赖基础模块）
         'actions/conversation.js',
         'actions/message.js',
+
+        // 4.5. Shared UI
+        'ui/model-picker.js',
         
         // 5. Plugins 模块（依赖基础模块和 Actions）
         'plugins/model-selector.js',
         'plugins/network-log-panel.js',
         'plugins/file-upload.js',
-        // Builtin image gallery plugin（拆分为 core / view / 入口三层）
-        'plugins/image-gallery/core.js',
-        'plugins/image-gallery/view.js',
-        'plugins/image-gallery.js',
+        'plugins/multi-route.js',
         'plugins/core-plugins.js',  // 必须在渠道之前加载，提供 inputTools API
         
         // 6. Channels（依赖 channel-registry 和 core-plugins 的 inputTools API）

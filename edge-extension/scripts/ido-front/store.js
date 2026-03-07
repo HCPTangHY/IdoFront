@@ -1015,7 +1015,12 @@
                 personaId: this.state.activePersonaId, // 绑定当前面具
                 // 会话级别的流式开关（优先于面具），以及思考预算
                 streamOverride: defaultStream,
-                reasoningEffort: defaultReasoningEffort
+                reasoningEffort: defaultReasoningEffort,
+                metadata: {
+                    multiRouteCount: 1,
+                    multiRouteRoutes: [],
+                    multiRouteGroups: []
+                }
             };
             this.state.conversations.unshift(conversation);
             if (!this.state.activeConversationId) {
@@ -1443,6 +1448,15 @@
 
         // ==================== 分支管理方法 ====================
 
+        _isDetachedMultiRouteMessage(msg) {
+            return !!(
+                msg &&
+                msg.metadata &&
+                msg.metadata.multiRoute &&
+                msg.metadata.multiRoute.detached === true
+            );
+        },
+
         /**
          * 获取对话的活跃路径（从根到当前选中的叶子节点）
          * 性能优化：使用缓存避免重复计算
@@ -1497,17 +1511,24 @@
                     break;
                 }
                 const children = childrenMap[currentParentId];
+                const visibleChildren = children.filter(child => !this._isDetachedMultiRouteMessage(child));
                 let selectedChild = null;
                 
                 // 查找 activeBranchMap 中选中的子节点
                 const selectedId = conv.activeBranchMap[currentParentId];
                 if (selectedId) {
-                    selectedChild = children.find(c => c.id === selectedId);
+                    const maybeSelected = children.find(c => c.id === selectedId);
+                    if (maybeSelected && !this._isDetachedMultiRouteMessage(maybeSelected)) {
+                        selectedChild = maybeSelected;
+                    }
                 }
                 
                 // 如果没有选中或选中的不存在，默认选择第一个（已排序）
                 if (!selectedChild) {
-                    selectedChild = children[0];
+                    if (visibleChildren.length === 0) {
+                        break;
+                    }
+                    selectedChild = visibleChildren[0];
                     // 更新 activeBranchMap
                     conv.activeBranchMap[currentParentId] = selectedChild.id;
                 }
@@ -1565,7 +1586,7 @@
             // 找到所有具有相同 parentId 的消息
             const siblings = conv.messages.filter(m => {
                 const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
-                return pId === parentId;
+                return pId === parentId && !this._isDetachedMultiRouteMessage(m);
             });
             
             // 按创建时间排序
@@ -1601,6 +1622,10 @@
             
             const targetMsg = conv.messages.find(m => m.id === msgId);
             if (!targetMsg) return false;
+
+            if (this._isDetachedMultiRouteMessage(targetMsg)) {
+                return false;
+            }
             
             if (!conv.activeBranchMap) {
                 conv.activeBranchMap = {};

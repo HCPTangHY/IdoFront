@@ -898,6 +898,433 @@
 }
 
 
+/* ========================================
+   多路结果组 (Multi Route Group)
+   ======================================== */
+
+.ido-multiroute-group {
+    margin: 0 0 var(--ido-spacing-lg);
+    padding: 14px;
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    background: var(--card-bg-default);
+}
+
+.ido-multiroute-group__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.ido-multiroute-group__title-wrap {
+    min-width: 0;
+}
+
+.ido-multiroute-group__title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ido-color-text-primary);
+}
+
+.ido-multiroute-group__subtitle {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-multiroute-group__summary {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--ido-color-bg-secondary);
+    color: var(--ido-color-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.ido-multiroute-group__summary[data-tone="running"] {
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--ido-color-primary);
+}
+
+.ido-multiroute-group__summary[data-tone="completed"] {
+    background: rgba(16, 185, 129, 0.12);
+    color: #0f766e;
+}
+
+.ido-multiroute-group__summary[data-tone="mixed"] {
+    background: rgba(245, 158, 11, 0.12);
+    color: #b45309;
+}
+
+.ido-multiroute-group__summary[data-tone="error"] {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--ido-color-danger);
+}
+
+.ido-multiroute-group__controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    min-width: 0;
+}
+
+.ido-multiroute-group__nav {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--ido-color-border);
+    border-radius: 999px;
+    background: var(--ido-color-bg-primary);
+    color: var(--ido-color-text-secondary);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.ido-multiroute-group__nav:hover:not(:disabled) {
+    background: var(--ido-color-bg-secondary);
+    color: var(--ido-color-text-primary);
+}
+
+.ido-multiroute-group__nav:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ido-multiroute-group__nav .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.ido-multiroute-group__tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 2px 0;
+    scrollbar-width: none;
+}
+
+.ido-multiroute-group__tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.ido-multiroute-group__tab {
+    flex: 0 0 auto;
+    padding: 7px 12px;
+    border: 1px solid var(--ido-color-border);
+    border-radius: 999px;
+    background: var(--ido-color-bg-primary);
+    color: var(--ido-color-text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ido-multiroute-group__tab:hover {
+    background: var(--ido-color-bg-secondary);
+    color: var(--ido-color-text-primary);
+}
+
+.ido-multiroute-group__tab.is-active {
+    border-color: var(--ido-color-primary);
+    background: var(--ido-color-primary-tint);
+    color: var(--ido-color-primary);
+}
+
+.ido-multiroute-group__tab.is-selected {
+    box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.32);
+}
+
+.ido-multiroute-group__tab[data-tone="running"],
+.ido-multiroute-group__tab[data-tone="pending"] {
+    color: var(--ido-color-primary);
+}
+
+.ido-multiroute-group__tab[data-tone="completed"] {
+    color: #0f766e;
+}
+
+.ido-multiroute-group__tab[data-tone="error"],
+.ido-multiroute-group__tab[data-tone="stopped"] {
+    color: var(--ido-color-danger);
+}
+
+.ido-multiroute-group__compact {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--ido-color-border);
+    border-radius: 14px;
+    background: var(--ido-color-bg-primary);
+}
+
+.ido-multiroute-group__compact[hidden] {
+    display: none;
+}
+
+.ido-multiroute-group__compact-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.ido-multiroute-group__compact-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ido-color-text-primary);
+}
+
+.ido-multiroute-group__compact-meta,
+.ido-multiroute-group__compact-preview {
+    font-size: 12px;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-multiroute-group__compact-meta {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ido-multiroute-group__compact-preview {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+}
+
+.ido-multiroute-group__compact-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ido-multiroute-group__routes {
+    display: flex;
+    gap: 10px;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 8px 8px;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--ido-color-text-secondary) 32%, transparent) transparent;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    cursor: grab;
+}
+
+.ido-multiroute-group__routes.is-dragging {
+    cursor: grabbing;
+    scroll-snap-type: none;
+    user-select: none;
+}
+
+.ido-multiroute-group__routes::-webkit-scrollbar {
+    height: 8px;
+}
+
+.ido-multiroute-group__routes::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ido-multiroute-group__routes::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--ido-color-text-secondary) 24%, transparent);
+    border-radius: 999px;
+}
+
+.ido-multiroute-group__routes[hidden] {
+    display: none;
+}
+
+.ido-multiroute-route {
+    display: flex;
+    flex: 0 0 90%;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    max-width: 760px;
+    min-height: 100%;
+    padding: 12px;
+    border: 1px solid var(--ido-color-border);
+    border-radius: 14px;
+    background: var(--ido-color-bg-primary);
+    scroll-snap-align: center;
+    scroll-snap-stop: always;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.ido-multiroute-route.is-current {
+    border-color: var(--ido-color-primary);
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16);
+}
+
+.ido-multiroute-route.is-selected {
+    border-color: rgba(16, 185, 129, 0.36);
+}
+
+.ido-multiroute-route.is-active {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.ido-multiroute-route[hidden] {
+    display: none;
+}
+
+.ido-multiroute-route__header {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ido-multiroute-route__label {
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--ido-color-bg-secondary);
+    color: var(--ido-color-text-primary);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.ido-multiroute-route__model {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ido-color-text-secondary);
+    font-size: 12px;
+}
+
+.ido-multiroute-route__status {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-multiroute-route__status[data-tone="running"],
+.ido-multiroute-route__status[data-tone="pending"] {
+    color: var(--ido-color-primary);
+}
+
+.ido-multiroute-route__status[data-tone="completed"] {
+    color: #0f766e;
+}
+
+.ido-multiroute-route__status[data-tone="error"],
+.ido-multiroute-route__status[data-tone="stopped"] {
+    color: var(--ido-color-danger);
+}
+
+.ido-multiroute-route__body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ido-multiroute-route__content {
+    min-height: 54px;
+    color: var(--ido-color-text-primary);
+    font-size: 13px;
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.ido-multiroute-route__reasoning {
+    border: 1px solid var(--ido-color-border);
+    border-radius: 10px;
+    background: var(--ido-color-bg-secondary);
+}
+
+.ido-multiroute-route__reasoning summary {
+    cursor: pointer;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-multiroute-route__reasoning-content {
+    padding: 0 10px 10px;
+    font-size: 12px;
+}
+
+.ido-multiroute-route__attachments[hidden],
+.ido-multiroute-route__meta[hidden] {
+    display: none;
+}
+
+.ido-multiroute-route__images {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.ido-multiroute-route__image {
+    overflow: hidden;
+    border-radius: 10px;
+    background: var(--ido-color-bg-secondary);
+    aspect-ratio: 1 / 1;
+}
+
+.ido-multiroute-route__image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.ido-multiroute-route__meta {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ido-color-text-secondary);
+}
+
+.ido-multiroute-route__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ido-multiroute-route__copy {
+    min-width: 72px;
+}
+
+.ido-multiroute-route__copy.is-success,
+.ido-multiroute-group__compact-copy.is-success {
+    border-color: rgba(16, 185, 129, 0.28);
+    color: #0f766e;
+}
+
+.ido-multiroute-route__copy.is-error,
+.ido-multiroute-group__compact-copy.is-error {
+    border-color: rgba(239, 68, 68, 0.28);
+    color: var(--ido-color-danger);
+}
+
+.ido-multiroute-route__continue {
+    min-width: 92px;
+}
+
+
 /* 移动端适配 */
 @media (max-width: 768px) {
     .ido-branch-switcher {
@@ -916,5 +1343,55 @@
     .ido-branch-switcher__counter {
         min-width: 20px;
         font-size: 10px;
+    }
+
+    .ido-multiroute-group {
+        padding: 12px;
+    }
+
+    .ido-multiroute-group__header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .ido-multiroute-group__controls {
+        flex-wrap: wrap;
+    }
+
+    .ido-multiroute-group__tabs {
+        order: 3;
+        width: 100%;
+        flex-basis: 100%;
+    }
+
+    .ido-multiroute-group__compact {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .ido-multiroute-group__compact-actions {
+        justify-content: flex-start;
+    }
+
+    .ido-multiroute-group__routes {
+        padding-inline: 6px;
+        scroll-padding-inline: 6px;
+    }
+
+    .ido-multiroute-route {
+        flex-basis: 94%;
+        max-width: none;
+    }
+
+    .ido-multiroute-route__header {
+        grid-template-columns: auto 1fr;
+    }
+
+    .ido-multiroute-route__status {
+        grid-column: 1 / -1;
+    }
+
+    .ido-multiroute-route__content {
+        min-height: 0;
     }
 }

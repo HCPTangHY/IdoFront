@@ -25,8 +25,12 @@ document.addEventListener('IdoFrontLoaded', async () => {
         // 检查是否处于加载状态
         if (btnSend.classList.contains('btn-send--loading')) {
             // 正在加载，取消请求
-            if (service && service.abortCurrentRequest) {
-                service.abortCurrentRequest();
+            if (service) {
+                if (typeof service.abortAllRequests === 'function') {
+                    service.abortAllRequests();
+                } else if (typeof service.abortCurrentRequest === 'function') {
+                    service.abortCurrentRequest();
+                }
             }
             return;
         }

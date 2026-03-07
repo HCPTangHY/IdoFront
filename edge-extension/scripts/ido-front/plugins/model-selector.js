@@ -14,6 +14,11 @@
         context = frameworkInstance;
         store = storeInstance;
 
+        const modelPicker = window.IdoFront.modelPicker;
+        if (modelPicker && typeof modelPicker.init === 'function') {
+            modelPicker.init(context, store);
+        }
+
         // 监听对话切换，更新按钮显示
         store.events.on('updated', () => {
             updateButtonState();

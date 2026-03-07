@@ -10,6 +10,8 @@
     let store = null;
     let service = null;
     let utils = null;
+    const MULTI_ROUTE_COUNT_KEY = 'multiRouteCount';
+    const MULTI_ROUTE_ROUTES_KEY = 'multiRouteRoutes';
 
     /**
      * 初始化消息处理模块
@@ -33,8 +35,188 @@
      */
     window.IdoFront.messageActions.hasActiveGeneration = function(convId) {
         if (!convId) return false;
-        return store.state.typingConversationId === convId && !!store.state.typingMessageId;
+        if (store.state.typingConversationId === convId && !!store.state.typingMessageId) {
+            return true;
+        }
+        if (store.state.activeConversationId !== convId) {
+            return false;
+        }
+        return !!(service && typeof service.hasActiveRequest === 'function' && service.hasActiveRequest());
     };
+
+    function normalizeMultiRouteCount(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return 1;
+        return Math.max(1, Math.floor(parsed));
+    }
+
+    function normalizeMultiRouteRouteConfig(config) {
+        if (!config || typeof config !== 'object') {
+            return null;
+        }
+        const channelId = String(config.channelId || '').trim();
+        const model = String(config.model || '').trim();
+        if (!channelId || !model) {
+            return null;
+        }
+        return { channelId, model };
+    }
+
+    function resolveMultiRouteCount(conv) {
+        if (!conv || !conv.selectedChannelId) return 1;
+
+        const channel = Array.isArray(store.state.channels)
+            ? store.state.channels.find(c => c.id === conv.selectedChannelId)
+            : null;
+        if (!channel || channel.enabled === false) {
+            return 1;
+        }
+
+        const metadata = conv && conv.metadata && typeof conv.metadata === 'object' ? conv.metadata : null;
+        return normalizeMultiRouteCount(metadata ? metadata[MULTI_ROUTE_COUNT_KEY] : 1);
+    }
+
+    function resolveMultiRoutePlan(conv) {
+        const count = resolveMultiRouteCount(conv);
+        if (count <= 1) {
+            return [{ index: 1, useCurrent: true, channelId: null, model: null }];
+        }
+
+        const metadata = conv && conv.metadata && typeof conv.metadata === 'object' ? conv.metadata : null;
+        const routes = metadata && Array.isArray(metadata[MULTI_ROUTE_ROUTES_KEY])
+            ? metadata[MULTI_ROUTE_ROUTES_KEY]
+            : [];
+
+        return Array.from({ length: count }, (_, index) => {
+            if (index === 0) {
+                return { index: 1, useCurrent: true, channelId: null, model: null };
+            }
+            const override = normalizeMultiRouteRouteConfig(routes[index - 1]);
+            return {
+                index: index + 1,
+                useCurrent: !override,
+                channelId: override ? override.channelId : null,
+                model: override ? override.model : null
+            };
+        });
+    }
+
+    function updateSendButtonLoadingState() {
+        if (!context || typeof context.setSendButtonLoading !== 'function') {
+            return;
+        }
+
+        if (service && typeof service.hasActiveRequest === 'function' && service.hasActiveRequest()) {
+            context.setSendButtonLoading(true);
+            return;
+        }
+
+        const activeConv = store && typeof store.getActiveConversation === 'function'
+            ? store.getActiveConversation()
+            : null;
+        if (activeConv && store.state.typingMessageId) {
+            const activePath = store.getActivePath(activeConv.id);
+            const stillGenerating = activePath.some(m => m.id === store.state.typingMessageId);
+            context.setSendButtonLoading(stillGenerating);
+            return;
+        }
+
+        context.setSendButtonLoading(false);
+    }
+
+    async function dispatchResponses(conv, relatedUserMessageId, parentIdForNewBranch, dispatchOptions) {
+        const options = dispatchOptions && typeof dispatchOptions === 'object' ? dispatchOptions : {};
+        const plan = resolveMultiRoutePlan(conv);
+        const activePath = store.getActivePath(conv.id).slice();
+        const anchorMessageId = parentIdForNewBranch !== undefined ? parentIdForNewBranch : relatedUserMessageId;
+        const anchorIndex = anchorMessageId ? activePath.findIndex(m => m.id === anchorMessageId) : -1;
+        const pathSnapshot = anchorIndex >= 0
+            ? activePath.slice(0, anchorIndex + 1)
+            : activePath;
+        const multiRoute = window.IdoFront && window.IdoFront.multiRoute;
+
+        if (plan.length <= 1) {
+            await generateResponse(conv, relatedUserMessageId, parentIdForNewBranch, {
+                pathSnapshot,
+                routeIndex: 1,
+                clearBranchSelection: !!options.clearBranchSelection
+            });
+            return;
+        }
+
+        const group = multiRoute && typeof multiRoute.createExecutionGroup === 'function'
+            ? multiRoute.createExecutionGroup(conv.id, anchorMessageId, plan, { source: options.source || 'send' })
+            : null;
+
+        if (!group) {
+            for (const route of plan) {
+                await generateResponse(conv, relatedUserMessageId, parentIdForNewBranch, {
+                    pathSnapshot,
+                    routeIndex: route.index || 1,
+                    overrideChannelId: route.useCurrent ? null : route.channelId,
+                    overrideModel: route.useCurrent ? null : route.model
+                });
+            }
+            return;
+        }
+
+        const branchParentKey = anchorMessageId === undefined || anchorMessageId === null ? 'root' : anchorMessageId;
+        if (conv.activeBranchMap && Object.prototype.hasOwnProperty.call(conv.activeBranchMap, branchParentKey)) {
+            delete conv.activeBranchMap[branchParentKey];
+            if (typeof store._invalidateActivePathCache === 'function') {
+                store._invalidateActivePathCache(conv.id);
+            }
+            if (typeof store.persistSilent === 'function') {
+                store.persistSilent();
+            } else {
+                store.persist();
+            }
+        }
+
+        const conversationActions = window.IdoFront && window.IdoFront.conversationActions;
+        if (conversationActions && typeof conversationActions.syncUI === 'function') {
+            requestAnimationFrame(() => {
+                try {
+                    if (anchorMessageId) {
+                        conversationActions.syncUI({
+                            focusMessageId: anchorMessageId,
+                            incrementalFromParent: true,
+                            skipConversationListUpdate: true,
+                            asyncMarkdown: true
+                        });
+                    } else {
+                        conversationActions.syncUI({ asyncMarkdown: true });
+                    }
+                } catch (e) {
+                    console.warn('[MessageActions] multi-route syncUI failed:', e);
+                }
+            });
+        }
+
+        const tasks = plan.map((route, index) => {
+            const routeIndex = route.index || (index + 1);
+            const groupRoute = Array.isArray(group.routes)
+                ? group.routes.find(item => item && item.routeIndex === routeIndex)
+                : null;
+
+            return generateResponse(conv, relatedUserMessageId, parentIdForNewBranch, {
+                pathSnapshot,
+                routeIndex,
+                overrideChannelId: route.useCurrent ? null : route.channelId,
+                overrideModel: route.useCurrent ? null : route.model,
+                streamOverride: index === 0 ? undefined : false,
+                setAsCurrent: index === 0,
+                trackTyping: false,
+                keepBranchActive: false,
+                clearBranchSelection: true,
+                multiRouteGroupId: group.id,
+                multiRouteRouteId: groupRoute ? groupRoute.id : null,
+                multiRouteDetached: true
+            });
+        });
+
+        await Promise.allSettled(tasks);
+    }
 
     /**
      * 统一的 UI 渲染判断函数
@@ -51,7 +233,7 @@
         return activePath.some(m => m.id === messageId);
     }
 
-    async function buildMessagesPayloadWithToolTurns(conv, excludeMessageId, channelConfig) {
+    async function buildMessagesPayloadWithToolTurns(conv, excludeMessageId, channelConfig, sourcePath) {
         const activePersona = store.getActivePersona();
         const messagesPayload = [];
 
@@ -65,7 +247,7 @@
             });
         }
 
-        const activePath = store.getActivePath(conv.id);
+        const activePath = Array.isArray(sourcePath) ? sourcePath : store.getActivePath(conv.id);
         const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
         const attachmentDataUrlCache = new Map();
         const toolCallTypes = window.IdoFront.toolCallTypes;
@@ -223,16 +405,21 @@
         return messagesPayload;
     }
 
-    async function continueAfterToolCalls(conv, channelConfig, fromAssistantMessage) {
+    async function continueAfterToolCalls(conv, channelConfig, fromAssistantMessage, options) {
         const toolCallTypes = window.IdoFront.toolCallTypes;
         const toolRegistry = window.IdoFront.toolRegistry;
         const toolCallRenderer = window.IdoFront.toolCallRenderer;
+        const multiRoute = window.IdoFront && window.IdoFront.multiRoute;
 
         if (!toolCallTypes || !toolRegistry) return;
 
+        const continuationOptions = options && typeof options === 'object' ? options : {};
+        const trackTyping = continuationOptions.trackTyping !== false;
+        const setAsCurrent = continuationOptions.setAsCurrent !== false;
         const maxTurns = 6;
         let parent = fromAssistantMessage;
         let lastTypingMessageId = null;
+        let parentMultiRouteMeta = null;
 
         try {
             for (let turn = 0; turn < maxTurns; turn++) {
@@ -247,7 +434,24 @@
                 channelName: parent.channelName
             };
 
+            parentMultiRouteMeta = parent && parent.metadata && parent.metadata.multiRoute
+                ? parent.metadata.multiRoute
+                : null;
+            if (parentMultiRouteMeta) {
+                nextAssistant.metadata = nextAssistant.metadata || {};
+                nextAssistant.metadata.multiRoute = {
+                    groupId: parentMultiRouteMeta.groupId,
+                    routeId: parentMultiRouteMeta.routeId,
+                    routeIndex: parentMultiRouteMeta.routeIndex,
+                    rootMessageId: parentMultiRouteMeta.rootMessageId || parent.id
+                };
+            }
+
             store.addMessageToConversation(conv.id, nextAssistant, parent.id);
+
+            if (parentMultiRouteMeta && multiRoute && typeof multiRoute.adoptContinuationMessage === 'function') {
+                multiRoute.adoptContinuationMessage(conv.id, parentMultiRouteMeta.groupId, parentMultiRouteMeta.routeId, nextAssistant);
+            }
 
             if (context && context.addMessage && shouldRenderUI(conv.id, nextAssistant.id)) {
                 context.addMessage('ai', {
@@ -259,14 +463,16 @@
             }
 
             // 标记当前正在生成（避免外层 finally 清理状态）
-            store.state.isTyping = true;
-            store.state.typingConversationId = conv.id;
-            store.state.typingMessageId = nextAssistant.id;
-            lastTypingMessageId = nextAssistant.id;
-            store.persist();
+            if (trackTyping) {
+                store.state.isTyping = true;
+                store.state.typingConversationId = conv.id;
+                store.state.typingMessageId = nextAssistant.id;
+                lastTypingMessageId = nextAssistant.id;
+                store.persist();
+            }
 
             // 发送按钮进入 loading（仅当前活跃路径）
-            if (context && context.setSendButtonLoading && shouldRenderUI(conv.id, nextAssistant.id)) {
+            if (trackTyping && context && context.setSendButtonLoading && shouldRenderUI(conv.id, nextAssistant.id)) {
                 context.setSendButtonLoading(true);
             }
 
@@ -293,7 +499,9 @@
 
             const onUpdate = (data) => {
                 if (streamEnded) return;
-                if (store.state.typingMessageId !== nextAssistant.id) return;
+                if (trackTyping && store.state.typingMessageId !== nextAssistant.id) return;
+
+                parentMultiRouteMeta = nextAssistant && nextAssistant.metadata && nextAssistant.metadata.multiRoute ? nextAssistant.metadata.multiRoute : parentMultiRouteMeta;
 
                 let currentContent = '';
                 let currentReasoning = null;
@@ -369,9 +577,12 @@
                 }
 
                 if (currentMetadata) {
+                    const existingMultiRouteMeta = nextAssistant.metadata && nextAssistant.metadata.multiRoute
+                        ? nextAssistant.metadata.multiRoute
+                        : null;
                     const meta = { ...currentMetadata };
                     if (Array.isArray(meta.attachments)) delete meta.attachments;
-                    nextAssistant.metadata = meta;
+                    nextAssistant.metadata = existingMultiRouteMeta ? { ...meta, multiRoute: existingMultiRouteMeta } : meta;
                 }
 
                 if (context && shouldRenderUI(conv.id, nextAssistant.id)) {
@@ -392,6 +603,10 @@
                         context.updateLastMessage(updatePayload);
                     }
                 }
+
+                if (parentMultiRouteMeta && multiRoute && typeof multiRoute.syncRoutePreview === 'function') {
+                    multiRoute.syncRoutePreview(conv.id, parentMultiRouteMeta.groupId, parentMultiRouteMeta.routeId);
+                }
             };
 
             // 构建 payload：包含历史中的 tool call / tool result turn
@@ -400,11 +615,15 @@
             let response = null;
             try {
                 const continuationConfig = { ...channelConfig, stream: true };
-                response = await service.callAI(messagesPayload, continuationConfig, onUpdate);
+                response = await service.callAI(messagesPayload, continuationConfig, onUpdate, {
+                    requestId: nextAssistant.id,
+                    setAsCurrent
+                });
             } catch (apiError) {
                 if (apiError && apiError.name === 'AbortError') {
                     streamEnded = true;
                     fullContent = '✋ 已停止生成';
+                    nextAssistant._stoppedByAbort = true;
                     nextAssistant.content = fullContent;
                     store.persist();
 
@@ -418,6 +637,10 @@
                     }
 
                     // 停止后直接结束本轮
+                    if (parentMultiRouteMeta && multiRoute && typeof multiRoute.markRouteFinished === 'function') {
+                        multiRoute.markRouteFinished(conv.id, parentMultiRouteMeta.groupId, parentMultiRouteMeta.routeId, { status: 'stopped', currentMessageId: nextAssistant.id, messageId: nextAssistant.id, error: fullContent });
+                    }
+
                     parent = nextAssistant;
                     break;
                 }
@@ -509,9 +732,12 @@
             // 保存 metadata（剥离 attachments）
             const metadata = choice?.message?.metadata || null;
             if (metadata) {
+                const existingMultiRouteMeta = nextAssistant.metadata && nextAssistant.metadata.multiRoute
+                    ? nextAssistant.metadata.multiRoute
+                    : null;
                 const meta = { ...metadata };
                 if (Array.isArray(meta.attachments)) delete meta.attachments;
-                nextAssistant.metadata = meta;
+                nextAssistant.metadata = existingMultiRouteMeta ? { ...meta, multiRoute: existingMultiRouteMeta } : meta;
             }
 
             // 最终持久化
@@ -535,6 +761,8 @@
                 } else if (typeof context.finalizeStreamingMessage === 'function') {
                     context.finalizeStreamingMessage(stats);
                 }
+            } else if (parentMultiRouteMeta && multiRoute && typeof multiRoute.syncRoutePreview === 'function') {
+                multiRoute.syncRoutePreview(conv.id, parentMultiRouteMeta.groupId, parentMultiRouteMeta.routeId);
             }
 
             // 没有新的工具调用：结束循环
@@ -626,10 +854,15 @@
 
             store.persist();
             parent = nextAssistant;
+
+            if (parentMultiRouteMeta && multiRoute && typeof multiRoute.syncRoutePreview === 'function') {
+                multiRoute.syncRoutePreview(conv.id, parentMultiRouteMeta.groupId, parentMultiRouteMeta.routeId);
+            }
         }
+            return parent;
         } finally {
             // 清理 typing 状态（仅当本函数仍是最新生成）
-            if (lastTypingMessageId && store.state.typingMessageId === lastTypingMessageId) {
+            if (trackTyping && lastTypingMessageId && store.state.typingMessageId === lastTypingMessageId) {
                 store.state.isTyping = false;
                 store.state.typingConversationId = null;
                 store.state.typingMessageId = null;
@@ -637,16 +870,7 @@
             }
 
             // 恢复发送按钮状态
-            if (context && context.setSendButtonLoading) {
-                const activeConv = store.getActiveConversation();
-                if (activeConv && store.state.typingMessageId) {
-                    const activePath = store.getActivePath(activeConv.id);
-                    const stillGenerating = activePath.some(m => m.id === store.state.typingMessageId);
-                    context.setSendButtonLoading(stillGenerating);
-                } else {
-                    context.setSendButtonLoading(false);
-                }
-            }
+            updateSendButtonLoadingState();
         }
     }
 
@@ -654,7 +878,7 @@
      * 发送消息
      */
     window.IdoFront.messageActions.send = async function(text, attachments = null) {
-        // 在非 chat 主视图模式下，不走聊天消息管线（例如 image-gallery 等自定义主视图）
+        // 在非 chat 主视图模式下，不走聊天消息管线（供自定义主视图模式接管）
         if (context && typeof context.getCurrentMode === 'function') {
             const mode = context.getCurrentMode();
             if (mode && mode !== 'chat') {
@@ -720,7 +944,7 @@
             });
         }
 
-        await generateResponse(conv, userMessage.id);
+        await dispatchResponses(conv, userMessage.id);
     };
 
     /**
@@ -942,7 +1166,7 @@
                 }
                 
                 // 生成新的响应
-                await generateResponse(conv, newUserMessage.id);
+                await dispatchResponses(conv, newUserMessage.id);
             } else {
                 // AI 消息：如果内容或附件有变化，则创建分支
                 const isContentChanged = newContent !== originalContent;
@@ -1191,9 +1415,57 @@
             
             // 重新生成响应（generateResponse 会自动基于当前活跃路径构建上下文）
             // 传入 parentIdForNewBranch 作为新 AI 消息的父节点
-            await generateResponse(conv, relatedUserMessageId, parentIdForNewBranch);
+            await dispatchResponses(conv, relatedUserMessageId, parentIdForNewBranch, { source: 'retry', clearBranchSelection: true });
         }
     };
+
+    function resolveGenerationTarget(conv, executionOptions) {
+        const channels = Array.isArray(store.state.channels) ? store.state.channels : [];
+        const currentChannelId = conv && conv.selectedChannelId ? conv.selectedChannelId : null;
+        const currentChannel = currentChannelId
+            ? channels.find(c => c.id === currentChannelId)
+            : null;
+        const currentModel = conv && conv.selectedModel
+            ? conv.selectedModel
+            : ((currentChannel && Array.isArray(currentChannel.models) && currentChannel.models[0]) || null);
+
+        const hasExplicitOverride = !!(executionOptions && (executionOptions.overrideChannelId || executionOptions.overrideModel));
+        let requestedChannelId = executionOptions && executionOptions.overrideChannelId
+            ? executionOptions.overrideChannelId
+            : currentChannelId;
+        let channel = requestedChannelId ? channels.find(c => c.id === requestedChannelId) : null;
+        let usedFallbackCurrent = false;
+
+        if ((!channel || channel.enabled === false) && hasExplicitOverride && currentChannel && currentChannel.enabled !== false) {
+            requestedChannelId = currentChannelId;
+            channel = currentChannel;
+            usedFallbackCurrent = true;
+        }
+
+        if (!requestedChannelId) {
+            return { error: '请先在顶部选择渠道和模型' };
+        }
+        if (!channel) {
+            return { error: '所选渠道不存在，请重新选择' };
+        }
+        if (channel.enabled === false) {
+            return { error: '所选渠道已禁用，请选择其他渠道或在设置中启用该渠道' };
+        }
+
+        let selectedModel = null;
+        if (!usedFallbackCurrent && executionOptions && executionOptions.overrideModel) {
+            selectedModel = executionOptions.overrideModel;
+        } else if ((!executionOptions || !executionOptions.overrideChannelId || requestedChannelId === currentChannelId || usedFallbackCurrent) && currentModel) {
+            selectedModel = currentModel;
+        } else if (Array.isArray(channel.models) && channel.models.length > 0) {
+            selectedModel = channel.models[0];
+        }
+
+        if (!selectedModel) {
+            return { error: '所选渠道无可用模型，请重新选择' };
+        }
+        return { channel, selectedModel };
+    }
 
     /**
      * 核心响应生成逻辑
@@ -1202,10 +1474,23 @@
      * @param {string} relatedUserMessageId - 触发生成的用户消息 ID
      * @param {string} [parentIdForNewBranch] - 可选，新 AI 消息的父节点 ID（用于分支模式）
      */
-    async function generateResponse(conv, relatedUserMessageId, parentIdForNewBranch) {
+    async function generateResponse(conv, relatedUserMessageId, parentIdForNewBranch, options) {
+        const executionOptions = options && typeof options === 'object' ? options : {};
+        const multiRoute = window.IdoFront && window.IdoFront.multiRoute;
+        const multiRouteGroupId = executionOptions.multiRouteGroupId || null;
+        const multiRouteRouteId = executionOptions.multiRouteRouteId || null;
+        const isMultiRouteCandidate = !!(multiRouteGroupId && multiRouteRouteId);
         // 如果未指定 parentIdForNewBranch，使用 relatedUserMessageId（即用户消息ID）
         // 因为新的 AI 响应将作为用户消息的子节点
         const effectiveParentId = parentIdForNewBranch !== undefined ? parentIdForNewBranch : relatedUserMessageId;
+        const branchParentKey = effectiveParentId === undefined || effectiveParentId === null ? 'root' : effectiveParentId;
+        const previousSelectedBranchId = conv && conv.activeBranchMap ? conv.activeBranchMap[branchParentKey] : undefined;
+        const shouldTrackTyping = executionOptions.trackTyping !== false;
+        const keepBranchActive = executionOptions.keepBranchActive !== false;
+        const generationTarget = resolveGenerationTarget(conv, executionOptions);
+        let channel = generationTarget.channel || null;
+        let selectedModel = generationTarget.selectedModel || null;
+        const requestPath = Array.isArray(executionOptions.pathSnapshot) ? executionOptions.pathSnapshot : null;
 
         // 记录请求开始时间，用于计算持续时长
         const requestStartTime = Date.now();
@@ -1224,27 +1509,55 @@
             timestamp: new Date(now).toISOString(),
             plugin: null
         };
+
+        if (isMultiRouteCandidate) {
+            assistantMessage.metadata = assistantMessage.metadata || {};
+            assistantMessage.metadata.multiRoute = {
+                groupId: multiRouteGroupId,
+                routeId: multiRouteRouteId,
+                routeIndex: executionOptions.routeIndex || 1,
+                rootMessageId: assistantMessage.id,
+                detached: executionOptions.multiRouteDetached === true
+            };
+        }
         
         // 保存模型名和渠道名到消息中
-        if (conv.selectedModel) {
-            assistantMessage.modelName = conv.selectedModel;
+        if (selectedModel) {
+            assistantMessage.modelName = selectedModel;
         }
-        if (conv.selectedChannelId) {
-            const channel = store.state.channels && store.state.channels.find(c => c.id === conv.selectedChannelId);
-            if (channel) {
-                assistantMessage.channelName = channel.name;
-            }
+        if (channel && channel.name) {
+            assistantMessage.channelName = channel.name;
         }
         
         // 添加消息到对话（这会更新 activeBranchMap）
         store.addMessageToConversation(conv.id, assistantMessage, effectiveParentId);
+
+        if (isMultiRouteCandidate && multiRoute && typeof multiRoute.registerRouteMessage === 'function') {
+            multiRoute.registerRouteMessage(conv.id, multiRouteGroupId, multiRouteRouteId, assistantMessage);
+        }
+
+        if (!keepBranchActive && conv && conv.activeBranchMap) {
+            if (executionOptions.clearBranchSelection) {
+                delete conv.activeBranchMap[branchParentKey];
+            } else if (previousSelectedBranchId) {
+                conv.activeBranchMap[branchParentKey] = previousSelectedBranchId;
+            } else {
+                delete conv.activeBranchMap[branchParentKey];
+            }
+            if (typeof store._invalidateActivePathCache === 'function') {
+                store._invalidateActivePathCache(conv.id);
+            }
+            store.persist();
+        }
         
         // 标记当前正在生成回复的对话
         // ★ 使用 typingMessageId 作为唯一真相来源
-        store.state.isTyping = true;
-        store.state.typingConversationId = conv.id;
-        store.state.typingMessageId = assistantMessage.id;
-        store.persist();
+        if (shouldTrackTyping) {
+            store.state.isTyping = true;
+            store.state.typingConversationId = conv.id;
+            store.state.typingMessageId = assistantMessage.id;
+            store.persist();
+        }
 
         // 标记流式是否已结束，防止 setTimeout 延迟的 onUpdate 覆盖已渲染的 Markdown
         let streamEnded = false;
@@ -1260,7 +1573,7 @@
 
         // 渲染空的 AI 消息卡片 + 附着 loading（如果在活跃路径上）
         let loadingId = null;
-        if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+        if (!isMultiRouteCandidate && context && shouldRenderUI(conv.id, assistantMessage.id)) {
             // 添加空的 AI 消息卡片
             const payload = {
                 content: '',
@@ -1272,8 +1585,11 @@
             // 计算分支信息
             const msgParentId = assistantMessage.parentId === undefined || assistantMessage.parentId === null ? 'root' : assistantMessage.parentId;
             const siblings = conv.messages.filter(m => {
+                const isDetachedSibling = multiRoute && typeof multiRoute.isDetachedMessage === 'function'
+                    ? multiRoute.isDetachedMessage(m)
+                    : false;
                 const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
-                return pId === msgParentId;
+                return pId === msgParentId && !isDetachedSibling;
             }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
             
             if (siblings.length > 1) {
@@ -1299,28 +1615,9 @@
         }
 
         // 2. Prepare API Call
-        let channel = null;
-        let selectedModel = null;
-
-        // 检查对话是否已选择渠道
-        if (!conv.selectedChannelId) {
-            assistantMessage.content = '请先在顶部选择渠道和模型';
-            cleanupAndFinish('请先在顶部选择渠道和模型');
-            return;
-        }
-
-        // 查找选中的渠道
-        channel = store.state.channels.find(c => c.id === conv.selectedChannelId);
-        
-        if (!channel) {
-            assistantMessage.content = '所选渠道不存在，请重新选择';
-            cleanupAndFinish('所选渠道不存在，请重新选择');
-            return;
-        }
-
-        if (!channel.enabled) {
-            assistantMessage.content = '所选渠道已禁用，请选择其他渠道或在设置中启用该渠道';
-            cleanupAndFinish('所选渠道已禁用');
+        if (generationTarget.error) {
+            assistantMessage.content = generationTarget.error;
+            cleanupAndFinish(generationTarget.error);
             return;
         }
         
@@ -1342,26 +1639,36 @@
                     context.updateLastMessage(updatePayload);
                 }
             }
-            store.state.isTyping = false;
-            store.state.typingConversationId = null;
-            store.state.typingMessageId = null;
-            store.persist();
-            if (context && context.setSendButtonLoading) {
-                context.setSendButtonLoading(false);
+            if (store.state.typingMessageId === assistantMessage.id) {
+                store.state.isTyping = false;
+                store.state.typingConversationId = null;
+                store.state.typingMessageId = null;
             }
+            if (isMultiRouteCandidate && multiRoute && typeof multiRoute.markRouteFinished === 'function') {
+                multiRoute.markRouteFinished(conv.id, multiRouteGroupId, multiRouteRouteId, {
+                    status: 'error',
+                    currentMessageId: assistantMessage.id,
+                    messageId: assistantMessage.id,
+                    error: assistantMessage.content
+                });
+            }
+            store.persist();
+            updateSendButtonLoadingState();
         }
-
-        // 使用对话中选择的模型（已在创建消息时设置）
-        selectedModel = conv.selectedModel || channel.models?.[0];
 
         // Get active persona settings
         const activePersona = store.getActivePersona();
         
         // Build messages payload with persona context（包含 tool call / tool result turn）
-        const messagesPayload = await buildMessagesPayloadWithToolTurns(conv, assistantMessage.id, channel);
+        const messagesPayload = await buildMessagesPayloadWithToolTurns(
+            conv,
+            assistantMessage.id,
+            { ...channel, model: selectedModel },
+            requestPath
+        );
 
         // 用于请求日志（精简版），仍然基于活跃路径
-        const activePath = store.getActivePath(conv.id);
+        const activePath = Array.isArray(requestPath) ? requestPath : store.getActivePath(conv.id);
         
                 // Log Request（使用精简版，避免将大量 base64 附件写入日志导致卡顿）
                 const sanitizedMessages = [];
@@ -1410,6 +1717,7 @@
                 // 流式更新的内容
                 let fullContent = '';
                 let fullReasoning = null;
+                let finalRouteMessage = assistantMessage;
                 
                 try {
                     // 判断当前模型是否为启用思考预算的模型（暂仅识别名称中包含 gpt-5）
@@ -1418,9 +1726,12 @@
         
                     // 构建配置，按优先级合并参数：chat基础 -> 面具覆写 -> 渠道覆写 -> 会话覆写
                     const personaStream = activePersona ? activePersona.stream !== false : true;
-                    const effectiveStream = typeof conv.streamOverride === 'boolean'
-                        ? conv.streamOverride
-                        : personaStream;
+                    const streamOverride = typeof executionOptions.streamOverride === 'boolean'
+                        ? executionOptions.streamOverride
+                        : null;
+                    const effectiveStream = streamOverride !== null
+                        ? streamOverride
+                        : (typeof conv.streamOverride === 'boolean' ? conv.streamOverride : personaStream);
         
                     const channelConfig = {
                         ...channel,
@@ -1465,7 +1776,7 @@
                     return;
                 }
                 // 如果本对话已经有了新的请求（typingMessageId 不匹配），忽略旧请求
-                if (store.state.typingMessageId !== assistantMessage.id) {
+                if (shouldTrackTyping && store.state.typingMessageId !== assistantMessage.id) {
                     return;
                 }
 
@@ -1560,11 +1871,14 @@
 
                 // metadata 也可能带 attachments，这里写入 Store 前先剥离
                 if (currentMetadata) {
+                    const existingMultiRouteMeta = assistantMessage.metadata && assistantMessage.metadata.multiRoute
+                        ? assistantMessage.metadata.multiRoute
+                        : null;
                     const meta = { ...currentMetadata };
                     if (Array.isArray(meta.attachments)) {
                         delete meta.attachments;
                     }
-                    assistantMessage.metadata = meta;
+                    assistantMessage.metadata = existingMultiRouteMeta ? { ...meta, multiRoute: existingMultiRouteMeta } : meta;
                 }
                 
                 // 仅当在活跃路径上时才更新 UI
@@ -1590,6 +1904,9 @@
                         context.updateLastMessage(updatePayload);
                     }
                 }
+                if (isMultiRouteCandidate && multiRoute && typeof multiRoute.syncRoutePreview === 'function') {
+                    multiRoute.syncRoutePreview(conv.id, multiRouteGroupId, multiRouteRouteId);
+                }
                 // 流式更新时不持久化，避免频繁的 IndexedDB 写入
             };
 
@@ -1597,7 +1914,10 @@
             try {
                 const streamingEnabled = !!channelConfig.stream;
                 const streamingCallback = streamingEnabled ? onUpdate : null;
-                response = await service.callAI(messagesPayload, channelConfig, streamingCallback);
+                response = await service.callAI(messagesPayload, channelConfig, streamingCallback, {
+                    requestId: assistantMessage.id,
+                    setAsCurrent: executionOptions.setAsCurrent !== false
+                });
             } catch (apiError) {
                 // 检查是否是用户取消
                 if (apiError.name === 'AbortError') {
@@ -1606,6 +1926,7 @@
                     
                     streamEnded = true;
                     fullContent = '✋ 已停止生成';
+                    assistantMessage._stoppedByAbort = true;
 
                     // 清理加载指示器
                     if (loadingId && context && context.removeLoadingIndicator) {
@@ -1644,17 +1965,26 @@
                     // 更新消息内容为停止提示
                     assistantMessage.content = fullContent;
                     store.persist();
+
+                    if (isMultiRouteCandidate && multiRoute && typeof multiRoute.markRouteFinished === 'function') {
+                        multiRoute.markRouteFinished(conv.id, multiRouteGroupId, multiRouteRouteId, {
+                            status: 'stopped',
+                            currentMessageId: assistantMessage.id,
+                            messageId: assistantMessage.id,
+                            error: fullContent
+                        });
+                    }
                     
                     // 重置全局打字状态
-                    store.state.isTyping = false;
-                    store.state.typingConversationId = null;
-                    store.state.typingMessageId = null;
-                    store.persist();
+                    if (store.state.typingMessageId === assistantMessage.id) {
+                        store.state.isTyping = false;
+                        store.state.typingConversationId = null;
+                        store.state.typingMessageId = null;
+                        store.persist();
+                    }
                     
                     // 恢复发送按钮状态
-                    if (context && context.setSendButtonLoading) {
-                        context.setSendButtonLoading(false);
-                    }
+                    updateSendButtonLoadingState();
                     
                     // 不继续抛出错误
                     return;
@@ -1730,11 +2060,14 @@
                 if (fullReasoning) assistantMessage.reasoning = fullReasoning;
 
                 if (metadata) {
+                    const existingMultiRouteMeta = assistantMessage.metadata && assistantMessage.metadata.multiRoute
+                        ? assistantMessage.metadata.multiRoute
+                        : null;
                     const meta = { ...metadata };
                     if (Array.isArray(meta.attachments)) {
                         delete meta.attachments;
                     }
-                    assistantMessage.metadata = meta;
+                    assistantMessage.metadata = existingMultiRouteMeta ? { ...meta, multiRoute: existingMultiRouteMeta } : meta;
                 }
 
                 if (attachments && Array.isArray(attachments) && attachments.length > 0) {
@@ -1757,6 +2090,10 @@
                     } else if (typeof context.updateLastMessage === 'function') {
                         context.updateLastMessage(updatePayload);
                     }
+                }
+
+                if (isMultiRouteCandidate && multiRoute && typeof multiRoute.syncRoutePreview === 'function') {
+                    multiRoute.syncRoutePreview(conv.id, multiRouteGroupId, multiRouteRouteId);
                 }
             }
             
@@ -1897,7 +2234,13 @@
                     
                     // ========== 工具调用完成后：用新消息承接后续模型回复 ==========
                     try {
-                        await continueAfterToolCalls(conv, channelConfig, assistantMessage);
+                        const continuedMessage = await continueAfterToolCalls(conv, channelConfig, assistantMessage, {
+                            trackTyping: shouldTrackTyping,
+                            setAsCurrent: executionOptions.setAsCurrent !== false
+                        });
+                        if (continuedMessage && continuedMessage.id) {
+                            finalRouteMessage = continuedMessage;
+                        }
                     } catch (e) {
                         console.warn('[MessageActions] continueAfterToolCalls failed:', e);
                     }
@@ -2013,6 +2356,16 @@
                         });
                     }
                 }
+
+                if (isMultiRouteCandidate && multiRoute && typeof multiRoute.markRouteFinished === 'function') {
+                    multiRoute.markRouteFinished(conv.id, multiRouteGroupId, multiRouteRouteId, {
+                        status: finalRouteMessage && finalRouteMessage._stoppedByAbort ? 'stopped' : 'completed',
+                        currentMessageId: finalRouteMessage && finalRouteMessage.id ? finalRouteMessage.id : assistantMessage.id,
+                        messageId: assistantMessage.id,
+                        model: (finalRouteMessage && finalRouteMessage.modelName) || assistantMessage.modelName,
+                        channelName: (finalRouteMessage && finalRouteMessage.channelName) || assistantMessage.channelName
+                    });
+                }
             }
 
             // 精简响应日志，去除大型 base64 图片数据
@@ -2054,6 +2407,15 @@
             if (context && logId && typeof context.completeRequest === 'function') {
                 context.completeRequest(logId, 500, { error: error.message });
             }
+
+            if (isMultiRouteCandidate && multiRoute && typeof multiRoute.markRouteFinished === 'function') {
+                multiRoute.markRouteFinished(conv.id, multiRouteGroupId, multiRouteRouteId, {
+                    status: 'error',
+                    currentMessageId: assistantMessage.id,
+                    messageId: assistantMessage.id,
+                    error: errorText
+                });
+            }
         } finally {
             // 始终清理自己的 loading（无论是否是最新请求）
             // 这支持多分支/多对话并行生成
@@ -2073,17 +2435,7 @@
             }
             
             // 恢复发送按钮状态（基于当前活跃路径是否还有生成中的消息）
-            if (context && context.setSendButtonLoading) {
-                // 检查当前活跃路径是否还有正在生成的消息
-                const activeConv = store.getActiveConversation();
-                if (activeConv && store.state.typingMessageId) {
-                    const activePath = store.getActivePath(activeConv.id);
-                    const stillGenerating = activePath.some(m => m.id === store.state.typingMessageId);
-                    context.setSendButtonLoading(stillGenerating);
-                } else {
-                    context.setSendButtonLoading(false);
-                }
-            }
+            updateSendButtonLoadingState();
         }
     }
 

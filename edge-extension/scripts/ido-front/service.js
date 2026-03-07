@@ -206,6 +206,26 @@
         return true;
     };
 
+    // 取消所有活跃请求（多路回答等并发场景）
+    service.abortAllRequests = function() {
+        if (requestControllers.size === 0) {
+            return false;
+        }
+
+        requestControllers.forEach((controller) => {
+            try {
+                controller.abort();
+            } catch (e) {
+                console.warn('[Service] abortAllRequests controller.abort failed:', e);
+            }
+        });
+
+        requestControllers.clear();
+        currentAbortController = null;
+        currentRequestId = null;
+        return true;
+    };
+
     // 取消当前请求（最近一次 setAsCurrent 的请求）
     service.abortCurrentRequest = function() {
         if (currentRequestId) {
