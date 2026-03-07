@@ -1196,6 +1196,7 @@
         const group = findGroup(conv, groupId);
         const route = findRoute(group, routeId);
         const routeMessage = getMessageById(conv, route && route.messageId);
+        const selectedMessageId = route && (route.currentMessageId || route.messageId);
         if (!group || !route || !routeMessage) {
             return false;
         }
@@ -1212,17 +1213,21 @@
             embedded: true
         });
 
-        group.selectedRouteId = route.id;
-        group.selectedMessageId = route.currentMessageId || route.messageId;
-        group.focusedRouteId = route.id;
-        group.collapsed = true;
-        route.continuedAt = Date.now();
-        route.updatedAt = Date.now();
-        group.updatedAt = Date.now();
+        const updated = mutateGroup(conv.id, group.id, (liveGroup) => {
+            const liveRoute = findRoute(liveGroup, route.id);
+            if (!liveRoute) return;
+            liveGroup.selectedRouteId = liveRoute.id;
+            liveGroup.selectedMessageId = selectedMessageId;
+            liveGroup.focusedRouteId = liveRoute.id;
+            liveGroup.collapsed = true;
+            liveRoute.continuedAt = Date.now();
+        }, 'silent');
+        if (!updated) return false;
 
-        if (group.branchParentId && group.nodeMessageId) {
+        const nextGroup = findGroup(conv, group.id) || group;
+        if (nextGroup.branchParentId && nextGroup.nodeMessageId) {
             conv.activeBranchMap = conv.activeBranchMap || {};
-            conv.activeBranchMap[group.branchParentId] = group.nodeMessageId;
+            conv.activeBranchMap[nextGroup.branchParentId] = nextGroup.nodeMessageId;
         }
 
         const switched = store.switchBranch(conv.id, route.messageId, { silent: true });
@@ -1235,14 +1240,21 @@
             store._invalidateActivePathCache(conv.id);
         }
 
+        syncGroupCard(conv.id, group.id);
+
         const conversationActions = window.IdoFront && window.IdoFront.conversationActions;
         if (conversationActions && typeof conversationActions.syncUI === 'function') {
-            conversationActions.syncUI({
-                focusMessageId: group.nodeMessageId || group.anchorMessageId,
-                incrementalFromParent: true,
-                skipConversationListUpdate: true,
-                asyncMarkdown: true
-            });
+            const rerenderAnchorId = nextGroup.branchParentId || nextGroup.anchorMessageId || null;
+            if (rerenderAnchorId) {
+                conversationActions.syncUI({
+                    focusMessageId: rerenderAnchorId,
+                    incrementalFromParent: true,
+                    skipConversationListUpdate: true,
+                    asyncMarkdown: true
+                });
+            } else {
+                conversationActions.syncUI({ skipConversationListUpdate: true, asyncMarkdown: true });
+            }
         }
 
         return true;
