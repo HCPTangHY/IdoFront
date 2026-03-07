@@ -43,28 +43,37 @@
         return sliced;
     }
 
-    function isDetachedMultiRouteMessage(msg) {
-        const multiRoute = window.IdoFront && window.IdoFront.multiRoute;
-        if (multiRoute && typeof multiRoute.isDetachedMessage === 'function') {
-            return multiRoute.isDetachedMessage(msg);
-        }
-        return !!(
-            msg &&
-            msg.metadata &&
-            msg.metadata.multiRoute &&
-            msg.metadata.multiRoute.detached === true
-        );
+    function getMessageNodeBehaviors() {
+        return window.IdoFront && window.IdoFront.messageNodeBehaviors;
     }
 
-    function renderPostMessageBlocks(msg, container, conv) {
-        if (!msg || !container || !conv || msg.role !== 'user') {
-            return;
+    function shouldHideMessageInConversationTree(msg, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.shouldHideInConversationTree === 'function') {
+            return behaviors.shouldHideInConversationTree(msg, { conversation: conv }) === true;
         }
+        return false;
+    }
 
-        const multiRoute = window.IdoFront && window.IdoFront.multiRoute;
-        if (multiRoute && typeof multiRoute.renderGroupsAfterMessage === 'function') {
-            multiRoute.renderGroupsAfterMessage(msg, container, conv);
+    function shouldRenderStandaloneMessage(msg, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.shouldRenderStandalone === 'function') {
+            return behaviors.shouldRenderStandalone(msg, { conversation: conv }) !== false;
         }
+        return true;
+    }
+
+    function renderInlineMessageNode(msg, container, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.renderInline === 'function') {
+            return behaviors.renderInline(msg, container, conv, { conversation: conv });
+        }
+        return null;
+    }
+
+    function hasPathCustomRenderedNodes(messages, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        return !!(behaviors && typeof behaviors.shouldDisableDomCache === 'function' && Array.isArray(messages) && messages.some((msg) => behaviors.shouldDisableDomCache(msg, { conversation: conv })));
     }
 
     /**
@@ -328,11 +337,8 @@
             // ★ 性能优化：尝试从缓存恢复
             // 但如果有正在生成的消息，跳过缓存以确保显示最新内容
             const domCacheEnabled = store.getSetting && store.getSetting('enableDomCache') === true;
-            const multiRoute = window.IdoFront && window.IdoFront.multiRoute;
-            const hasMultiRouteGroups = multiRoute && typeof multiRoute.getGroups === 'function'
-                ? multiRoute.getGroups(active).length > 0
-                : false;
-            if (domCacheEnabled && options.useCache && !hasActiveGenerationInPath && !hasMultiRouteGroups && window.IdoFront.virtualList) {
+            const hasPathNodeOverrides = hasPathCustomRenderedNodes(renderPath, active);
+            if (domCacheEnabled && options.useCache && !hasActiveGenerationInPath && !hasPathNodeOverrides && window.IdoFront.virtualList) {
                 const restored = window.IdoFront.virtualList.restoreFromCache(
                     active.id,
                     chatStream,
@@ -421,11 +427,6 @@
             // 分支切换时使用异步渲染，减少主线程阻塞
             const useAsyncMarkdown = options.asyncMarkdown || options.incrementalFromParent || recoveryMode;
 
-            if (options.focusMessageId && options.incrementalFromParent && startIndex > 0) {
-                const anchorMsg = renderPath[startIndex - 1];
-                renderPostMessageBlocks(anchorMsg, fragment, active);
-            }
-            
             for (let idx = startIndex; idx < renderPath.length; idx++) {
                 const msg = renderPath[idx];
                 renderSingleMessage(msg, fragment, childrenMap, useAsyncMarkdown);
@@ -553,7 +554,7 @@
     function buildChildrenMap(messages) {
         const childrenMap = {};
         messages.forEach(m => {
-            if (isDetachedMultiRouteMessage(m)) return;
+            if (shouldHideMessageInConversationTree(m, store.getActiveConversation())) return;
             const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
 
             if (!childrenMap[pId]) childrenMap[pId] = [];
@@ -575,7 +576,7 @@
      */
     function renderSingleMessage(msg, container, childrenMap, asyncMarkdown) {
         // 工具响应消息不在对话流中直接渲染（结果会显示在对应 assistant 的 toolCalls 块里）
-        if (!msg || msg.hidden || msg.role === 'tool' || isDetachedMultiRouteMessage(msg)) {
+        if (!msg || msg.hidden || msg.role === 'tool' || shouldHideMessageInConversationTree(msg, store.getActiveConversation()) || !shouldRenderStandaloneMessage(msg, store.getActiveConversation())) {
             return;
         }
 
@@ -639,7 +640,7 @@
 
         const activeConv = store.getActiveConversation();
         if (activeConv) {
-            renderPostMessageBlocks(msg, container, activeConv);
+            renderInlineMessageNode(msg, container, activeConv);
         }
     }
 

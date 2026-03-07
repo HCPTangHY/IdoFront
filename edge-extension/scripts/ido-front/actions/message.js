@@ -10,8 +10,6 @@
     let store = null;
     let service = null;
     let utils = null;
-    const MULTI_ROUTE_COUNT_KEY = 'multiRouteCount';
-    const MULTI_ROUTE_ROUTES_KEY = 'multiRouteRoutes';
 
     /**
      * 初始化消息处理模块
@@ -44,61 +42,48 @@
         return !!(service && typeof service.hasActiveRequest === 'function' && service.hasActiveRequest());
     };
 
-    function normalizeMultiRouteCount(value) {
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed)) return 1;
-        return Math.max(1, Math.floor(parsed));
+    function getMultiRoutePlugin() {
+        return window.IdoFront && window.IdoFront.multiRoute;
     }
 
-    function normalizeMultiRouteRouteConfig(config) {
-        if (!config || typeof config !== 'object') {
-            return null;
-        }
-        const channelId = String(config.channelId || '').trim();
-        const model = String(config.model || '').trim();
-        if (!channelId || !model) {
-            return null;
-        }
-        return { channelId, model };
+    function getMessageNodeBehaviors() {
+        return window.IdoFront && window.IdoFront.messageNodeBehaviors;
     }
 
-    function resolveMultiRouteCount(conv) {
-        if (!conv || !conv.selectedChannelId) return 1;
-
-        const channel = Array.isArray(store.state.channels)
-            ? store.state.channels.find(c => c.id === conv.selectedChannelId)
-            : null;
-        if (!channel || channel.enabled === false) {
-            return 1;
+    function shouldHideMessageInConversationTree(message, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.shouldHideInConversationTree === 'function') {
+            return behaviors.shouldHideInConversationTree(message, { conversation: conv }) === true;
         }
-
-        const metadata = conv && conv.metadata && typeof conv.metadata === 'object' ? conv.metadata : null;
-        return normalizeMultiRouteCount(metadata ? metadata[MULTI_ROUTE_COUNT_KEY] : 1);
+        return false;
     }
 
-    function resolveMultiRoutePlan(conv) {
-        const count = resolveMultiRouteCount(conv);
-        if (count <= 1) {
-            return [{ index: 1, useCurrent: true, channelId: null, model: null }];
-        }
-
-        const metadata = conv && conv.metadata && typeof conv.metadata === 'object' ? conv.metadata : null;
-        const routes = metadata && Array.isArray(metadata[MULTI_ROUTE_ROUTES_KEY])
-            ? metadata[MULTI_ROUTE_ROUTES_KEY]
-            : [];
-
-        return Array.from({ length: count }, (_, index) => {
-            if (index === 0) {
-                return { index: 1, useCurrent: true, channelId: null, model: null };
+    function resolveExecutionPlan(conv) {
+        const multiRoute = getMultiRoutePlugin();
+        if (multiRoute && typeof multiRoute.getExecutionPlan === 'function') {
+            const plan = multiRoute.getExecutionPlan(conv);
+            if (Array.isArray(plan) && plan.length > 0) {
+                return plan;
             }
-            const override = normalizeMultiRouteRouteConfig(routes[index - 1]);
-            return {
-                index: index + 1,
-                useCurrent: !override,
-                channelId: override ? override.channelId : null,
-                model: override ? override.model : null
-            };
-        });
+        }
+
+        return [{ index: 1, useCurrent: true, channelId: null, model: null }];
+    }
+
+    function shouldIncludeMessageInRequestContext(message, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.shouldIncludeInRequestContext === 'function') {
+            return behaviors.shouldIncludeInRequestContext(message, { conversation: conv }) !== false;
+        }
+        return true;
+    }
+
+    function getMessageSendConstraint(message, conv) {
+        const behaviors = getMessageNodeBehaviors();
+        if (behaviors && typeof behaviors.getSendConstraint === 'function') {
+            return behaviors.getSendConstraint(message, { conversation: conv });
+        }
+        return null;
     }
 
     function updateSendButtonLoadingState() {
@@ -126,10 +111,11 @@
 
     async function dispatchResponses(conv, relatedUserMessageId, parentIdForNewBranch, dispatchOptions) {
         const options = dispatchOptions && typeof dispatchOptions === 'object' ? dispatchOptions : {};
-        const plan = resolveMultiRoutePlan(conv);
+        const plan = resolveExecutionPlan(conv);
         const activePath = store.getActivePath(conv.id).slice();
-        const anchorMessageId = parentIdForNewBranch !== undefined ? parentIdForNewBranch : relatedUserMessageId;
-        const anchorIndex = anchorMessageId ? activePath.findIndex(m => m.id === anchorMessageId) : -1;
+        const branchParentMessageId = parentIdForNewBranch !== undefined ? parentIdForNewBranch : relatedUserMessageId;
+        const groupAnchorMessageId = options.groupAnchorMessageId || branchParentMessageId;
+        const anchorIndex = branchParentMessageId ? activePath.findIndex(m => m.id === branchParentMessageId) : -1;
         const pathSnapshot = anchorIndex >= 0
             ? activePath.slice(0, anchorIndex + 1)
             : activePath;
@@ -145,7 +131,12 @@
         }
 
         const group = multiRoute && typeof multiRoute.createExecutionGroup === 'function'
-            ? multiRoute.createExecutionGroup(conv.id, anchorMessageId, plan, { source: options.source || 'send' })
+            ? multiRoute.createExecutionGroup(conv.id, groupAnchorMessageId, plan, {
+                source: options.source || 'send',
+                branchParentId: branchParentMessageId,
+                reuseGroupId: options.reuseMultiRouteGroupId || null,
+                replaceExistingBranchGroup: options.replaceExistingBranchGroup === true
+            })
             : null;
 
         if (!group) {
@@ -160,9 +151,10 @@
             return;
         }
 
-        const branchParentKey = anchorMessageId === undefined || anchorMessageId === null ? 'root' : anchorMessageId;
-        if (conv.activeBranchMap && Object.prototype.hasOwnProperty.call(conv.activeBranchMap, branchParentKey)) {
-            delete conv.activeBranchMap[branchParentKey];
+        const branchParentKey = branchParentMessageId === undefined || branchParentMessageId === null ? 'root' : branchParentMessageId;
+        if (conv.activeBranchMap) {
+            conv.activeBranchMap[branchParentKey] = group.nodeMessageId;
+            delete conv.activeBranchMap[group.nodeMessageId];
             if (typeof store._invalidateActivePathCache === 'function') {
                 store._invalidateActivePathCache(conv.id);
             }
@@ -177,9 +169,9 @@
         if (conversationActions && typeof conversationActions.syncUI === 'function') {
             requestAnimationFrame(() => {
                 try {
-                    if (anchorMessageId) {
+                    if (groupAnchorMessageId) {
                         conversationActions.syncUI({
-                            focusMessageId: anchorMessageId,
+                            focusMessageId: groupAnchorMessageId,
                             incrementalFromParent: true,
                             skipConversationListUpdate: true,
                             asyncMarkdown: true
@@ -199,7 +191,7 @@
                 ? group.routes.find(item => item && item.routeIndex === routeIndex)
                 : null;
 
-            return generateResponse(conv, relatedUserMessageId, parentIdForNewBranch, {
+            return generateResponse(conv, relatedUserMessageId, group.nodeMessageId, {
                 pathSnapshot,
                 routeIndex,
                 overrideChannelId: route.useCurrent ? null : route.channelId,
@@ -211,7 +203,8 @@
                 clearBranchSelection: true,
                 multiRouteGroupId: group.id,
                 multiRouteRouteId: groupRoute ? groupRoute.id : null,
-                multiRouteDetached: true
+                multiRouteDetached: false,
+                multiRouteEmbedded: true
             });
         });
 
@@ -335,6 +328,9 @@
 
             // 不持久化/不透传历史中的 tool 消息（旧数据兼容：避免重复 functionResponse）
             if (m.role === 'tool') continue;
+            if (!shouldIncludeMessageInRequestContext(m, conv)) continue;
+            // 多路候选仅在被选中并位于 activePath 时才应进入上下文；
+            // 这里 activePath 已经保证了这一点，因此无需额外过滤 embedded 消息。
 
             const msg = { role: m.role, content: m.content };
 
@@ -901,6 +897,16 @@
             }
         }
 
+        const activePathBeforeSend = conv ? store.getActivePath(conv.id) : [];
+        const activeLeaf = activePathBeforeSend.length > 0 ? activePathBeforeSend[activePathBeforeSend.length - 1] : null;
+        const sendConstraint = getMessageSendConstraint(activeLeaf, conv);
+        if (sendConstraint && sendConstraint.blocked) {
+            if (typeof Framework !== 'undefined' && Framework && typeof Framework.toast === 'function') {
+                Framework.toast(sendConstraint.message || '当前节点不可直接继续发送', 'info');
+            }
+            return;
+        }
+
         // 1. Create User Message
         const userMessage = {
             id: utils.createId('msg_u'),
@@ -1415,7 +1421,10 @@
             
             // 重新生成响应（generateResponse 会自动基于当前活跃路径构建上下文）
             // 传入 parentIdForNewBranch 作为新 AI 消息的父节点
-            await dispatchResponses(conv, relatedUserMessageId, parentIdForNewBranch, { source: 'retry', clearBranchSelection: true });
+            await dispatchResponses(conv, relatedUserMessageId, parentIdForNewBranch, {
+                source: 'retry',
+                clearBranchSelection: true
+            });
         }
     };
 
@@ -1517,7 +1526,8 @@
                 routeId: multiRouteRouteId,
                 routeIndex: executionOptions.routeIndex || 1,
                 rootMessageId: assistantMessage.id,
-                detached: executionOptions.multiRouteDetached === true
+                detached: executionOptions.multiRouteDetached === true,
+                embedded: executionOptions.multiRouteEmbedded === true
             };
         }
         
@@ -1585,11 +1595,8 @@
             // 计算分支信息
             const msgParentId = assistantMessage.parentId === undefined || assistantMessage.parentId === null ? 'root' : assistantMessage.parentId;
             const siblings = conv.messages.filter(m => {
-                const isDetachedSibling = multiRoute && typeof multiRoute.isDetachedMessage === 'function'
-                    ? multiRoute.isDetachedMessage(m)
-                    : false;
                 const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
-                return pId === msgParentId && !isDetachedSibling;
+                return pId === msgParentId && !shouldHideMessageInConversationTree(m, conv);
             }).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
             
             if (siblings.length > 1) {
@@ -1682,6 +1689,7 @@
                 }
                 // 精简实际对话消息：仅对触发本次生成的用户消息保留附件的元信息（去除 dataUrl）
                 activePath.forEach(m => {
+                    if (!m || !shouldIncludeMessageInRequestContext(m, conv)) return;
                     const out = { role: m.role, content: m.content };
                     if (m.attachments && Array.isArray(m.attachments)) {
                         if (m.id === relatedUserMessageId) {

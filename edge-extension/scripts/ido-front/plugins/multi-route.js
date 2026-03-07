@@ -2,8 +2,8 @@
  * Builtin Multi Route Plugin
  *
  * 新语义：
- * - 并 xN 生成的是「多路结果组」，用于同轮结果对比
- * - 结果在用户明确点击“继续这路”之前，不进入普通活跃分支
+ * - 并 xN 生成的是「多路分支节点」，用于同轮结果对比
+ * - 节点本身进入普通分支树；具体 route 在用户明确点击“继续这路”之前，不进入后续对话上下文
  * - 普通分支系统仍只负责编辑 / 重试 / 显式继续后的后续对话
  */
 (function() {
@@ -28,6 +28,75 @@
 
     function getUtils() {
         return window.IdoFront && window.IdoFront.utils;
+    }
+
+    function getMessageNodeBehaviors() {
+        window.IdoFront = window.IdoFront || {};
+        const existing = window.IdoFront.messageNodeBehaviors;
+        if (existing && typeof existing.registerResolver === 'function' && typeof existing.resolve === 'function') {
+            return existing;
+        }
+
+        const resolvers = new Map();
+        window.IdoFront.messageNodeBehaviors = {
+            registerResolver(id, resolver) {
+                if (!id || !resolver || typeof resolver.describe !== 'function') {
+                    return false;
+                }
+                resolvers.set(String(id), resolver);
+                return true;
+            },
+            unregisterResolver(id) {
+                if (!id) return false;
+                return resolvers.delete(String(id));
+            },
+            resolve(message, context) {
+                for (const resolver of resolvers.values()) {
+                    try {
+                        const resolved = resolver.describe(message, context || {});
+                        if (resolved && typeof resolved === 'object') {
+                            return resolved;
+                        }
+                    } catch (e) {
+                        console.warn('[message-node-behaviors] resolver failed:', e);
+                    }
+                }
+                return null;
+            },
+            shouldRenderStandalone(message, context) {
+                const resolved = this.resolve(message, context);
+                return !(resolved && resolved.renderStandalone === false);
+            },
+            shouldHideInConversationTree(message, context) {
+                const resolved = this.resolve(message, context);
+                return !!(resolved && resolved.hideInConversationTree);
+            },
+            shouldAutoSelectFirstChild(message, context) {
+                const resolved = this.resolve(message, context);
+                return !(resolved && resolved.autoSelectFirstChild === false);
+            },
+            shouldIncludeInRequestContext(message, context) {
+                const resolved = this.resolve(message, context);
+                return !(resolved && resolved.includeInRequestContext === false);
+            },
+            shouldDisableDomCache(message, context) {
+                const resolved = this.resolve(message, context);
+                return !!(resolved && resolved.disableDomCache);
+            },
+            getSendConstraint(message, context) {
+                const resolved = this.resolve(message, context);
+                return resolved && resolved.sendConstraint ? resolved.sendConstraint : null;
+            },
+            renderInline(message, container, conv, context) {
+                const resolved = this.resolve(message, context || { conversation: conv });
+                if (resolved && typeof resolved.renderInline === 'function') {
+                    return resolved.renderInline(message, container, conv, context || {});
+                }
+                return null;
+            }
+        };
+
+        return window.IdoFront.messageNodeBehaviors;
     }
 
     function createLocalId(prefix) {
@@ -295,7 +364,9 @@
                 : (routes[0] ? routes[0].id : null));
         return {
             id: String(group.id || createLocalId('mr_g')),
+            nodeMessageId: group.nodeMessageId ? String(group.nodeMessageId) : null,
             anchorMessageId: group.anchorMessageId ? String(group.anchorMessageId) : null,
+            branchParentId: group.branchParentId ? String(group.branchParentId) : (group.anchorMessageId ? String(group.anchorMessageId) : null),
             createdAt: Number.isFinite(group.createdAt) ? group.createdAt : Date.now(),
             updatedAt: Number.isFinite(group.updatedAt) ? group.updatedAt : Date.now(),
             selectedRouteId,
@@ -307,36 +378,197 @@
         };
     }
 
-    function ensureSanitizedGroups(conv) {
-        const groups = ensureGroupsArray(conv);
-        let changed = false;
-        for (let index = 0; index < groups.length; index += 1) {
-            const normalized = sanitizeGroup(groups[index]);
-            if (!normalized) continue;
-            if (groups[index] !== normalized) {
-                groups[index] = normalized;
-                changed = true;
+    function isNodeMessage(msg) {
+        return !!(
+            msg &&
+            msg.metadata &&
+            msg.metadata.multiRouteNode &&
+            typeof msg.metadata.multiRouteNode === 'object'
+        );
+    }
+
+    function isEmbeddedMessage(msg) {
+        return !!(
+            msg &&
+            msg.metadata &&
+            msg.metadata.multiRoute &&
+            msg.metadata.multiRoute.embedded === true
+        );
+    }
+
+    function migrateLegacyGroupsToNodes(conv, persistMode) {
+        const metadata = ensureMetadata(conv);
+        const legacyGroups = metadata && Array.isArray(metadata[STORAGE_GROUPS_KEY])
+            ? metadata[STORAGE_GROUPS_KEY].slice()
+            : [];
+        if (!conv || !metadata || !Array.isArray(conv.messages) || legacyGroups.length === 0) {
+            return false;
+        }
+
+        let migrated = false;
+        conv.activeBranchMap = conv.activeBranchMap || {};
+
+        legacyGroups.forEach((rawGroup) => {
+            const legacyGroup = sanitizeGroup(rawGroup);
+            if (!legacyGroup) {
+                return;
+            }
+
+            if (findGroupNodeMessage(conv, legacyGroup.id)) {
+                migrated = true;
+                return;
+            }
+
+            const branchParentId = legacyGroup.branchParentId || legacyGroup.anchorMessageId;
+            const parentMessage = getMessageById(conv, branchParentId);
+            if (!branchParentId || !parentMessage) {
+                return;
+            }
+
+            const createdAt = Number.isFinite(legacyGroup.createdAt) ? legacyGroup.createdAt : Date.now();
+            const nodeMessageId = createLocalId('msg_mr');
+            const nextGroup = sanitizeGroup(Object.assign({}, legacyGroup, {
+                nodeMessageId,
+                anchorMessageId: branchParentId,
+                branchParentId,
+                updatedAt: Number.isFinite(legacyGroup.updatedAt) ? legacyGroup.updatedAt : createdAt
+            }));
+            if (!nextGroup) {
+                return;
+            }
+
+            const nodeMessage = {
+                id: nodeMessageId,
+                role: 'assistant',
+                content: '',
+                createdAt,
+                timestamp: new Date(createdAt).toISOString(),
+                plugin: null,
+                metadata: {
+                    multiRouteNode: nextGroup
+                }
+            };
+
+            conv.messages.push(nodeMessage);
+            conv.activeBranchMap[branchParentId] = nodeMessageId;
+
+            nextGroup.routes.forEach((route) => {
+                const routeRootMessage = getMessageById(conv, route.messageId);
+                if (!routeRootMessage) {
+                    return;
+                }
+                routeRootMessage.parentId = nodeMessageId;
+                routeRootMessage.metadata = routeRootMessage.metadata && typeof routeRootMessage.metadata === 'object'
+                    ? routeRootMessage.metadata
+                    : {};
+                routeRootMessage.metadata.multiRoute = Object.assign({}, routeRootMessage.metadata.multiRoute || {}, {
+                    groupId: nextGroup.id,
+                    routeId: route.id,
+                    routeIndex: route.routeIndex,
+                    rootMessageId: route.messageId || routeRootMessage.id,
+                    detached: false,
+                    embedded: true
+                });
+            });
+
+            const selectedRoute = findRoute(nextGroup, nextGroup.selectedRouteId);
+            if (selectedRoute && (selectedRoute.currentMessageId || selectedRoute.messageId)) {
+                conv.activeBranchMap[nodeMessageId] = selectedRoute.currentMessageId || selectedRoute.messageId;
+            }
+
+            migrated = true;
+        });
+
+        if (!migrated) {
+            return false;
+        }
+
+        metadata[STORAGE_GROUPS_KEY] = [];
+        conv.messageCount = conv.messages.length;
+        conv.updatedAt = Date.now();
+        const store = getStore();
+        if (store && typeof store._invalidateActivePathCache === 'function') {
+            store._invalidateActivePathCache(conv.id);
+        }
+        if (store && persistMode !== 'none') {
+            if (persistMode === 'silent' && typeof store.persistSilent === 'function') {
+                store.persistSilent();
+            } else {
+                store.persist();
             }
         }
-        return { groups, changed };
+        return true;
+    }
+
+    function migrateAllLegacyGroups(persistMode) {
+        const store = getStore();
+        const conversations = store && store.state && Array.isArray(store.state.conversations)
+            ? store.state.conversations
+            : [];
+        let changed = false;
+        conversations.forEach((conv) => {
+            if (migrateLegacyGroupsToNodes(conv, 'none')) {
+                changed = true;
+            }
+        });
+        if (changed && store) {
+            if (persistMode === 'silent' && typeof store.persistSilent === 'function') {
+                store.persistSilent();
+            } else {
+                store.persist();
+            }
+        }
+        return changed;
+    }
+
+    function getNodeBackedGroups(conv) {
+        const targetConv = conv || getActiveConversation();
+        if (!targetConv || !Array.isArray(targetConv.messages)) {
+            return [];
+        }
+        const groups = [];
+        targetConv.messages.forEach((msg) => {
+            if (!isNodeMessage(msg)) return;
+            msg.metadata = msg.metadata && typeof msg.metadata === 'object' ? msg.metadata : {};
+            const normalized = sanitizeGroup(Object.assign({}, msg.metadata.multiRouteNode || {}, {
+                nodeMessageId: msg.id,
+                anchorMessageId: msg.parentId || (msg.metadata.multiRouteNode && msg.metadata.multiRouteNode.anchorMessageId) || null,
+                branchParentId: (msg.metadata.multiRouteNode && msg.metadata.multiRouteNode.branchParentId) || msg.parentId || null
+            }));
+            if (!normalized) return;
+            if (msg.metadata.multiRouteNode !== normalized) {
+                msg.metadata.multiRouteNode = normalized;
+            }
+            groups.push(normalized);
+        });
+        return groups.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     }
 
     function getGroups(conv) {
         const targetConv = conv || getActiveConversation();
         if (!targetConv) return [];
-        const result = ensureSanitizedGroups(targetConv);
-        return Array.isArray(result.groups) ? result.groups : [];
+        migrateLegacyGroupsToNodes(targetConv, 'silent');
+        return getNodeBackedGroups(targetConv);
     }
 
-    function getGroupsForAnchor(conv, anchorMessageId) {
-        if (!anchorMessageId) return [];
-        return getGroups(conv)
-            .filter((group) => group && group.anchorMessageId === anchorMessageId)
-            .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    function findGroupNodeMessage(conv, groupId) {
+        if (!conv || !groupId || !Array.isArray(conv.messages)) {
+            return null;
+        }
+        return conv.messages.find((msg) => (
+            isNodeMessage(msg) &&
+            msg.metadata &&
+            msg.metadata.multiRouteNode &&
+            msg.metadata.multiRouteNode.id === groupId
+        )) || null;
     }
 
     function findGroup(conv, groupId) {
         if (!conv || !groupId) return null;
+        const nodeMessage = findGroupNodeMessage(conv, groupId);
+        if (nodeMessage && nodeMessage.metadata && nodeMessage.metadata.multiRouteNode) {
+            return sanitizeGroup(Object.assign({}, nodeMessage.metadata.multiRouteNode, { nodeMessageId: nodeMessage.id }));
+        }
         const groups = getGroups(conv);
         return groups.find((item) => item && item.id === groupId) || null;
     }
@@ -347,11 +579,12 @@
     }
 
     function getCurrentRouteId(conv, group) {
-        if (!conv || !group || !Array.isArray(group.routes) || group.routes.length === 0 || !group.anchorMessageId) {
+        const nodeMessageId = group && group.nodeMessageId;
+        if (!conv || !group || !Array.isArray(group.routes) || group.routes.length === 0 || !nodeMessageId) {
             return null;
         }
         const activeBranchMap = conv.activeBranchMap || {};
-        const activeMessageId = activeBranchMap[group.anchorMessageId];
+        const activeMessageId = activeBranchMap[nodeMessageId];
         if (!activeMessageId) {
             return null;
         }
@@ -624,6 +857,34 @@
         if (!conv || !groupId || typeof updater !== 'function') {
             return false;
         }
+        const nodeMessage = findGroupNodeMessage(conv, groupId);
+        if (nodeMessage) {
+            nodeMessage.metadata = nodeMessage.metadata && typeof nodeMessage.metadata === 'object' ? nodeMessage.metadata : {};
+            const normalizedGroup = sanitizeGroup(Object.assign({}, nodeMessage.metadata.multiRouteNode || {}, {
+                nodeMessageId: nodeMessage.id,
+                anchorMessageId: nodeMessage.parentId || (nodeMessage.metadata.multiRouteNode && nodeMessage.metadata.multiRouteNode.anchorMessageId) || null,
+                branchParentId: (nodeMessage.metadata.multiRouteNode && nodeMessage.metadata.multiRouteNode.branchParentId) || nodeMessage.parentId || null
+            }));
+            if (!normalizedGroup) {
+                return false;
+            }
+            updater(normalizedGroup, conv, nodeMessage);
+            normalizedGroup.updatedAt = Date.now();
+            nodeMessage.metadata.multiRouteNode = sanitizeGroup(Object.assign({}, normalizedGroup, {
+                nodeMessageId: nodeMessage.id,
+                anchorMessageId: nodeMessage.parentId || normalizedGroup.anchorMessageId || null,
+                branchParentId: normalizedGroup.branchParentId || nodeMessage.parentId || null
+            }));
+            const store = getStore();
+            if (!store) return true;
+            if (persistMode === 'silent' && typeof store.persistSilent === 'function') {
+                store.persistSilent();
+            } else {
+                store.persist();
+            }
+            return true;
+        }
+
         const group = findGroup(conv, groupId);
         if (!group) {
             return false;
@@ -656,6 +917,10 @@
             msg.metadata.multiRoute &&
             msg.metadata.multiRoute.detached === true
         );
+    }
+
+    function isNodeBackedGroup(group) {
+        return !!(group && group.nodeMessageId);
     }
 
     function getRouteDisplayMessage(conv, route) {
@@ -915,9 +1180,10 @@
     }
 
     function getRouteActiveState(conv, group, route) {
-        if (!conv || !group || !route || !route.messageId) return false;
+        const nodeMessageId = group && group.nodeMessageId;
+        if (!conv || !group || !route || !route.messageId || !nodeMessageId) return false;
         const activeBranchMap = conv.activeBranchMap || {};
-        return activeBranchMap[group.anchorMessageId] === route.messageId;
+        return activeBranchMap[nodeMessageId] === route.messageId;
     }
 
     function continueRoute(groupId, routeId, convId) {
@@ -942,7 +1208,8 @@
             routeId: route.id,
             routeIndex: route.routeIndex,
             rootMessageId: route.messageId,
-            detached: false
+            detached: false,
+            embedded: true
         });
 
         group.selectedRouteId = route.id;
@@ -953,16 +1220,25 @@
         route.updatedAt = Date.now();
         group.updatedAt = Date.now();
 
+        if (group.branchParentId && group.nodeMessageId) {
+            conv.activeBranchMap = conv.activeBranchMap || {};
+            conv.activeBranchMap[group.branchParentId] = group.nodeMessageId;
+        }
+
         const switched = store.switchBranch(conv.id, route.messageId, { silent: true });
         if (!switched) {
             store.persist();
             return false;
         }
 
+        if (typeof store._invalidateActivePathCache === 'function') {
+            store._invalidateActivePathCache(conv.id);
+        }
+
         const conversationActions = window.IdoFront && window.IdoFront.conversationActions;
         if (conversationActions && typeof conversationActions.syncUI === 'function') {
             conversationActions.syncUI({
-                focusMessageId: group.anchorMessageId,
+                focusMessageId: group.nodeMessageId || group.anchorMessageId,
                 incrementalFromParent: true,
                 skipConversationListUpdate: true,
                 asyncMarkdown: true
@@ -1455,6 +1731,90 @@
         insertAfter.insertAdjacentElement('afterend', groupEl);
     }
 
+    function ensureNodeGroupHost(messageCard) {
+        if (!messageCard) return null;
+        const container = messageCard.querySelector('.ido-message__container');
+        if (!container) return null;
+        messageCard.classList.add('ido-message--multiroute');
+        const content = container.querySelector('.ido-message__content');
+        if (content) {
+            content.hidden = true;
+        }
+        let host = container.querySelector('.ido-multiroute-node-host');
+        if (!host) {
+            host = document.createElement('div');
+            host.className = 'ido-multiroute-node-host';
+            container.appendChild(host);
+        }
+        return host;
+    }
+
+    function renderGroupIntoMessageCard(messageCard, conv, group) {
+        const host = ensureNodeGroupHost(messageCard);
+        if (!host) return null;
+        let groupEl = host.querySelector(`[data-multiroute-group-id="${group.id}"]`);
+        if (!groupEl) {
+            groupEl = createGroupCard(conv, group);
+            host.appendChild(groupEl);
+        }
+        updateGroupCard(groupEl, conv, group);
+        return groupEl;
+    }
+
+    function renderMessageNode(message, container, conv) {
+        if (!isNodeMessage(message)) {
+            return null;
+        }
+        const group = sanitizeGroup(Object.assign({}, message.metadata.multiRouteNode || {}, {
+            nodeMessageId: message.id,
+            anchorMessageId: message.parentId || null,
+            branchParentId: (message.metadata.multiRouteNode && message.metadata.multiRouteNode.branchParentId) || message.parentId || null
+        }));
+        if (!group) {
+            return null;
+        }
+        const scope = container && typeof container.querySelector === 'function' ? container : document;
+        const messageCard = scope.querySelector(`[data-message-id="${message.id}"]`) || document.querySelector(`[data-message-id="${message.id}"]`);
+        if (!messageCard) {
+            return null;
+        }
+        return renderGroupIntoMessageCard(messageCard, conv || getActiveConversation(), group);
+    }
+
+    function describeMultiRouteMessageBehavior(message) {
+        if (isDetachedMessage(message)) {
+            return {
+                hideInConversationTree: true,
+                renderStandalone: false,
+                includeInRequestContext: false
+            };
+        }
+
+        if (isEmbeddedMessage(message)) {
+            return {
+                renderStandalone: false
+            };
+        }
+
+        if (!isNodeMessage(message)) {
+            return null;
+        }
+
+        const group = sanitizeGroup(Object.assign({}, message.metadata.multiRouteNode || {}, {
+            nodeMessageId: message.id,
+            anchorMessageId: message.parentId || null,
+            branchParentId: (message.metadata.multiRouteNode && message.metadata.multiRouteNode.branchParentId) || message.parentId || null
+        }));
+
+        return {
+            autoSelectFirstChild: false,
+            includeInRequestContext: false,
+            disableDomCache: true,
+            sendConstraint: (!group || !group.selectedRouteId) ? { blocked: true, message: '请先在多路结果里选择要继续的一路' } : null,
+            renderInline: (targetMessage, container, conv) => renderMessageNode(targetMessage || message, container, conv)
+        };
+    }
+
     function ensureGroupVisible(convId, groupId) {
         const store = getStore();
         const conv = getConversationById(convId);
@@ -1470,6 +1830,14 @@
         }
 
         const group = findGroup(conv, groupId);
+        if (group && isNodeBackedGroup(group) && group.nodeMessageId) {
+            const messageCard = chatStream.querySelector(`[data-message-id="${group.nodeMessageId}"]`);
+            if (!messageCard) {
+                return null;
+            }
+            return renderGroupIntoMessageCard(messageCard, conv, group);
+        }
+
         if (!group || !group.anchorMessageId) {
             return null;
         }
@@ -1523,45 +1891,122 @@
         const currentChannel = getChannelById(conv.selectedChannelId);
         const currentChannelName = currentChannel ? currentChannel.name : '';
         const currentModel = conv.selectedModel || '';
-        const group = {
-            id: createLocalId('mr_g'),
+        const groups = getGroups(conv);
+        const source = options && options.source ? String(options.source) : 'send';
+        const branchParentId = options && options.branchParentId ? String(options.branchParentId) : String(anchorMessageId);
+        const reuseGroupId = options && options.reuseGroupId ? String(options.reuseGroupId) : '';
+        let reusableGroup = reuseGroupId
+            ? groups.find((item) => item && item.id === reuseGroupId)
+            : null;
+
+        if (!reusableGroup && options && options.replaceExistingBranchGroup) {
+            reusableGroup = groups.find((item) => item && (item.branchParentId || item.anchorMessageId) === branchParentId) || null;
+        }
+
+        let nodeMessage = reusableGroup && reusableGroup.nodeMessageId
+            ? getMessageById(conv, reusableGroup.nodeMessageId)
+            : null;
+
+        if (!nodeMessage) {
+            nodeMessage = {
+                id: createLocalId('msg_mr'),
+                role: 'assistant',
+                content: '',
+                createdAt: now,
+                timestamp: new Date(now).toISOString(),
+                plugin: null,
+                metadata: {}
+            };
+            const store = getStore();
+            if (!store || typeof store.addMessageToConversation !== 'function') {
+                return null;
+            }
+            store.addMessageToConversation(conv.id, nodeMessage, branchParentId);
+        } else {
+            nodeMessage.parentId = branchParentId;
+            nodeMessage.content = '';
+            nodeMessage.metadata = nodeMessage.metadata && typeof nodeMessage.metadata === 'object' ? nodeMessage.metadata : {};
+        }
+
+        if (options && options.replaceExistingBranchGroup) {
+            const removableChildren = Array.isArray(conv.messages)
+                ? conv.messages.filter((msg) => msg && msg.parentId === nodeMessage.id)
+                : [];
+            removableChildren.forEach((child) => {
+                const store = getStore();
+                if (store && typeof store.deleteMessage === 'function') {
+                    store.deleteMessage(conv.id, child.id);
+                }
+            });
+
+            conv.activeBranchMap = conv.activeBranchMap || {};
+            delete conv.activeBranchMap[nodeMessage.id];
+            conv.activeBranchMap[branchParentId] = nodeMessage.id;
+            const store = getStore();
+            if (store && typeof store._invalidateActivePathCache === 'function') {
+                store._invalidateActivePathCache(conv.id);
+            }
+        }
+
+        const reusableRoutes = reusableGroup && Array.isArray(reusableGroup.routes)
+            ? reusableGroup.routes
+            : [];
+        const routes = plan.map((item, index) => {
+            const routeIndex = Number.isFinite(item && item.index) ? item.index : (index + 1);
+            const existingRoute = reusableRoutes.find((route) => route && route.routeIndex === routeIndex) || null;
+            const channel = item && item.useCurrent === false ? getChannelById(item.channelId) : currentChannel;
+            const channelName = channel ? channel.name : (item && item.useCurrent === false ? '' : currentChannelName);
+            const model = item && item.useCurrent === false
+                ? String(item.model || '')
+                : String(currentModel || item && item.model || '');
+            return sanitizeRoute({
+                id: existingRoute && existingRoute.id ? existingRoute.id : createLocalId('mr_r'),
+                routeIndex,
+                channelId: item && item.useCurrent === false ? item.channelId : conv.selectedChannelId,
+                channelName,
+                model,
+                useCurrent: !(item && item.useCurrent === false),
+                messageId: null,
+                currentMessageId: null,
+                status: 'pending',
+                error: '',
+                createdAt: existingRoute && Number.isFinite(existingRoute.createdAt) ? existingRoute.createdAt : now,
+                updatedAt: now,
+                continuedAt: null
+            }, routeIndex);
+        });
+
+        const nextGroup = sanitizeGroup({
+            id: reusableGroup && reusableGroup.id ? reusableGroup.id : createLocalId('mr_g'),
+            nodeMessageId: nodeMessage.id,
             anchorMessageId,
-            createdAt: now,
+            branchParentId,
+            createdAt: reusableGroup && Number.isFinite(reusableGroup.createdAt) ? reusableGroup.createdAt : now,
             updatedAt: now,
             selectedRouteId: null,
             selectedMessageId: null,
-            source: options && options.source ? String(options.source) : 'send',
-            routes: plan.map((item, index) => {
-                const routeIndex = Number.isFinite(item && item.index) ? item.index : (index + 1);
-                const channel = item && item.useCurrent === false ? getChannelById(item.channelId) : currentChannel;
-                const channelName = channel ? channel.name : (item && item.useCurrent === false ? '' : currentChannelName);
-                const model = item && item.useCurrent === false
-                    ? String(item.model || '')
-                    : String(currentModel || item && item.model || '');
-                return sanitizeRoute({
-                    id: createLocalId('mr_r'),
-                    routeIndex,
-                    channelId: item && item.useCurrent === false ? item.channelId : conv.selectedChannelId,
-                    channelName,
-                    model,
-                    useCurrent: !(item && item.useCurrent === false),
-                    messageId: null,
-                    currentMessageId: null,
-                    status: 'pending',
-                    error: '',
-                    createdAt: now,
-                    updatedAt: now
-                }, routeIndex);
-            })
-        };
+            focusedRouteId: null,
+            collapsed: false,
+            source,
+            routes
+        });
 
-        const groups = ensureGroupsArray(conv);
-        groups.push(group);
+        if (!nextGroup) {
+            return null;
+        }
+
+        nodeMessage.metadata = nodeMessage.metadata && typeof nodeMessage.metadata === 'object' ? nodeMessage.metadata : {};
+        nodeMessage.metadata.multiRouteNode = nextGroup;
+        nodeMessage.hidden = false;
+
         const store = getStore();
         if (store) {
+            if (conv.activeBranchMap) {
+                conv.activeBranchMap[branchParentId] = nodeMessage.id;
+            }
             store.persist();
         }
-        return group;
+        return nextGroup;
     }
 
     function registerRouteMessage(convId, groupId, routeId, message) {
@@ -1615,19 +2060,6 @@
             syncGroupCard(convId, groupId);
         }
         return success;
-    }
-
-    function renderGroupsAfterMessage(msg, container, conv) {
-        if (!msg || !container || !conv || msg.role !== 'user' || !msg.id) {
-            return;
-        }
-        const groups = getGroupsForAnchor(conv, msg.id);
-        if (!groups.length) {
-            return;
-        }
-        groups.forEach((group) => {
-            container.appendChild(createGroupCard(conv, group));
-        });
     }
 
     function updateChipState() {
@@ -1882,12 +2314,10 @@
     window.IdoFront.multiRoute.getExecutionCount = getExecutionCount;
     window.IdoFront.multiRoute.getExecutionPlan = getExecutionPlan;
     window.IdoFront.multiRoute.getGroups = getGroups;
-    window.IdoFront.multiRoute.getGroupsForAnchor = getGroupsForAnchor;
     window.IdoFront.multiRoute.createExecutionGroup = createExecutionGroup;
     window.IdoFront.multiRoute.registerRouteMessage = registerRouteMessage;
     window.IdoFront.multiRoute.adoptContinuationMessage = adoptContinuationMessage;
     window.IdoFront.multiRoute.markRouteFinished = markRouteFinished;
-    window.IdoFront.multiRoute.renderGroupsAfterMessage = renderGroupsAfterMessage;
     window.IdoFront.multiRoute.ensureGroupVisible = ensureGroupVisible;
     window.IdoFront.multiRoute.syncGroupCard = syncGroupCard;
     window.IdoFront.multiRoute.syncRoutePreview = syncRoutePreview;
@@ -1895,6 +2325,14 @@
     window.IdoFront.multiRoute.focusGroupRoute = focusGroupRoute;
     window.IdoFront.multiRoute.setGroupCollapsed = setGroupCollapsed;
     window.IdoFront.multiRoute.isDetachedMessage = isDetachedMessage;
+    window.IdoFront.multiRoute.isEmbeddedMessage = isEmbeddedMessage;
+    window.IdoFront.multiRoute.isNodeMessage = isNodeMessage;
+    window.IdoFront.multiRoute.migrateAllLegacyGroups = migrateAllLegacyGroups;
+    window.IdoFront.multiRoute.migrateLegacyGroupsToNodes = migrateLegacyGroupsToNodes;
+    window.IdoFront.multiRoute.renderMessageNode = renderMessageNode;
+
+    getMessageNodeBehaviors().registerResolver(PLUGIN_ID, { describe: describeMultiRouteMessageBehavior });
+    migrateAllLegacyGroups('silent');
 
     registerPlugin(PLUGIN_SLOT, PLUGIN_ID, {
         meta: {
@@ -1911,6 +2349,7 @@
                 store.events.on('updated', handleStoreUpdated);
                 storeSubscribed = true;
             }
+            migrateAllLegacyGroups('silent');
         },
         render: function(api) {
             const chip = document.createElement('button');

@@ -902,6 +902,14 @@
    多路结果组 (Multi Route Group)
    ======================================== */
 
+.ido-multiroute-node-host {
+    margin-top: 4px;
+}
+
+.ido-message--multiroute .ido-multiroute-group {
+    margin-bottom: 0;
+}
+
 .ido-multiroute-group {
     margin: 0 0 var(--ido-spacing-lg);
     padding: 14px;

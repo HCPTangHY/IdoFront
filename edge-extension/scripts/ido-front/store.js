@@ -1018,8 +1018,7 @@
                 reasoningEffort: defaultReasoningEffort,
                 metadata: {
                     multiRouteCount: 1,
-                    multiRouteRoutes: [],
-                    multiRouteGroups: []
+                    multiRouteRoutes: []
                 }
             };
             this.state.conversations.unshift(conversation);
@@ -1448,13 +1447,24 @@
 
         // ==================== 分支管理方法 ====================
 
-        _isDetachedMultiRouteMessage(msg) {
-            return !!(
-                msg &&
-                msg.metadata &&
-                msg.metadata.multiRoute &&
-                msg.metadata.multiRoute.detached === true
-            );
+        _getMessageNodeBehaviors() {
+            return window.IdoFront && window.IdoFront.messageNodeBehaviors;
+        },
+
+        _shouldHideInConversationTree(message, conv) {
+            const behaviors = this._getMessageNodeBehaviors();
+            if (behaviors && typeof behaviors.shouldHideInConversationTree === 'function') {
+                return behaviors.shouldHideInConversationTree(message, { conversation: conv }) === true;
+            }
+            return false;
+        },
+
+        _shouldAutoSelectFirstChild(parentMessage, conv) {
+            const behaviors = this._getMessageNodeBehaviors();
+            if (behaviors && typeof behaviors.shouldAutoSelectFirstChild === 'function') {
+                return behaviors.shouldAutoSelectFirstChild(parentMessage, { conversation: conv }) !== false;
+            }
+            return true;
         },
 
         /**
@@ -1492,6 +1502,9 @@
                 }
                 childrenMap[pId].push(msg);
             });
+
+            const messageMap = new Map();
+            conv.messages.forEach(msg => messageMap.set(msg.id, msg));
             
             // 预排序所有分支
             for (const key in childrenMap) {
@@ -1511,20 +1524,25 @@
                     break;
                 }
                 const children = childrenMap[currentParentId];
-                const visibleChildren = children.filter(child => !this._isDetachedMultiRouteMessage(child));
+                const visibleChildren = children.filter(child => !this._shouldHideInConversationTree(child, conv));
+                const parentMessage = currentParentId === 'root' ? null : (messageMap.get(currentParentId) || null);
                 let selectedChild = null;
                 
                 // 查找 activeBranchMap 中选中的子节点
                 const selectedId = conv.activeBranchMap[currentParentId];
                 if (selectedId) {
                     const maybeSelected = children.find(c => c.id === selectedId);
-                    if (maybeSelected && !this._isDetachedMultiRouteMessage(maybeSelected)) {
+                    if (maybeSelected && !this._shouldHideInConversationTree(maybeSelected, conv)) {
                         selectedChild = maybeSelected;
                     }
                 }
                 
                 // 如果没有选中或选中的不存在，默认选择第一个（已排序）
                 if (!selectedChild) {
+                    if (parentMessage && this._shouldAutoSelectFirstChild(parentMessage, conv) === false) {
+                        break;
+                    }
+
                     if (visibleChildren.length === 0) {
                         break;
                     }
@@ -1586,7 +1604,7 @@
             // 找到所有具有相同 parentId 的消息
             const siblings = conv.messages.filter(m => {
                 const pId = m.parentId === undefined || m.parentId === null ? 'root' : m.parentId;
-                return pId === parentId && !this._isDetachedMultiRouteMessage(m);
+                return pId === parentId && !this._shouldHideInConversationTree(m, conv);
             });
             
             // 按创建时间排序
@@ -1623,7 +1641,7 @@
             const targetMsg = conv.messages.find(m => m.id === msgId);
             if (!targetMsg) return false;
 
-            if (this._isDetachedMultiRouteMessage(targetMsg)) {
+            if (this._shouldHideInConversationTree(targetMsg, conv)) {
                 return false;
             }
             
