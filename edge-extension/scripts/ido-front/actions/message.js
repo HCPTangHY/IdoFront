@@ -1016,10 +1016,25 @@
         const attachmentList = document.createElement('div');
         attachmentList.className = 'message-edit-attachment-list';
 
+        const fallbackAcceptedFileTypes = [
+            'image/*',
+            'application/pdf',
+            '.pdf',
+            'text/*',
+            'application/json',
+            'application/xml',
+            'application/javascript',
+            'application/x-javascript',
+            'application/typescript',
+            'application/x-typescript',
+            'application/x-yaml',
+            'application/yaml',
+            '.txt,.md,.markdown,.json,.xml,.html,.htm,.csv,.tsv,.log,.yaml,.yml,.toml,.ini,.cfg,.conf,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.sql,.sh,.bat,.ps1'
+        ].join(',');
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
         fileInput.multiple = true;
-        fileInput.accept = 'image/*';
+        fileInput.accept = (window.IdoFront && window.IdoFront.fileUpload && typeof window.IdoFront.fileUpload.getAcceptedFileTypes === 'function') ? window.IdoFront.fileUpload.getAcceptedFileTypes() : fallbackAcceptedFileTypes;
         fileInput.style.display = 'none';
 
         const renderAttachments = () => {
@@ -1037,22 +1052,40 @@
 
         // 支持粘贴图片到编辑态（与底部输入框体验一致）
         textarea.addEventListener('paste', async (e) => {
-            const items = e.clipboardData?.items;
-            if (!items || items.length === 0) return;
+            const clipboardData = e.clipboardData;
+            if (!clipboardData) return;
 
-            const images = [];
+            // 1. 处理超长文本粘贴
+            const text = clipboardData.getData('text/plain');
+            if (text && text.length >= 12 * 1024) {
+                e.preventDefault();
+                const fileName = `pasted-text-${Date.now().toString(36)}.txt`;
+                const file = new File([text], fileName, { type: 'text/plain' });
+                editingAttachments.push({
+                    name: file.name,
+                    type: file.type,
+                    size: file.size,
+                    file: file
+                });
+                renderAttachments();
+                return;
+            }
+
+            // 2. 处理图片粘贴
+            const items = clipboardData.items;
+            const files = [];
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
                 if (item.type && item.type.startsWith('image/')) {
                     const file = item.getAsFile();
-                    if (file) images.push(file);
+                    if (file) files.push(file);
                 }
             }
 
-            if (images.length === 0) return;
+            if (files.length === 0) return;
             e.preventDefault();
 
-            for (const file of images) {
+            for (const file of files) {
                 // 10MB 限制，与底部上传一致
                 if (file.size > 10 * 1024 * 1024) {
                     alert(`文件 ${file.name} 超过10MB限制`);

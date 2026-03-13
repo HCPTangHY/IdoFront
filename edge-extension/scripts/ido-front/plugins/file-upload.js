@@ -9,6 +9,25 @@
     let context = null;
     let store = null;
     let attachedFiles = []; // 当前附加的文件列表
+    const SUPPORTED_ATTACHMENT_ACCEPT = [
+        'image/*',
+        'application/pdf',
+        '.pdf',
+        'text/*',
+        'application/json',
+        'application/xml',
+        'application/javascript',
+        'application/x-javascript',
+        'application/typescript',
+        'application/x-typescript',
+        'application/x-yaml',
+        'application/yaml',
+        '.txt,.md,.markdown,.json,.xml,.html,.htm,.csv,.tsv,.log,.yaml,.yml,.toml,.ini,.cfg,.conf,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.sql,.sh,.bat,.ps1'
+    ].join(',');
+
+    window.IdoFront.fileUpload.getAcceptedFileTypes = function() {
+        return SUPPORTED_ATTACHMENT_ACCEPT;
+    };
 
     /**
      * 初始化文件上传插件
@@ -58,7 +77,7 @@
                 const fileInput = document.createElement('input');
                 fileInput.type = 'file';
                 fileInput.multiple = true;
-                fileInput.accept = 'image/*,application/pdf,.txt,.doc,.docx';
+                fileInput.accept = SUPPORTED_ATTACHMENT_ACCEPT;
                 
                 fileInput.onchange = (e) => {
                     const files = Array.from(e.target.files);
@@ -117,27 +136,42 @@
         if (!userInput) return;
 
         userInput.addEventListener('paste', async (e) => {
-            const items = e.clipboardData?.items;
-            if (!items) return;
+            const clipboardData = e.clipboardData;
+            if (!clipboardData) return;
 
-            const imageFiles = [];
+            // 1. 处理超长文本粘贴 (阈值 12KB)
+            const text = clipboardData.getData('text/plain');
+            const TEXT_FILE_THRESHOLD = 12 * 1024;
+
+            if (text && text.length >= TEXT_FILE_THRESHOLD) {
+                e.preventDefault();
+                const blob = new Blob([text], { type: 'text/plain' });
+                const file = new File([blob], `pasted-text-${Date.now().toString(36)}.txt`, { type: 'text/plain' });
+                
+                // 提示用户已转为附件
+                if (window.Framework && typeof window.Framework.toast === 'function') {
+                    window.Framework.toast('粘贴文本过长，已自动转换为附件', 'info');
+                }
+                
+                handleFiles([file]);
+                return;
+            }
+
+            // 2. 处理图片粘贴
+            const items = clipboardData.items;
+            const files = [];
             
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
-                
-                // 检查是否为图片
                 if (item.type.startsWith('image/')) {
-                    e.preventDefault(); // 阻止默认粘贴行为
-                    
+                    e.preventDefault();
                     const file = item.getAsFile();
-                    if (file) {
-                        imageFiles.push(file);
-                    }
+                    if (file) files.push(file);
                 }
             }
 
-            if (imageFiles.length > 0) {
-                handleFiles(imageFiles);
+            if (files.length > 0) {
+                handleFiles(files);
             }
         });
     }

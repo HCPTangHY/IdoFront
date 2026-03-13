@@ -51,6 +51,66 @@
         return m ? normalizeMimeType(m[1]) : '';
     }
 
+    const TEXT_LIKE_MIME_TYPES = new Set([
+        'application/json',
+        'application/xml',
+        'application/xhtml+xml',
+        'application/javascript',
+        'application/x-javascript',
+        'application/typescript',
+        'application/x-typescript',
+        'application/x-yaml',
+        'application/yaml'
+    ]);
+
+    const TEXT_LIKE_EXTENSIONS = [
+        '.txt',
+        '.md',
+        '.markdown',
+        '.json',
+        '.xml',
+        '.html',
+        '.htm',
+        '.csv',
+        '.tsv',
+        '.log',
+        '.yaml',
+        '.yml',
+        '.toml',
+        '.ini',
+        '.cfg',
+        '.conf',
+        '.js',
+        '.ts',
+        '.jsx',
+        '.tsx',
+        '.py',
+        '.java',
+        '.c',
+        '.cpp',
+        '.h',
+        '.hpp',
+        '.cs',
+        '.go',
+        '.rs',
+        '.rb',
+        '.php',
+        '.sql',
+        '.sh',
+        '.bat',
+        '.ps1'
+    ];
+
+    function isTextLikeAttachment(type, name) {
+        const t = normalizeMimeType(type);
+        if (t && t.startsWith('text/')) return true;
+        if (t && TEXT_LIKE_MIME_TYPES.has(t)) return true;
+        if (!name || typeof name !== 'string') return false;
+        const n = name.trim().toLowerCase();
+        if (!n) return false;
+        return TEXT_LIKE_EXTENSIONS.some(ext => n.endsWith(ext));
+    }
+
     async function dataUrlToBlob(dataUrl) {
         // 优先用 fetch(data:)，Chromium 下通常更快且更省内存
         try {
@@ -431,21 +491,24 @@
      * 支持输入：
      * - 已是 ref：{ id, name, type, size }
      * - fileUpload 产生：{ file, dataUrl, name, type, size }
+     * - 编辑态/兼容路径：{ blob, name, type, size }
      * - 仅 dataUrl：{ dataUrl, name, type, size }
      */
     async function normalizeAttachmentForState(att, options) {
         if (!att || typeof att !== 'object') return null;
 
+        const rawBlob = att.file instanceof Blob ? att.file : (att.blob instanceof Blob ? att.blob : null);
+
         // 已经是 ref（无 dataUrl / file 等大字段）
-        if (att.id && !att.dataUrl && !att.file) {
+        if (att.id && !att.dataUrl && !rawBlob) {
             return sanitizeRef(att);
         }
 
         const opt = options && typeof options === 'object' ? options : {};
 
-        const name = pickString(att.name, att.file && att.file.name ? att.file.name : 'attachment');
+        const name = pickString(att.name, rawBlob && rawBlob.name ? rawBlob.name : 'attachment');
         const type = normalizeMimeType(
-            pickString(att.type, att.file && att.file.type ? att.file.type : extractMimeFromDataUrl(att.dataUrl))
+            pickString(att.type, rawBlob && rawBlob.type ? rawBlob.type : extractMimeFromDataUrl(att.dataUrl))
         );
         const source = pickString(att.source, opt.source);
 
@@ -457,12 +520,12 @@
         // 对图片：优先用 dataUrl（因为可能已经做过格式转换/尺寸优化）
         const isImage = type && type.startsWith('image/');
 
-        if (typeof att.dataUrl === 'string' && att.dataUrl.startsWith('data:') && (isImage || !att.file)) {
+        if (typeof att.dataUrl === 'string' && att.dataUrl.startsWith('data:') && (isImage || !rawBlob)) {
             return await saveDataUrl(att.dataUrl, meta);
         }
 
-        if (att.file instanceof Blob) {
-            return await saveBlob(att.file, meta);
+        if (rawBlob instanceof Blob) {
+            return await saveBlob(rawBlob, meta);
         }
 
         if (typeof att.dataUrl === 'string' && att.dataUrl.startsWith('data:')) {
@@ -509,11 +572,30 @@
 
         for (const a of attachments) {
             if (!a) continue;
+
+            const name = pickString(a.name, '');
             const type = normalizeMimeType(pickString(a.type, ''));
-            // 支持图片和 PDF 文件
+
+            // 支持图片、PDF、文本文件
             const isImage = type && type.startsWith('image/');
             const isPdf = type === 'application/pdf';
-            if (type && !isImage && !isPdf) continue;
+            const isText = isTextLikeAttachment(type, name);
+
+            if (!isImage && !isPdf && !isText) continue;
+
+            if (isText) {
+                // 对于文本文件，也确保转换为 dataUrl 以便适配器使用内联数据
+                let blob = a.file instanceof Blob ? a.file : (a.blob instanceof Blob ? a.blob : null);
+                if (!blob && a.id) {
+                    // eslint-disable-next-line no-await-in-loop
+                    blob = await getBlob(String(a.id));
+                }
+
+                if (blob instanceof Blob && !a.dataUrl) {
+                    // eslint-disable-next-line no-await-in-loop
+                    a.dataUrl = await blobToDataUrl(blob);
+                }
+            }
 
             let dataUrl = null;
             if (typeof a.dataUrl === 'string' && a.dataUrl.startsWith('data:')) {
@@ -529,9 +611,10 @@
                         cache.set(key, dataUrl);
                     }
                 }
-            } else if (a.file instanceof Blob) {
+            } else {
+                const blob = a.file instanceof Blob ? a.file : (a.blob instanceof Blob ? a.blob : null);
                 // eslint-disable-next-line no-await-in-loop
-                dataUrl = await blobToDataUrl(a.file);
+                if (blob) dataUrl = await blobToDataUrl(blob);
             }
 
             if (!dataUrl) continue;
@@ -540,7 +623,7 @@
             out.push({
                 dataUrl,
                 type: payloadType,
-                name: pickString(a.name, 'image'),
+                name: name || 'image',
                 size: typeof a.size === 'number' ? a.size : undefined,
                 source: a.source,
                 id: a.id

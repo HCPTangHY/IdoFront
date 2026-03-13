@@ -1033,8 +1033,9 @@ const FrameworkMessages = (function() {
     function createAttachmentsContainer(attachments) {
         const imageAttachments = attachments.filter(a => a && a.type && a.type.startsWith('image/'));
         const pdfAttachments = attachments.filter(a => a && a.type === 'application/pdf');
+        const fileAttachments = attachments.filter(a => a && (!a.type || (!a.type.startsWith('image/') && a.type !== 'application/pdf')));
 
-        if (imageAttachments.length === 0 && pdfAttachments.length === 0) return null;
+        if (imageAttachments.length === 0 && pdfAttachments.length === 0 && fileAttachments.length === 0) return null;
 
         const attachmentsContainer = document.createElement('div');
         
@@ -1186,6 +1187,104 @@ const FrameworkMessages = (function() {
             });
             
             attachmentsContainer.appendChild(pdfContainer);
+        }
+
+        // 处理通用文件附件（如 txt / json / 代码文件）
+        if (fileAttachments.length > 0) {
+            const fileContainer = document.createElement('div');
+            fileContainer.className = 'ido-message__attachments ido-message__attachments--files';
+
+            fileAttachments.forEach((attachment) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'ido-message__file-item';
+                fileItem.title = '点击打开，右侧下载';
+
+                const icon = document.createElement('span');
+                icon.className = 'material-symbols-outlined ido-message__file-icon';
+                icon.textContent = 'description';
+
+                const info = document.createElement('div');
+                info.className = 'ido-message__file-info';
+
+                const name = document.createElement('span');
+                name.className = 'ido-message__file-name';
+                name.textContent = attachment.name || '文件';
+                name.title = attachment.name || '文件';
+
+                const size = document.createElement('span');
+                size.className = 'ido-message__file-size';
+                if (attachment.size) {
+                    const sizeKB = (attachment.size / 1024).toFixed(1);
+                    const sizeMB = (attachment.size / (1024 * 1024)).toFixed(2);
+                    size.textContent = attachment.size > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+                }
+
+                info.appendChild(name);
+                info.appendChild(size);
+
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'ido-message__file-download';
+                downloadBtn.title = '下载';
+                downloadBtn.innerHTML = '<span class="material-symbols-outlined">download</span>';
+
+                const resolveUrl = async () => {
+                    if (attachment && typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
+                        return attachment.dataUrl;
+                    }
+                    if (
+                        attachment && attachment.id &&
+                        window.IdoFront &&
+                        window.IdoFront.attachments &&
+                        typeof window.IdoFront.attachments.getObjectUrl === 'function'
+                    ) {
+                        return await window.IdoFront.attachments.getObjectUrl(attachment.id);
+                    }
+                    return null;
+                };
+
+                const safeName = normalizeDownloadFilename(attachment && attachment.name, 'attachment', attachment && attachment.type);
+
+                fileItem.onclick = async () => {
+                    try {
+                        const url = await resolveUrl();
+                        if (!url) return;
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.target = '_blank';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                    } catch (e) {
+                        console.warn('[attachments] open file failed:', e);
+                    }
+                };
+
+                downloadBtn.onclick = async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                        const ok = await downloadAttachment(attachment, {
+                            filename: safeName,
+                            fallbackName: 'attachment',
+                            mimeType: attachment && attachment.type,
+                            attachmentsApi: window.IdoFront && window.IdoFront.attachments
+                        });
+                        if (!ok) {
+                            console.warn('[attachments] download file failed: no available attachment source');
+                        }
+                    } catch (err) {
+                        console.warn('[attachments] download file failed:', err);
+                    }
+                };
+
+                fileItem.appendChild(icon);
+                fileItem.appendChild(info);
+                fileItem.appendChild(downloadBtn);
+
+                fileContainer.appendChild(fileItem);
+            });
+
+            attachmentsContainer.appendChild(fileContainer);
         }
 
         return attachmentsContainer;

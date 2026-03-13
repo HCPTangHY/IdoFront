@@ -199,6 +199,150 @@
         }
     }
 
+    // 渠道层仅作为极端情况下的兜底（例如超过 1MB），超长粘贴已在框架 UI 层转为附件
+    const OPENAI_TEXT_FILE_THRESHOLD_BYTES = 1024 * 1024;
+    const openaiFileUploadCache = new Map();
+
+    function normalizeOpenAIBaseUrl(baseUrl) {
+        let resolved = baseUrl;
+        if (!resolved || !String(resolved).trim()) {
+            resolved = 'https://api.openai.com/v1';
+        }
+        return String(resolved).replace(/\/+$/, '');
+    }
+
+    function sanitizeUploadFileName(name, fallback) {
+        const raw = typeof name === 'string' ? name.trim() : '';
+        const safe = raw.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+        return safe || fallback;
+    }
+
+    function estimateUtf8Bytes(text) {
+        const value = typeof text === 'string' ? text : String(text || '');
+        try {
+            return new TextEncoder().encode(value).length;
+        } catch (e) {
+            return value.length * 2;
+        }
+    }
+
+    function shouldUseTextFileForOpenAI(text) {
+        return estimateUtf8Bytes(text) >= OPENAI_TEXT_FILE_THRESHOLD_BYTES;
+    }
+
+    function buildOpenAITextFileName(msg) {
+        const rawId = msg && msg.id ? String(msg.id) : `msg-${Date.now()}`;
+        const safeId = rawId.replace(/[^\w.-]+/g, '-');
+        return sanitizeUploadFileName(`message-${safeId}.txt`, 'message.txt');
+    }
+
+    async function formatMessagesForOpenAI(messages = [], config = {}, signal) {
+        const formatted = [];
+
+        for (const msg of messages) {
+            if (!msg || typeof msg !== 'object') continue;
+
+            const attachments = Array.isArray(msg.metadata?.attachments)
+                ? msg.metadata.attachments
+                : (Array.isArray(msg.attachments) ? msg.attachments : []);
+            const content = [];
+            let usedStructuredContent = false;
+
+            if (Array.isArray(msg.content)) {
+                msg.content.forEach(part => {
+                    if (!part || typeof part !== 'object') return;
+                    if (part.type === 'text' && typeof part.text === 'string') {
+                        content.push({ type: 'text', text: part.text });
+                    } else if (part.type === 'image_url') {
+                        const url = (typeof part.image_url === 'string')
+                            ? part.image_url
+                            : part.image_url && typeof part.image_url.url === 'string'
+                                ? part.image_url.url
+                                : null;
+                        if (url) {
+                            content.push({ type: 'image_url', image_url: { url } });
+                        }
+                    }
+                });
+                if (content.length > 0) {
+                    usedStructuredContent = true;
+                }
+            } else if (typeof msg.content === 'string' && msg.content) {
+                if (msg.role === 'user' && shouldUseTextFileForOpenAI(msg.content)) {
+                    // 纯 REST 模式：将超长文本作为内联文件数据发送
+                    const b64 = btoa(unescape(encodeURIComponent(msg.content)));
+                    content.push({
+                        type: 'input_file',
+                        filename: buildOpenAITextFileName(msg),
+                        file_data: `data:text/plain;base64,${b64}`
+                    });
+                    usedStructuredContent = true;
+                } else if (attachments.length > 0) {
+                    content.push({ type: 'text', text: msg.content });
+                    usedStructuredContent = true;
+                }
+            }
+
+            for (const attachment of attachments) {
+                if (!attachment || typeof attachment !== 'object') continue;
+
+                const type = typeof attachment.type === 'string' ? attachment.type : '';
+                if (type.startsWith('image/')) {
+                    const url = attachment.dataUrl || attachment.url || attachment.imageUrl;
+                    if (typeof url === 'string' && url) {
+                        content.push({
+                            type: 'image_url',
+                            image_url: { url }
+                        });
+                        usedStructuredContent = true;
+                    }
+                    continue;
+                }
+
+                if (msg.role !== 'user') {
+                    continue;
+                }
+
+                // 纯 REST 模式：内联非图片附件
+                if (attachment.dataUrl && attachment.dataUrl.startsWith('data:')) {
+                    content.push({
+                        type: 'input_file',
+                        filename: attachment.name || 'attachment.txt',
+                        file_data: attachment.dataUrl
+                    });
+                    usedStructuredContent = true;
+                }
+            }
+
+            if (usedStructuredContent) {
+                if (content.length === 1 && content[0].type === 'text') {
+                    formatted.push({
+                        role: msg.role,
+                        content: content[0].text
+                    });
+                } else if (content.length > 0) {
+                    formatted.push({
+                        role: msg.role,
+                        content
+                    });
+                } else {
+                    formatted.push({
+                        role: msg.role,
+                        content: typeof msg.content === 'string' ? msg.content : ''
+                    });
+                }
+                continue;
+            }
+
+            formatted.push({
+                role: msg.role,
+                content: msg.content
+            });
+        }
+
+        return formatted;
+    }
+
     const adapter = {
         /**
          * Send message to OpenAI API
@@ -209,12 +353,8 @@
          * @returns {Promise<Object>} - Response content
          */
         async call(messages = [], config = {}, onUpdate, signal) {
-            let baseUrl = config.baseUrl;
-            if (!baseUrl || !baseUrl.trim()) {
-                baseUrl = 'https://api.openai.com/v1';
-            }
-            // Normalize URL: remove trailing slash
-            baseUrl = baseUrl.replace(/\/+$/, '');
+            const baseUrl = normalizeOpenAIBaseUrl(config.baseUrl);
+            
             
             // Append /chat/completions if not present
             // Assuming Base URL is the root API path (e.g. https://api.openai.com/v1)
@@ -237,44 +377,7 @@
                 });
             }
 
-            // 转换消息格式以支持图片
-            const formattedMessages = messages.map(msg => {
-                // 如果消息有附件，转换为 OpenAI Vision 格式
-                if (msg.metadata?.attachments && msg.metadata.attachments.length > 0) {
-                    const content = [];
-                    
-                    // 添加文本内容
-                    if (msg.content) {
-                        content.push({
-                            type: 'text',
-                            text: msg.content
-                        });
-                    }
-                    
-                    // 添加图片
-                    for (const attachment of msg.metadata.attachments) {
-                        if (attachment.type && attachment.type.startsWith('image/')) {
-                            content.push({
-                                type: 'image_url',
-                                image_url: {
-                                    url: attachment.dataUrl
-                                }
-                            });
-                        }
-                    }
-                    
-                    return {
-                        role: msg.role,
-                        content: content
-                    };
-                } else {
-                    // 普通消息
-                    return {
-                        role: msg.role,
-                        content: msg.content
-                    };
-                }
-            });
+            const formattedMessages = await formatMessagesForOpenAI(messages, config, signal);
 
             const body = {
                 model: model,
