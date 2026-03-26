@@ -208,7 +208,17 @@ const FrameworkMessages = (function() {
             'image/jpg': 'jpg',
             'image/webp': 'webp',
             'image/gif': 'gif',
-            'application/pdf': 'pdf'
+            'application/pdf': 'pdf',
+            'audio/mpeg': 'mp3',
+            'audio/mp3': 'mp3',
+            'audio/wav': 'wav',
+            'audio/x-wav': 'wav',
+            'audio/mp4': 'm4a',
+            'audio/aac': 'aac',
+            'audio/ogg': 'ogg',
+            'audio/flac': 'flac',
+            'audio/opus': 'opus',
+            'audio/webm': 'webm'
         };
         return map[String(mimeType || '').toLowerCase()] || '';
     }
@@ -1033,9 +1043,10 @@ const FrameworkMessages = (function() {
     function createAttachmentsContainer(attachments) {
         const imageAttachments = attachments.filter(a => a && a.type && a.type.startsWith('image/'));
         const pdfAttachments = attachments.filter(a => a && a.type === 'application/pdf');
-        const fileAttachments = attachments.filter(a => a && (!a.type || (!a.type.startsWith('image/') && a.type !== 'application/pdf')));
+        const audioAttachments = attachments.filter(a => a && a.type && a.type.startsWith('audio/'));
+        const fileAttachments = attachments.filter(a => a && (!a.type || (!a.type.startsWith('image/') && !a.type.startsWith('audio/') && a.type !== 'application/pdf')));
 
-        if (imageAttachments.length === 0 && pdfAttachments.length === 0 && fileAttachments.length === 0) return null;
+        if (imageAttachments.length === 0 && pdfAttachments.length === 0 && audioAttachments.length === 0 && fileAttachments.length === 0) return null;
 
         const attachmentsContainer = document.createElement('div');
         
@@ -1187,6 +1198,106 @@ const FrameworkMessages = (function() {
             });
             
             attachmentsContainer.appendChild(pdfContainer);
+        }
+
+        // 处理音频附件
+        if (audioAttachments.length > 0) {
+            const audioContainer = document.createElement('div');
+            audioContainer.className = 'ido-message__attachments ido-message__attachments--audio';
+
+            audioAttachments.forEach((attachment) => {
+                const audioItem = document.createElement('div');
+                audioItem.className = 'ido-message__audio-item';
+
+                const header = document.createElement('div');
+                header.className = 'ido-message__audio-header';
+
+                const icon = document.createElement('span');
+                icon.className = 'material-symbols-outlined ido-message__audio-icon';
+                icon.textContent = 'music_note';
+
+                const info = document.createElement('div');
+                info.className = 'ido-message__audio-info';
+
+                const name = document.createElement('span');
+                name.className = 'ido-message__audio-name';
+                name.textContent = attachment.name || '音频文件';
+                name.title = attachment.name || '音频文件';
+
+                const size = document.createElement('span');
+                size.className = 'ido-message__audio-size';
+                if (attachment.size) {
+                    const sizeKB = (attachment.size / 1024).toFixed(1);
+                    const sizeMB = (attachment.size / (1024 * 1024)).toFixed(2);
+                    size.textContent = attachment.size > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+                }
+
+                info.appendChild(name);
+                info.appendChild(size);
+
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'ido-message__file-download';
+                downloadBtn.title = '下载';
+                downloadBtn.innerHTML = '<span class="material-symbols-outlined">download</span>';
+
+                const audioEl = document.createElement('audio');
+                audioEl.className = 'ido-message__audio-player';
+                audioEl.controls = true;
+                audioEl.preload = 'metadata';
+
+                const resolveUrl = async () => {
+                    if (attachment && typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:')) {
+                        return attachment.dataUrl;
+                    }
+                    if (
+                        attachment && attachment.id &&
+                        window.IdoFront &&
+                        window.IdoFront.attachments &&
+                        typeof window.IdoFront.attachments.getObjectUrl === 'function'
+                    ) {
+                        return await window.IdoFront.attachments.getObjectUrl(attachment.id);
+                    }
+                    return null;
+                };
+
+                const safeName = normalizeDownloadFilename(attachment && attachment.name, 'audio', attachment && attachment.type);
+
+                resolveUrl().then((url) => {
+                    if (url) {
+                        audioEl.src = url;
+                    }
+                }).catch((e) => {
+                    console.warn('[attachments] load audio failed:', e);
+                });
+
+                downloadBtn.onclick = async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                        const ok = await downloadAttachment(attachment, {
+                            filename: safeName,
+                            fallbackName: 'audio',
+                            mimeType: attachment && attachment.type,
+                            attachmentsApi: window.IdoFront && window.IdoFront.attachments
+                        });
+                        if (!ok) {
+                            console.warn('[attachments] download audio failed: no available attachment source');
+                        }
+                    } catch (err) {
+                        console.warn('[attachments] download audio failed:', err);
+                    }
+                };
+
+                header.appendChild(icon);
+                header.appendChild(info);
+                header.appendChild(downloadBtn);
+
+                audioItem.appendChild(header);
+                audioItem.appendChild(audioEl);
+                audioContainer.appendChild(audioItem);
+            });
+
+            attachmentsContainer.appendChild(audioContainer);
         }
 
         // 处理通用文件附件（如 txt / json / 代码文件）

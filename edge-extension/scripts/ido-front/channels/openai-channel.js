@@ -1162,7 +1162,10 @@
                 icon: 'psychology',
                 category: '模型特性',
                 tags: ['OpenAI', 'reasoning', 'reasoning_effort', '正则', '匹配规则', '模型'],
-                advanced: false,
+                advanced: function() {
+                    var r = loadGlobalReasoningRules();
+                    return Object.keys(DEFAULT_REASONING_RULES).every(function(k) { return r[k] === DEFAULT_REASONING_RULES[k]; });
+                },
                 order: 19,
                 render: function(container, ctx, st) {
                     container.innerHTML = '';

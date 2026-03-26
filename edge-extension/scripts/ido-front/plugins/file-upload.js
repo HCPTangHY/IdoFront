@@ -11,6 +11,8 @@
     let attachedFiles = []; // 当前附加的文件列表
     const SUPPORTED_ATTACHMENT_ACCEPT = [
         'image/*',
+        'audio/*',
+        '.mp3,.wav,.m4a,.aac,.ogg,.oga,.flac,.opus,.weba,.webm',
         'application/pdf',
         '.pdf',
         'text/*',
@@ -189,14 +191,14 @@
 
             // 读取文件为 Data URL
             let dataUrl = await readFileAsDataURL(file);
-            let finalType = file.type;
+            let finalType = resolveFileMimeType(file, dataUrl);
             let finalName = file.name;
             
             // 如果是图片但不是标准格式，转换为PNG
-            if (file.type.startsWith('image/') && !isStandardImageFormat(file.type)) {
+            if (finalType.startsWith('image/') && !isStandardImageFormat(finalType)) {
                 try {
-                    console.log(`转换图片格式: ${file.name} (${file.type}) -> PNG`);
-                    dataUrl = await convertImageToPNG(dataUrl, file.type);
+                    console.log(`转换图片格式: ${file.name} (${finalType}) -> PNG`);
+                    dataUrl = await convertImageToPNG(dataUrl, finalType);
                     finalType = 'image/png';
                     finalName = file.name.replace(/\.[^.]+$/, '.png');
                 } catch (error) {
@@ -231,6 +233,34 @@
             reader.onerror = reject;
             reader.readAsDataURL(file);
         });
+    }
+
+    function inferMimeTypeFromName(name) {
+        const lowerName = typeof name === 'string' ? name.trim().toLowerCase() : '';
+        if (!lowerName) return '';
+        if (lowerName.endsWith('.mp3')) return 'audio/mpeg';
+        if (lowerName.endsWith('.wav')) return 'audio/wav';
+        if (lowerName.endsWith('.m4a')) return 'audio/mp4';
+        if (lowerName.endsWith('.aac')) return 'audio/aac';
+        if (lowerName.endsWith('.ogg') || lowerName.endsWith('.oga')) return 'audio/ogg';
+        if (lowerName.endsWith('.flac')) return 'audio/flac';
+        if (lowerName.endsWith('.opus')) return 'audio/opus';
+        if (lowerName.endsWith('.weba')) return 'audio/webm';
+        if (lowerName.endsWith('.webm')) return 'audio/webm';
+        return '';
+    }
+
+    function resolveFileMimeType(file, dataUrl) {
+        if (file && typeof file.type === 'string' && file.type.trim()) {
+            return file.type.trim();
+        }
+        if (typeof dataUrl === 'string') {
+            const match = /^data:([^;]+);base64,/i.exec(dataUrl);
+            if (match && match[1]) {
+                return match[1].trim();
+            }
+        }
+        return inferMimeTypeFromName(file && file.name);
     }
 
     /**

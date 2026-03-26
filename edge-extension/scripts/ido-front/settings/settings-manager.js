@@ -194,7 +194,9 @@
             icon: section.icon || 'tune',
             category: (section.category && String(section.category).trim()) || inferGeneralCategory(section),
             tags: normalizeGeneralTags(section.tags),
-            advanced: (typeof section.advanced === 'boolean') ? section.advanced : inferGeneralAdvanced(section),
+            advanced: (typeof section.advanced === 'boolean' || typeof section.advanced === 'function')
+                ? section.advanced
+                : inferGeneralAdvanced(section),
             order: (typeof section.order === 'number') ? section.order : 999,
             render: section.render
         };
@@ -611,7 +613,10 @@
                 .filter(section => {
                     if (queryActive) return matchesSection(section, query);
                     if (generalTabState.showAdvanced) return true;
-                    return section.advanced !== true;
+                    const isAdvanced = typeof section.advanced === 'function'
+                        ? section.advanced()
+                        : section.advanced;
+                    return isAdvanced !== true;
                 });
 
             if (visibleSections.length > 0) {

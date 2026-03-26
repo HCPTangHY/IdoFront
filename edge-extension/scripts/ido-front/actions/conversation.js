@@ -610,6 +610,22 @@
      * @param {Object} childrenMap - 父子关系映射
      * @param {boolean} [asyncMarkdown=false] - 是否使用异步 Markdown 渲染
      */
+    function tryFormatLyriaContent(msg) {
+        const content = msg && msg.content;
+        if (!content || typeof content !== 'string') return content;
+        // 只对含 Lyria 歌词标记的文本做格式化
+        if (!/\[\[[A-Z]\d+\]\]/.test(content)) return content;
+        try {
+            const gc = window.IdoFront && window.IdoFront.geminiChannel;
+            if (gc && typeof gc.formatLyriaContent === 'function') {
+                return gc.formatLyriaContent(content);
+            }
+        } catch (e) {
+            // ignore
+        }
+        return content;
+    }
+
     function renderSingleMessage(msg, container, childrenMap, asyncMarkdown) {
         // 工具响应消息不在对话流中直接渲染（结果会显示在对应 assistant 的 toolCalls 块里）
         if (!msg || msg.hidden || msg.role === 'tool' || shouldHideMessageInConversationTree(msg, store.getActiveConversation()) || !shouldRenderStandaloneMessage(msg, store.getActiveConversation())) {
@@ -618,7 +634,7 @@
 
         const uiRole = msg.role === 'assistant' ? 'ai' : msg.role;
         const payload = {
-            content: msg.content,
+            content: msg.role === 'assistant' ? tryFormatLyriaContent(msg) : msg.content,
             id: msg.id,
             createdAt: msg.createdAt
         };

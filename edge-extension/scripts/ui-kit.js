@@ -82,13 +82,32 @@
         
         const preview = document.createElement('div');
         preview.className = 'w-20 h-20 rounded-lg overflow-hidden border border-gray-200 bg-gray-50';
+
+        const fileType = String(file?.type || '');
+        const isImage = fileType.startsWith('image/');
+        const isAudio = fileType.startsWith('audio/') || (typeof dataUrl === 'string' && dataUrl.startsWith('data:audio/'));
         
-        if (file.type.startsWith('image/')) {
+        if (isImage) {
             const img = document.createElement('img');
             img.src = dataUrl;
             img.className = 'w-full h-full object-cover';
             img.alt = file.name;
             preview.appendChild(img);
+        } else if (isAudio) {
+            const iconContainer = document.createElement('div');
+            iconContainer.className = 'w-full h-full flex flex-col items-center justify-center text-cyan-600 bg-cyan-50';
+
+            const icon = document.createElement('span');
+            icon.className = 'material-symbols-outlined text-2xl';
+            icon.textContent = 'music_note';
+
+            const label = document.createElement('div');
+            label.className = 'text-[10px] font-medium mt-1 px-1 text-center truncate w-full text-cyan-700';
+            label.textContent = file.name || '音频';
+
+            iconContainer.appendChild(icon);
+            iconContainer.appendChild(label);
+            preview.appendChild(iconContainer);
         } else {
             // 非图片文件显示文件图标
             const iconContainer = document.createElement('div');

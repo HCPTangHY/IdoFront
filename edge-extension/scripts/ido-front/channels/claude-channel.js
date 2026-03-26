@@ -848,7 +848,10 @@
                 icon: 'psychology',
                 category: '模型特性',
                 tags: ['Claude', 'extended thinking', 'thinking', '正则', '模型'],
-                advanced: false,
+                advanced: function() {
+                    var r = loadGlobalThinkingRules();
+                    return Object.keys(DEFAULT_THINKING_RULES).every(function(k) { return r[k] === DEFAULT_THINKING_RULES[k]; });
+                },
                 order: 22,
                 render: function(container, ctx, st) {
                     container.innerHTML = '';

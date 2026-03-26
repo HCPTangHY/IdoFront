@@ -80,9 +80,29 @@
         { value: 'default', label: '默认', description: '文本和图片', icon: 'auto_awesome' },
         { value: 'image', label: '仅图片', description: '只返回图片', icon: 'image' }
     ];
+
+    // ========== Gemini Music Generation Configuration ==========
+
+    const MUSIC_GEN_RULES_STORAGE_KEY = 'ido.gemini.musicGenRules';
+
+    const DEFAULT_MUSIC_GEN_RULES = {
+        musicModelPattern: 'lyria-3',
+        clipModelPattern: 'lyria-3-clip',
+        proModelPattern: 'lyria-3-pro'
+    };
     
     // ========== 通用规则加载/保存/匹配工具 ==========
     const rulesCache = {};
+
+    function isRulesDefault(loader, defaults) {
+        return function() {
+            const rules = loader();
+            for (const key of Object.keys(defaults)) {
+                if (rules[key] !== defaults[key]) return false;
+            }
+            return true;
+        };
+    }
     
     function loadRules(storageKey, defaults) {
         if (rulesCache[storageKey]) return rulesCache[storageKey];
@@ -117,6 +137,13 @@
     const saveImageGenRules = (rules) => saveRules(IMAGE_GEN_RULES_STORAGE_KEY, rules);
     const supportsImageGeneration = (model) => matchModel(model, loadImageGenRules().imageModelPattern);
     const supportsImageSize = (model) => matchModel(model, loadImageGenRules().imageSizeModelPattern);
+
+    // 音乐生成规则
+    const loadMusicGenRules = () => loadRules(MUSIC_GEN_RULES_STORAGE_KEY, DEFAULT_MUSIC_GEN_RULES);
+    const saveMusicGenRules = (rules) => saveRules(MUSIC_GEN_RULES_STORAGE_KEY, rules);
+    const supportsMusicGeneration = (model) => matchModel(model, loadMusicGenRules().musicModelPattern);
+    const isLyriaClipModel = (model) => matchModel(model, loadMusicGenRules().clipModelPattern);
+    const isLyriaProModel = (model) => matchModel(model, loadMusicGenRules().proModelPattern);
     
     /**
      * 获取会话的图像生成配置
@@ -137,6 +164,18 @@
             responseModality: geminiMeta.responseModality || 'default',
             // 生图请求思维链：默认开启，用于获取 thoughtSignature
             forceThinking: geminiMeta.imageForceThinking !== false
+        };
+    }
+
+    function getMusicGenConfig(conv) {
+        if (!conv) {
+            return {
+                includeText: true
+            };
+        }
+        const geminiMeta = conv.metadata?.gemini || {};
+        return {
+            includeText: geminiMeta.musicIncludeText !== false
         };
     }
     
@@ -169,6 +208,7 @@
     const setImageSize = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageSize', val, opts);
     const setResponseModality = (store, convId, val, opts) => setGeminiMeta(store, convId, 'responseModality', val, opts);
     const setImageForceThinking = (store, convId, val, opts) => setGeminiMeta(store, convId, 'imageForceThinking', !!val, opts);
+    const setMusicIncludeText = (store, convId, val, opts) => setGeminiMeta(store, convId, 'musicIncludeText', val !== false, opts);
 
     // 思考规则
     const loadGlobalThinkingRules = () => loadRules(THINKING_RULES_STORAGE_KEY, DEFAULT_THINKING_RULES);
@@ -338,6 +378,183 @@
         };
     }
 
+    function getAttachmentExtensionFromMimeType(mimeType) {
+        const value = String(mimeType || '').trim().toLowerCase();
+        const map = {
+            'image/png': 'png',
+            'image/jpeg': 'jpg',
+            'image/jpg': 'jpg',
+            'image/webp': 'webp',
+            'image/gif': 'gif',
+            'audio/mpeg': 'mp3',
+            'audio/mp3': 'mp3',
+            'audio/wav': 'wav',
+            'audio/x-wav': 'wav',
+            'audio/mp4': 'm4a',
+            'audio/aac': 'aac',
+            'audio/ogg': 'ogg',
+            'audio/flac': 'flac',
+            'audio/opus': 'opus',
+            'audio/webm': 'webm'
+        };
+        return map[value] || '';
+    }
+
+    function buildInlineAttachmentName(mimeType, index) {
+        const value = String(mimeType || '').trim().toLowerCase();
+        const ext = getAttachmentExtensionFromMimeType(value);
+        let baseName = 'Gemini Attachment';
+        if (value.startsWith('image/')) {
+            baseName = '图片';
+        } else if (value.startsWith('audio/')) {
+            baseName = '音频';
+        }
+        return ext ? `${baseName} ${index}.${ext}` : `${baseName} ${index}`;
+    }
+
+    /**
+     * 格式化 Lyria 歌词标记为可读 Markdown。
+     * 输入格式示例：
+     *   [[A0]] [0.0:] Intro description...
+     *   [[B1]] [12.8:] 歌词行 [:] 第二行 [:] 第三行
+     *   mosic: 4.5 bpm: 150.0 duration_secs: 166.4 good_crop: 1.0
+     */
+    function formatLyriaContent(text) {
+        if (!text || typeof text !== 'string') return text;
+
+        // 段落标签名称映射
+        const sectionLabels = {
+            'A': 'Intro',
+            'B': 'Verse',
+            'C': 'Chorus',
+            'D': 'Bridge',
+            'E': 'Outro',
+            'F': 'Break',
+            'G': 'Solo'
+        };
+
+        // 按 [[X0]] 标签分段
+        const sectionRegex = /\[\[([A-Z])(\d+)\]\]/g;
+        const parts = [];
+        let lastIndex = 0;
+        let match;
+
+        while ((match = sectionRegex.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+                const before = text.slice(lastIndex, match.index).trim();
+                if (before) parts.push({ type: 'text', value: before });
+            }
+            parts.push({
+                type: 'section',
+                letter: match[1],
+                number: parseInt(match[2], 10),
+                label: sectionLabels[match[1]] || match[1]
+            });
+            lastIndex = sectionRegex.lastIndex;
+        }
+        if (lastIndex < text.length) {
+            const tail = text.slice(lastIndex).trim();
+            if (tail) parts.push({ type: 'text', value: tail });
+        }
+
+        if (parts.length === 0) return text;
+
+        // 没有段落标签说明不是 Lyria 歌词格式
+        const hasSections = parts.some(p => p.type === 'section');
+        if (!hasSections) return text;
+
+        const lines = [];
+        let lyricsBlock = [];
+        let analysisBlock = [];
+        let inAnalysis = false;
+
+        for (let i = 0; i < parts.length; i++) {
+            const p = parts[i];
+            if (p.type === 'section') {
+                const nextText = (i + 1 < parts.length && parts[i + 1].type === 'text')
+                    ? parts[i + 1].value
+                    : '';
+
+                // 判断是歌词段还是分析段：分析段通常很长且不含 [:]
+                const isLyrics = nextText.includes('[:]') || nextText.length < 300;
+
+                if (isLyrics && !inAnalysis) {
+                    lyricsBlock.push(formatLyriaSection(p, nextText, false));
+                } else {
+                    inAnalysis = true;
+                    analysisBlock.push(formatLyriaSection(p, nextText, true));
+                }
+
+                if (nextText) i++; // 跳过已处理的 text 部分
+            } else {
+                // 独立文本（可能是元数据行）
+                const formatted = formatLyriaMetadata(p.value);
+                if (inAnalysis) {
+                    analysisBlock.push(formatted);
+                } else {
+                    lyricsBlock.push(formatted);
+                }
+            }
+        }
+
+        if (lyricsBlock.length > 0) {
+            lines.push('### 🎵 歌词\n');
+            lines.push(lyricsBlock.join('\n\n'));
+        }
+
+        if (analysisBlock.length > 0) {
+            lines.push('\n---\n');
+            lines.push('<details>\n<summary>🎼 段落分析</summary>\n');
+            lines.push(analysisBlock.join('\n\n'));
+            lines.push('\n</details>');
+        }
+
+        return lines.join('\n');
+    }
+
+    function formatLyriaSection(section, text, isAnalysis) {
+        const heading = `**${section.label} ${section.number}**`;
+
+        if (!text) return heading;
+
+        // 提取开头的时间戳 [12.8:]
+        let cleaned = text;
+        let timestamp = '';
+        const tsMatch = cleaned.match(/^\s*\[(\d+(?:\.\d+)?):?\]\s*/);
+        if (tsMatch) {
+            timestamp = ` *(${tsMatch[1]}s)*`;
+            cleaned = cleaned.slice(tsMatch[0].length);
+        }
+
+        if (isAnalysis) {
+            return `${heading}${timestamp}\n> ${cleaned.trim()}`;
+        }
+
+        // 歌词：用 [:] 分行
+        const lyricLines = cleaned.split(/\s*\[:\]\s*/).filter(Boolean);
+        const formatted = lyricLines.map(l => l.trim()).filter(Boolean).join('  \n');
+        return `${heading}${timestamp}\n${formatted}`;
+    }
+
+    function formatLyriaMetadata(text) {
+        if (!text) return '';
+        // 检测元数据行：mosic: X bpm: X duration_secs: X
+        const metaMatch = text.match(/\bbpm:\s*(\d+(?:\.\d+)?)/);
+        const durMatch = text.match(/\bduration_secs:\s*(\d+(?:\.\d+)?)/);
+        if (metaMatch || durMatch) {
+            const parts = [];
+            if (metaMatch) parts.push(`BPM: ${metaMatch[1]}`);
+            if (durMatch) {
+                const secs = parseFloat(durMatch[1]);
+                const mins = Math.floor(secs / 60);
+                const remSecs = Math.round(secs % 60);
+                parts.push(`时长: ${mins}:${String(remSecs).padStart(2, '0')}`);
+            }
+            return `\n*${parts.join(' · ')}*`;
+        }
+        return text;
+    }
+
      // Helper: Convert Gemini parts to displayable content, reasoning, attachments, thoughtSignature and functionCalls
     // 同时保留「轻量 parts 蓝图」用于严格回放 thoughtSignature（不包含 base64）。
     function partsToContent(parts, options) {
@@ -496,7 +713,7 @@
                     }
 
                     const attachmentIndex = attachments.length;
-                    const attachmentName = isImage ? `图片 ${imageIndex++}` : `Gemini Attachment ${imageIndex++}`;
+                    const attachmentName = buildInlineAttachmentName(mimeType, imageIndex++);
 
                     attachments.push({
                         dataUrl: dataUrl,
@@ -524,7 +741,7 @@
         }
 
         return {
-            content,
+            content: inlineDataSource === 'gemini-musicgen' ? formatLyriaContent(content) : content,
             reasoning: reasoning || null,
             attachments: attachments.length > 0 ? attachments : null,
             // 思维链中的预览图（仅 UI 展示，不持久化/不回传）
@@ -868,10 +1085,13 @@
 
             // 预判本次请求是否会开启 includeThoughts（开启时会要求历史 model parts 回填 thought_signature）
             const isImageGenModel = supportsImageGeneration(model, config);
+            const isMusicGenModel = supportsMusicGeneration(model, config);
 
             // 生图模型：过滤思维链预览图（不显示、不记录、也不回传）
             partsToContentOpt.dropThoughtImages = !!isImageGenModel;
-            partsToContentOpt.inlineDataSource = isImageGenModel ? 'gemini-imagegen' : 'gemini-inlineData';
+            partsToContentOpt.inlineDataSource = isImageGenModel
+                ? 'gemini-imagegen'
+                : (isMusicGenModel ? 'gemini-musicgen' : 'gemini-inlineData');
 
             // 说明：
             // - 文本模型与图片模型共用 budget/level 规则判断
@@ -881,6 +1101,7 @@
             const isLevelModel = !isBudgetModel && useLevelMode(model, config);
 
             const thinkingCfg = getThinkingConfig(activeConv);
+            const musicGenCfg = getMusicGenConfig(activeConv);
 
             // 生图：是否尝试 includeThoughts（用于 thoughtSignature）- 默认开启
             const imageForceThinking = isImageGenModel && (geminiMeta.imageForceThinking !== false);
@@ -926,15 +1147,18 @@
 
             // Generation Config
             const generationConfig = {};
-            if (config.temperature !== undefined) generationConfig.temperature = parseFloat(config.temperature);
-            if (config.topP !== undefined) generationConfig.topP = parseFloat(config.topP);
-            if (config.maxTokens !== undefined) generationConfig.maxOutputTokens = parseInt(config.maxTokens);
+            if (!isMusicGenModel) {
+                if (config.temperature !== undefined) generationConfig.temperature = parseFloat(config.temperature);
+                if (config.topP !== undefined) generationConfig.topP = parseFloat(config.topP);
+                if (config.maxTokens !== undefined) generationConfig.maxOutputTokens = parseInt(config.maxTokens);
+            }
 
             // Thinking Config - 根据模型规则添加思考配置
             
             const thinkingConfig = {};
             // Image generation 的响应模态（默认 Text + Image）
             const responseModality = geminiMeta.responseModality || 'default';
+            const musicIncludeText = musicGenCfg.includeText !== false;
             
             // 注意：thinkingConfig.includeThoughts 可能触发“历史 thoughtSignature 回填”校验。
             // 因此把 includeThoughts 与 thinking 启用解耦：
@@ -958,6 +1182,11 @@
                 generationConfig.thinkingConfig = thinkingConfig;
             }
             
+            // Music Generation Config - 音乐生成配置
+            if (isMusicGenModel) {
+                generationConfig.responseModalities = musicIncludeText ? ['AUDIO', 'TEXT'] : ['AUDIO'];
+            }
+
             // Image Generation Config - 图像生成配置
             if (isImageGenModel) {
                 // 响应模态配置
@@ -996,19 +1225,19 @@
 
             // Tools Config - 代码执行、Google Search、URL Context 和自定义工具
             const tools = [];
-            if (geminiMeta.codeExecution) {
+            if (!isMusicGenModel && geminiMeta.codeExecution) {
                 tools.push({ codeExecution: {} });
             }
-            if (geminiMeta.googleSearch) {
+            if (!isMusicGenModel && geminiMeta.googleSearch) {
                 tools.push({ google_search: {} });
             }
-            if (geminiMeta.urlContext) {
+            if (!isMusicGenModel && geminiMeta.urlContext) {
                 tools.push({ url_context: {} });
             }
             
             // 添加 MCP/自定义工具（来自 toolRegistry）
             const toolRegistry = window.IdoFront.toolRegistry;
-            if (toolRegistry && geminiMeta.enableTools !== false) {
+            if (!isMusicGenModel && toolRegistry && geminiMeta.enableTools !== false) {
                 const store = window.IdoFront && window.IdoFront.store;
                 const customTools = toolRegistry.toGeminiFormat({
                     isEnabled: (toolId) => {
@@ -1098,8 +1327,9 @@
                     // Gemini 生图模型中，inlineData 可能非常大。
                     // 一旦检测到 inlineData，流式阶段仅在结束时做一次完整解析，
                     // 避免每个 chunk 都重建 dataUrl 导致 Android WebView 内存峰值。
-                    let imageStreamHasInlineData = false;
-                    const streamPreviewPartsOpt = isImageGenModel ? { ...partsToContentOpt, skipInlineData: true } : partsToContentOpt;
+                    let streamHasInlineData = false;
+                    const needsInlineDataDefer = isImageGenModel || isMusicGenModel;
+                    const streamPreviewPartsOpt = needsInlineDataDefer ? { ...partsToContentOpt, skipInlineData: true } : partsToContentOpt;
 
                     let lastUrlContextMetadata = null; // 流式响应中的 URL context 信息
 
@@ -1151,13 +1381,13 @@
                                             const newParts = candidate.content.parts;
                                             const thoughtSignature = candidate.thoughtSignature;
                                             
-                                            if (isImageGenModel && Array.isArray(newParts) && newParts.length > 0) {
+                                            if (needsInlineDataDefer && Array.isArray(newParts) && newParts.length > 0) {
                                                 const hasInlineData = newParts.some(part => {
                                                     if (!part || typeof part !== 'object') return false;
                                                     return !!(part.inlineData || part.inline_data);
                                                 });
                                                 if (hasInlineData) {
-                                                    imageStreamHasInlineData = true;
+                                                    streamHasInlineData = true;
                                                 }
                                             }
 
@@ -1170,13 +1400,13 @@
                                             accumulatedParts = accumulatedParts.concat(incomingParts);
                                             lastThoughtSignature = thoughtSignature;
 
-                                            if (isImageGenModel && imageStreamHasInlineData && !lastFinishReason) {
+                                            if (needsInlineDataDefer && streamHasInlineData && !lastFinishReason) {
                                                 // 生图流式中，出现 inlineData 后先不做逐帧 attachments 回放，
                                                 // 只在结束时解析一次完整结果。
                                                 continue;
                                             }
 
-                                            const parseOpt = (isImageGenModel && !lastFinishReason)
+                                            const parseOpt = (needsInlineDataDefer && !lastFinishReason)
                                                 ? streamPreviewPartsOpt
                                                 : partsToContentOpt;
                                             
@@ -1679,6 +1909,9 @@
             if (typeof updateImageGenControls === 'function') {
                 updateImageGenControls();
             }
+            if (typeof updateMusicGenControls === 'function') {
+                updateMusicGenControls();
+            }
         }
         
         /**
@@ -1955,6 +2188,137 @@
             return wrapper;
         }
 
+        // ========== 音乐生成设置 UI ==========
+        const MUSIC_GEN_WRAPPER_ID = 'core-gemini-music-gen-wrapper';
+
+        function getMusicGenWrapper() {
+            return document.getElementById(MUSIC_GEN_WRAPPER_ID);
+        }
+
+        function getMusicModelLabel(model) {
+            if (isLyriaClipModel(model)) return 'Clip';
+            if (isLyriaProModel(model)) return 'Pro';
+            return 'Lyria';
+        }
+
+        function getMusicModelDescription(model) {
+            if (isLyriaClipModel(model)) {
+                return '固定 30 秒，适合片段、循环和预览。';
+            }
+            if (isLyriaProModel(model)) {
+                return '适合完整歌曲，可在提示词中控制时长。';
+            }
+            return '支持文本和图片输入，返回音频与可选文本。';
+        }
+
+        function showMusicGenBottomSheet(conv, channelConfig) {
+            const store = getStore();
+            if (!store) return;
+
+            const { h, section, sheetHeader, switchItem } = window.IdoUI;
+            const model = conv.selectedModel || '';
+            const musicGenCfg = getMusicGenConfig(conv);
+
+            showBottomSheet((sheetContainer) => {
+                const header = sheetHeader({ title: '音乐生成设置', onClose: hideBottomSheet });
+                const body = h('div.flex-1.overflow-y-auto.px-6.py-4.space-y-6');
+
+                body.appendChild(section({
+                    label: '模型',
+                    children: h('div.p-4.rounded-xl.border.border-gray-100.bg-gray-50.space-y-1', [
+                        h('div.flex.items-center.gap-2.text-sm.font-semibold.text-gray-800', [
+                            h('span.material-symbols-outlined.text-[18px].text-cyan-600', 'music_note'),
+                            h('span', `${getMusicModelLabel(model)} · ${model}`)
+                        ]),
+                        h('div.text-xs.text-gray-500', getMusicModelDescription(model))
+                    ])
+                }));
+
+                body.appendChild(section({
+                    label: '输出',
+                    children: h('div.space-y-3', [
+                        switchItem({
+                            label: '返回文本',
+                            description: '同时返回歌词、结构说明或模型返回的文字内容。',
+                            checked: !!musicGenCfg.includeText,
+                            onChange: (checked) => {
+                                setMusicIncludeText(store, conv.id, !!checked, { silent: true });
+                                updateMusicGenControls();
+                            }
+                        })
+                    ])
+                }));
+
+                body.appendChild(section({
+                    label: '说明',
+                    children: h('div.space-y-2', [
+                        h('div.p-3.rounded-lg.bg-gray-50.border.border-gray-100.text-xs.text-gray-600', '一次请求最多支持 10 张图片。'),
+                        h('div.p-3.rounded-lg.bg-gray-50.border.border-gray-100.text-xs.text-gray-600', '建议先用 Clip 模型测试提示词，再用 Pro 模型生成完整歌曲。'),
+                        h('div.p-3.rounded-lg.bg-gray-50.border.border-gray-100.text-xs.text-gray-600', '音乐生成目前按单次生成处理，不适合多轮编辑。')
+                    ])
+                }));
+
+                sheetContainer.appendChild(header);
+                sheetContainer.appendChild(body);
+            });
+        }
+
+        function updateMusicGenControls() {
+            const wrapper = getMusicGenWrapper();
+            if (!wrapper) return;
+
+            const store = getStore();
+            const conv = store?.getActiveConversation?.();
+            const model = conv?.selectedModel;
+            const channelConfig = conv ? getChannelConfig(store, conv) : null;
+
+            if (!model || channelConfig?.type !== 'gemini' || !supportsMusicGeneration(model)) {
+                wrapper.style.display = 'none';
+                return;
+            }
+
+            wrapper.style.display = 'flex';
+            const btnEl = wrapper.querySelector('[data-gemini-musicgen-btn]');
+            if (btnEl) {
+                const label = getMusicModelLabel(model);
+                const includeText = getMusicGenConfig(conv).includeText !== false;
+                btnEl.innerHTML = `<span class="material-symbols-outlined text-[12px]">music_note</span> ${label}${includeText ? '' : ' · 仅音频'}`;
+            }
+        }
+
+        function renderMusicGenSettings() {
+            const { h } = window.IdoUI;
+
+            const settingsBtn = h('button', {
+                type: 'button',
+                class: 'px-2 py-0.5 text-[10px] rounded border border-cyan-300 bg-cyan-50 hover:border-cyan-400 text-cyan-700 font-medium transition-colors flex items-center gap-1',
+                'data-gemini-musicgen-btn': 'true',
+                html: '<span class="material-symbols-outlined text-[12px]">music_note</span> Lyria',
+                onclick: (e) => {
+                    e.stopPropagation();
+                    const store = getStore();
+                    const conv = store?.getActiveConversation?.();
+                    if (!conv) return;
+                    showMusicGenBottomSheet(conv, getChannelConfig(store, conv));
+                }
+            });
+
+            const wrapper = h('div', {
+                id: MUSIC_GEN_WRAPPER_ID,
+                class: 'flex items-center gap-2',
+                style: { display: 'none', order: '3' }
+            }, [
+                h('div.flex.items-center.gap-1', [
+                    h('span.text-\[10px\].text-gray-400', '音乐'),
+                    settingsBtn
+                ])
+            ]);
+
+            setTimeout(() => updateMusicGenControls(), 0);
+            setTimeout(() => updateMusicGenControls(), 100);
+            return wrapper;
+        }
+
         // 使用 registerUIBundle 注册 Gemini 渠道 UI 组件
         // 注意：id 必须唯一，避免与 Claude 渠道的 thinking-budget 冲突
         try {
@@ -1962,7 +2326,8 @@
                 slots: {
                     [SLOTS.INPUT_TOP]: [
                         { id: 'gemini-thinking-budget', render: renderThinkingBudget },
-                        { id: 'gemini-image-gen-settings', render: renderImageGenSettings }
+                        { id: 'gemini-image-gen-settings', render: renderImageGenSettings },
+                        { id: 'gemini-music-gen-settings', render: renderMusicGenSettings }
                     ]
                 },
                 init: function() {
@@ -2148,7 +2513,7 @@
                 icon: 'psychology',
                 category: '模型特性',
                 tags: ['Gemini', 'thinking', 'thinkingBudget', 'thinkingLevel', '正则', '模型'],
-                advanced: false,
+                advanced: isRulesDefault(loadGlobalThinkingRules, DEFAULT_THINKING_RULES),
                 order: 20,
                 render: function(container, ctx, st) {
                     container.innerHTML = '';
@@ -2206,7 +2571,7 @@
                 icon: 'image',
                 category: '模型特性',
                 tags: ['Gemini', 'image', 'image-gen', 'imagen', '正则', '模型'],
-                advanced: false,
+                advanced: isRulesDefault(loadImageGenRules, DEFAULT_IMAGE_GEN_RULES),
                 order: 21,
                 render: function(container, ctx, st) {
                     container.innerHTML = '';
@@ -2247,10 +2612,80 @@
             console.warn('[GeminiChannel] registerGeminiImageGenSettingsSection error:', e);
         }
     }
+
+    function registerGeminiMusicGenSettingsSection() {
+        const sm = window.IdoFront?.settingsManager;
+        if (!sm?.registerGeneralSection) return;
+
+        try {
+            const { h, formInput } = window.IdoUI;
+            sm.registerGeneralSection({
+                id: 'gemini-music-gen',
+                title: 'Gemini 音乐生成',
+                description: '配置 Lyria 音乐模型的匹配规则。',
+                icon: 'music_note',
+                category: '模型特性',
+                tags: ['Gemini', 'Lyria', 'music', 'audio', '正则', '模型'],
+                advanced: isRulesDefault(loadMusicGenRules, DEFAULT_MUSIC_GEN_RULES),
+                order: 22,
+                render: function(container, ctx, st) {
+                    container.innerHTML = '';
+                    const rules = loadMusicGenRules();
+
+                    container.appendChild(formInput({
+                        label: '音乐生成模型',
+                        hint: '匹配的模型将自动启用音频响应模态与音乐设置。',
+                        value: rules.musicModelPattern,
+                        placeholder: 'lyria-3',
+                        onChange: (val) => {
+                            const r = loadMusicGenRules();
+                            r.musicModelPattern = val || DEFAULT_MUSIC_GEN_RULES.musicModelPattern;
+                            saveMusicGenRules(r);
+                        }
+                    }));
+
+                    const clipGroup = formInput({
+                        label: 'Clip 模型',
+                        hint: '匹配的模型将显示 Clip 标签。',
+                        value: rules.clipModelPattern,
+                        placeholder: 'lyria-3-clip',
+                        onChange: (val) => {
+                            const r = loadMusicGenRules();
+                            r.clipModelPattern = val || DEFAULT_MUSIC_GEN_RULES.clipModelPattern;
+                            saveMusicGenRules(r);
+                        }
+                    });
+                    clipGroup.classList.add('mt-3');
+                    container.appendChild(clipGroup);
+
+                    const proGroup = formInput({
+                        label: 'Pro 模型',
+                        hint: '匹配的模型将显示 Pro 标签。',
+                        value: rules.proModelPattern,
+                        placeholder: 'lyria-3-pro',
+                        onChange: (val) => {
+                            const r = loadMusicGenRules();
+                            r.proModelPattern = val || DEFAULT_MUSIC_GEN_RULES.proModelPattern;
+                            saveMusicGenRules(r);
+                        }
+                    });
+                    proGroup.classList.add('mt-3');
+                    container.appendChild(proGroup);
+
+                    container.appendChild(h('div.text-\[10px\].text-gray-400.mt-3', {
+                        html: '提示：音乐模型会自动请求 <code class="bg-gray-100 px-1 rounded">AUDIO</code> 响应，并在会话中显示音乐设置按钮。'
+                    }));
+                }
+            });
+        } catch (e) {
+            console.warn('[GeminiChannel] registerGeminiMusicGenSettingsSection error:', e);
+        }
+    }
     
     // 尝试立即注册（兼容 settingsManager 已就绪的情况）
     registerGeminiThinkingSettingsSection();
     registerGeminiImageGenSettingsSection();
+    registerGeminiMusicGenSettingsSection();
     
     // 监听设置管理器就绪事件，确保在 settingsManager.init 之后也能完成注册
     if (typeof document !== 'undefined') {
@@ -2258,6 +2693,7 @@
             document.addEventListener('IdoFrontSettingsReady', function() {
                 registerGeminiThinkingSettingsSection();
                 registerGeminiImageGenSettingsSection();
+                registerGeminiMusicGenSettingsSection();
             }, { once: true });
         } catch (e) {
             console.warn('[GeminiChannel] attach IdoFrontSettingsReady listener error:', e);
@@ -2303,5 +2739,16 @@
     window.IdoFront.geminiChannel.IMAGE_SIZE_OPTIONS = IMAGE_SIZE_OPTIONS;
     window.IdoFront.geminiChannel.RESPONSE_MODALITY_OPTIONS = RESPONSE_MODALITY_OPTIONS;
     window.IdoFront.geminiChannel.DEFAULT_IMAGE_GEN_RULES = DEFAULT_IMAGE_GEN_RULES;
+
+    // 音乐生成相关
+    window.IdoFront.geminiChannel.supportsMusicGeneration = supportsMusicGeneration;
+    window.IdoFront.geminiChannel.isLyriaClipModel = isLyriaClipModel;
+    window.IdoFront.geminiChannel.isLyriaProModel = isLyriaProModel;
+    window.IdoFront.geminiChannel.getMusicGenConfig = getMusicGenConfig;
+    window.IdoFront.geminiChannel.setMusicIncludeText = setMusicIncludeText;
+    window.IdoFront.geminiChannel.loadMusicGenRules = loadMusicGenRules;
+    window.IdoFront.geminiChannel.saveMusicGenRules = saveMusicGenRules;
+    window.IdoFront.geminiChannel.DEFAULT_MUSIC_GEN_RULES = DEFAULT_MUSIC_GEN_RULES;
+    window.IdoFront.geminiChannel.formatLyriaContent = formatLyriaContent;
 
 })();

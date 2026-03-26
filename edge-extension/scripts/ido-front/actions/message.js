@@ -86,6 +86,133 @@
         return null;
     }
 
+    function getMessageAttachmentList(message) {
+        if (!message) return null;
+        if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+            return message.attachments;
+        }
+        if (message.metadata && Array.isArray(message.metadata.attachments) && message.metadata.attachments.length > 0) {
+            return message.metadata.attachments;
+        }
+        return null;
+    }
+
+    function showMessageActionToast(message, duration) {
+        const text = typeof message === 'string' ? message.trim() : '';
+        if (!text) return;
+        try {
+            const toast = window.Framework && window.Framework.ui && window.Framework.ui.showToast;
+            if (typeof toast === 'function') {
+                toast(text, duration || 2600);
+                return;
+            }
+        } catch (e) {
+            // ignore
+        }
+        try {
+            alert(text);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function inferAttachmentKind(attachment) {
+        const attachmentsApi = window.IdoFront && window.IdoFront.attachments;
+        if (attachmentsApi && typeof attachmentsApi.getAttachmentKind === 'function') {
+            return attachmentsApi.getAttachmentKind(attachment && attachment.type, attachment && attachment.name);
+        }
+
+        const type = typeof attachment?.type === 'string' ? attachment.type.trim().toLowerCase() : '';
+        const name = typeof attachment?.name === 'string' ? attachment.name.trim().toLowerCase() : '';
+        if (type.startsWith('image/')) return 'image';
+        if (type === 'application/pdf') return 'pdf';
+        if (type.startsWith('audio/')) return 'audio';
+        if (
+            type.startsWith('text/') ||
+            type === 'application/json' ||
+            type === 'application/xml' ||
+            type === 'application/javascript' ||
+            type === 'application/x-javascript' ||
+            type === 'application/typescript' ||
+            type === 'application/x-typescript' ||
+            type === 'application/x-yaml' ||
+            type === 'application/yaml'
+        ) {
+            return 'text';
+        }
+        if (/\.(txt|md|markdown|json|xml|html|htm|csv|tsv|log|yaml|yml|toml|ini|cfg|conf|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|cs|go|rs|rb|php|sql|sh|bat|ps1)$/i.test(name)) {
+            return 'text';
+        }
+        if (/\.(mp3|wav|m4a|aac|ogg|oga|flac|opus|weba|webm)$/i.test(name)) {
+            return 'audio';
+        }
+        return 'other';
+    }
+
+    function validateMusicAttachmentsForTarget(target, attachments) {
+        if (!target || target.error || !target.channel || target.channel.type !== 'gemini') {
+            return { valid: true };
+        }
+
+        const geminiChannel = window.IdoFront && window.IdoFront.geminiChannel;
+        if (!geminiChannel || typeof geminiChannel.supportsMusicGeneration !== 'function') {
+            return { valid: true };
+        }
+
+        const modelName = target.selectedModel || target.channel.model || '';
+        if (!geminiChannel.supportsMusicGeneration(modelName, target.channel)) {
+            return { valid: true };
+        }
+
+        const list = Array.isArray(attachments) ? attachments : [];
+        let imageCount = 0;
+        for (const attachment of list) {
+            const kind = inferAttachmentKind(attachment);
+            if (kind === 'image') {
+                imageCount += 1;
+                continue;
+            }
+            if (kind === 'text') {
+                continue;
+            }
+            return {
+                valid: false,
+                message: `${modelName || 'Lyria 3'} 仅支持文本和图片输入。`
+            };
+        }
+
+        if (imageCount > 10) {
+            return {
+                valid: false,
+                message: `${modelName || 'Lyria 3'} 一次请求最多支持 10 张图片。`
+            };
+        }
+
+        return { valid: true };
+    }
+
+    function validateMusicAttachmentsForConversation(conv, attachments) {
+        if (!conv) return { valid: true };
+        const plan = resolveExecutionPlan(conv);
+        for (const route of plan) {
+            const target = resolveGenerationTarget(conv, {
+                overrideChannelId: route && route.useCurrent ? null : route && route.channelId,
+                overrideModel: route && route.useCurrent ? null : route && route.model
+            });
+            const validation = validateMusicAttachmentsForTarget(target, attachments);
+            if (!validation.valid) {
+                return validation;
+            }
+        }
+        return { valid: true };
+    }
+
+    function getAttachmentsFromConversationMessage(conv, messageId) {
+        if (!conv || !messageId || !Array.isArray(conv.messages)) return [];
+        const message = conv.messages.find(item => item && item.id === messageId);
+        return getMessageAttachmentList(message) || [];
+    }
+
     function updateSendButtonLoadingState() {
         if (!context || typeof context.setSendButtonLoading !== 'function') {
             return;
@@ -245,22 +372,12 @@
         const attachmentDataUrlCache = new Map();
         const toolCallTypes = window.IdoFront.toolCallTypes;
 
-        const pickRawAttachments = (message) => {
-            if (!message) return null;
-            if (Array.isArray(message.attachments) && message.attachments.length > 0) {
-                return message.attachments;
-            }
-            if (message.metadata && Array.isArray(message.metadata.attachments) && message.metadata.attachments.length > 0) {
-                return message.metadata.attachments;
-            }
-            return null;
-        };
-
         const isGemini = channelConfig && (channelConfig.type === 'gemini' || channelConfig.type === 'gemini-deep-research');
 
         // Gemini 生图会在多轮编辑中快速累积大图历史，Android WebView 容易在拼装 payload 时内存峰值过高。
         // 这里仅保留最近 N 条“带附件消息”的附件进入 payload，旧消息保留文本上下文。
         let isGeminiImageGen = false;
+        let isGeminiMusicGen = false;
         let isAndroidNative = false;
         let isAndroidWeb = false;
 
@@ -293,8 +410,12 @@
                 if (geminiChannel && typeof geminiChannel.supportsImageGeneration === 'function') {
                     isGeminiImageGen = !!geminiChannel.supportsImageGeneration(currentModel, channelConfig);
                 }
+                if (geminiChannel && typeof geminiChannel.supportsMusicGeneration === 'function') {
+                    isGeminiMusicGen = !!geminiChannel.supportsMusicGeneration(currentModel, channelConfig);
+                }
             } catch (e) {
                 isGeminiImageGen = false;
+                isGeminiMusicGen = false;
             }
         }
 
@@ -312,7 +433,7 @@
             for (let i = activePath.length - 1; i >= 0; i -= 1) {
                 const item = activePath[i];
                 if (!item || item.id === excludeMessageId || item.role === 'tool') continue;
-                const atts = pickRawAttachments(item);
+                const atts = getMessageAttachmentList(item);
                 if (!atts || atts.length === 0) continue;
 
                 geminiImageAttachmentMessageIds.add(item.id);
@@ -320,6 +441,18 @@
                 if (picked >= GEMINI_IMAGE_ATTACHMENT_MESSAGE_LIMIT) {
                     break;
                 }
+            }
+        }
+
+        let geminiMusicAttachmentMessageId = null;
+        if (isGeminiMusicGen) {
+            for (let i = activePath.length - 1; i >= 0; i -= 1) {
+                const item = activePath[i];
+                if (!item || item.id === excludeMessageId || item.role !== 'user') continue;
+                const atts = getMessageAttachmentList(item);
+                if (!atts || atts.length === 0) continue;
+                geminiMusicAttachmentMessageId = item.id;
+                break;
             }
         }
 
@@ -335,7 +468,7 @@
             const msg = { role: m.role, content: m.content };
 
             // 附件：从 store 的轻量引用解析为 dataUrl
-            let rawAttachments = pickRawAttachments(m);
+            let rawAttachments = getMessageAttachmentList(m);
 
             if (shouldLimitGeminiImageAttachments && rawAttachments && rawAttachments.length > 0) {
                 // 仅保留最近 N 条带附件消息的附件，降低多轮改图时的内存占用。
@@ -347,12 +480,34 @@
                 }
             }
 
+            if (rawAttachments && rawAttachments.length > 0 && m.role !== 'user') {
+                rawAttachments = rawAttachments.filter(att => inferAttachmentKind(att) !== 'audio');
+                if (rawAttachments.length === 0) {
+                    rawAttachments = null;
+                }
+            }
+
+            if (isGeminiMusicGen && rawAttachments && rawAttachments.length > 0) {
+                if (m.role !== 'user') {
+                    rawAttachments = null;
+                } else if (geminiMusicAttachmentMessageId && m.id !== geminiMusicAttachmentMessageId) {
+                    rawAttachments = null;
+                }
+            }
+
             if (rawAttachments && rawAttachments.length > 0) {
                 if (!msg.metadata) msg.metadata = {};
 
                 if (attachmentsApi && typeof attachmentsApi.resolveAttachmentsForPayload === 'function') {
                     // eslint-disable-next-line no-await-in-loop
-                    const payloadAttachments = await attachmentsApi.resolveAttachmentsForPayload(rawAttachments, { cache: attachmentDataUrlCache });
+                    const payloadAttachments = await attachmentsApi.resolveAttachmentsForPayload(rawAttachments, {
+                        cache: attachmentDataUrlCache,
+                        allowAudio: !isGeminiMusicGen,
+                        allowPdf: !isGeminiMusicGen,
+                        allowText: true,
+                        allowImages: true,
+                        maxImages: isGeminiMusicGen ? 10 : undefined
+                    });
                     if (payloadAttachments && payloadAttachments.length > 0) {
                         msg.metadata.attachments = payloadAttachments;
                     }
@@ -901,9 +1056,13 @@
         const activeLeaf = activePathBeforeSend.length > 0 ? activePathBeforeSend[activePathBeforeSend.length - 1] : null;
         const sendConstraint = getMessageSendConstraint(activeLeaf, conv);
         if (sendConstraint && sendConstraint.blocked) {
-            if (typeof Framework !== 'undefined' && Framework && typeof Framework.toast === 'function') {
-                Framework.toast(sendConstraint.message || '当前节点不可直接继续发送', 'info');
-            }
+            showMessageActionToast(sendConstraint.message || '当前节点不可直接继续发送');
+            return;
+        }
+
+        const musicInputValidation = validateMusicAttachmentsForConversation(conv, attachments);
+        if (!musicInputValidation.valid) {
+            showMessageActionToast(musicInputValidation.message);
             return;
         }
 
@@ -1165,6 +1324,12 @@
             // 用户消息：创建分支而非截断
             // AI 消息：只保存修改，不截断，不重新生成
             if (targetMsg.role === 'user') {
+                const musicInputValidation = validateMusicAttachmentsForConversation(conv, editingAttachments);
+                if (!musicInputValidation.valid) {
+                    showMessageActionToast(musicInputValidation.message);
+                    return;
+                }
+
                 // 找到被编辑消息的父消息 ID
                 const parentId = targetMsg.parentId !== undefined ? targetMsg.parentId : null;
                 
@@ -1344,7 +1509,7 @@
         } else {
             const icon = document.createElement('span');
             icon.className = 'material-symbols-outlined';
-            icon.textContent = 'description';
+            icon.textContent = attachment.type && attachment.type.startsWith('audio/') ? 'music_note' : 'description';
             preview.appendChild(icon);
             
             const name = document.createElement('span');
@@ -1533,6 +1698,23 @@
         let channel = generationTarget.channel || null;
         let selectedModel = generationTarget.selectedModel || null;
         const requestPath = Array.isArray(executionOptions.pathSnapshot) ? executionOptions.pathSnapshot : null;
+
+        if (!generationTarget.error) {
+            const relatedAttachments = getAttachmentsFromConversationMessage(conv, relatedUserMessageId);
+            const musicInputValidation = validateMusicAttachmentsForTarget(generationTarget, relatedAttachments);
+            if (!musicInputValidation.valid) {
+                showMessageActionToast(musicInputValidation.message);
+                if (isMultiRouteCandidate && multiRoute && typeof multiRoute.markRouteFinished === 'function') {
+                    multiRoute.markRouteFinished(conv.id, multiRouteGroupId, multiRouteRouteId, {
+                        status: 'error',
+                        currentMessageId: null,
+                        messageId: null,
+                        error: musicInputValidation.message
+                    });
+                }
+                return;
+            }
+        }
 
         // 记录请求开始时间，用于计算持续时长
         const requestStartTime = Date.now();

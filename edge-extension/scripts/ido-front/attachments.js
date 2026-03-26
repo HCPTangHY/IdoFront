@@ -111,6 +111,37 @@
         return TEXT_LIKE_EXTENSIONS.some(ext => n.endsWith(ext));
     }
 
+    const AUDIO_LIKE_EXTENSIONS = [
+        '.mp3',
+        '.wav',
+        '.m4a',
+        '.aac',
+        '.ogg',
+        '.oga',
+        '.flac',
+        '.opus',
+        '.weba',
+        '.webm'
+    ];
+
+    function isAudioLikeAttachment(type, name) {
+        const t = normalizeMimeType(type);
+        if (t && t.startsWith('audio/')) return true;
+        if (!name || typeof name !== 'string') return false;
+        const n = name.trim().toLowerCase();
+        if (!n) return false;
+        return AUDIO_LIKE_EXTENSIONS.some(ext => n.endsWith(ext));
+    }
+
+    function getAttachmentKind(type, name) {
+        const t = normalizeMimeType(type);
+        if (t && t.startsWith('image/')) return 'image';
+        if (t === 'application/pdf') return 'pdf';
+        if (isTextLikeAttachment(t, name)) return 'text';
+        if (isAudioLikeAttachment(t, name)) return 'audio';
+        return 'other';
+    }
+
     async function dataUrlToBlob(dataUrl) {
         // 优先用 fetch(data:)，Chromium 下通常更快且更省内存
         try {
@@ -566,9 +597,15 @@
     async function resolveAttachmentsForPayload(list, options) {
         const opt = options && typeof options === 'object' ? options : {};
         const cache = opt.cache && opt.cache instanceof Map ? opt.cache : null;
+        const allowImages = opt.allowImages !== false;
+        const allowPdf = opt.allowPdf !== false;
+        const allowText = opt.allowText !== false;
+        const allowAudio = opt.allowAudio === true;
+        const maxImages = Number.isFinite(opt.maxImages) && opt.maxImages >= 0 ? opt.maxImages : Number.POSITIVE_INFINITY;
 
         const attachments = Array.isArray(list) ? list : [];
         const out = [];
+        let imageCount = 0;
 
         for (const a of attachments) {
             if (!a) continue;
@@ -576,14 +613,21 @@
             const name = pickString(a.name, '');
             const type = normalizeMimeType(pickString(a.type, ''));
 
-            // 支持图片、PDF、文本文件
-            const isImage = type && type.startsWith('image/');
-            const isPdf = type === 'application/pdf';
-            const isText = isTextLikeAttachment(type, name);
+            const kind = getAttachmentKind(type, name);
+            if (kind === 'image') {
+                if (!allowImages) continue;
+                if (imageCount >= maxImages) continue;
+            } else if (kind === 'pdf') {
+                if (!allowPdf) continue;
+            } else if (kind === 'text') {
+                if (!allowText) continue;
+            } else if (kind === 'audio') {
+                if (!allowAudio) continue;
+            } else {
+                continue;
+            }
 
-            if (!isImage && !isPdf && !isText) continue;
-
-            if (isText) {
+            if (kind === 'text') {
                 // 对于文本文件，也确保转换为 dataUrl 以便适配器使用内联数据
                 let blob = a.file instanceof Blob ? a.file : (a.blob instanceof Blob ? a.blob : null);
                 if (!blob && a.id) {
@@ -620,10 +664,14 @@
             if (!dataUrl) continue;
 
             const payloadType = type || extractMimeFromDataUrl(dataUrl);
+            if (kind === 'image') {
+                imageCount += 1;
+            }
+
             out.push({
                 dataUrl,
                 type: payloadType,
-                name: name || 'image',
+                name: name || (kind === 'audio' ? 'audio' : 'image'),
                 size: typeof a.size === 'number' ? a.size : undefined,
                 source: a.source,
                 id: a.id
@@ -645,6 +693,9 @@
         gc,
         normalizeAttachmentForState,
         normalizeAttachmentsForState,
-        resolveAttachmentsForPayload
+        resolveAttachmentsForPayload,
+        isTextLikeAttachment,
+        isAudioLikeAttachment,
+        getAttachmentKind
     };
 })();
