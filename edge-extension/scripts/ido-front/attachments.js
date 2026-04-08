@@ -602,6 +602,7 @@
         const allowText = opt.allowText !== false;
         const allowAudio = opt.allowAudio === true;
         const maxImages = Number.isFinite(opt.maxImages) && opt.maxImages >= 0 ? opt.maxImages : Number.POSITIVE_INFINITY;
+        const returnBlobs = !!opt.returnBlobs;
 
         const attachments = Array.isArray(list) ? list : [];
         const out = [];
@@ -625,6 +626,29 @@
                 if (!allowAudio) continue;
             } else {
                 continue;
+            }
+
+            // Blob 模式：图片附件直接返回 Blob 引用而非 base64 dataUrl，
+            // 减少多张历史图片 base64 同时驻留 JS 堆的内存开销。
+            if (returnBlobs && kind === 'image') {
+                let blob = a.file instanceof Blob ? a.file : (a.blob instanceof Blob ? a.blob : null);
+                if (!blob && a.id) {
+                    // eslint-disable-next-line no-await-in-loop
+                    blob = await getBlob(String(a.id));
+                }
+                if (blob) {
+                    out.push({
+                        blob: blob,
+                        type: type || blob.type || '',
+                        name: name || 'image',
+                        size: typeof a.size === 'number' ? a.size : blob.size,
+                        source: a.source,
+                        id: a.id
+                    });
+                    imageCount += 1;
+                    continue;
+                }
+                // Blob 获取失败时降级走后续 dataUrl 路径
             }
 
             if (kind === 'text') {

@@ -374,34 +374,22 @@
 
         const isGemini = channelConfig && (channelConfig.type === 'gemini' || channelConfig.type === 'gemini-deep-research');
 
-        // Gemini 生图会在多轮编辑中快速累积大图历史，Android WebView 容易在拼装 payload 时内存峰值过高。
-        // 这里仅保留最近 N 条“带附件消息”的附件进入 payload，旧消息保留文本上下文。
-        let isGeminiImageGen = false;
         let isGeminiMusicGen = false;
-        let isAndroidNative = false;
-        let isAndroidWeb = false;
 
-        try {
-            const cap = window.Capacitor;
-            if (cap) {
-                const nativeFlag = typeof cap.isNativePlatform === 'function'
-                    ? cap.isNativePlatform()
-                    : !!cap.isNative;
-                const platform = typeof cap.getPlatform === 'function' ? cap.getPlatform() : null;
-                isAndroidNative = !!nativeFlag && platform === 'android';
+        if (isGemini) {
+            try {
+                const geminiChannel = window.IdoFront && window.IdoFront.geminiChannel;
+                const currentModel = (channelConfig && channelConfig.model) || conv.selectedModel || '';
+                if (geminiChannel && typeof geminiChannel.supportsMusicGeneration === 'function') {
+                    isGeminiMusicGen = !!geminiChannel.supportsMusicGeneration(currentModel, channelConfig);
+                }
+            } catch (e) {
+                isGeminiMusicGen = false;
             }
-        } catch (e) {
-            isAndroidNative = false;
         }
 
-        try {
-            const ua = (typeof navigator !== 'undefined' && navigator.userAgent)
-                ? String(navigator.userAgent)
-                : '';
-            isAndroidWeb = /Android/i.test(ua);
-        } catch (e) {
-            isAndroidWeb = false;
-        }
+
+        let isGeminiImageGen = false;
 
         if (isGemini) {
             try {
@@ -410,39 +398,22 @@
                 if (geminiChannel && typeof geminiChannel.supportsImageGeneration === 'function') {
                     isGeminiImageGen = !!geminiChannel.supportsImageGeneration(currentModel, channelConfig);
                 }
-                if (geminiChannel && typeof geminiChannel.supportsMusicGeneration === 'function') {
-                    isGeminiMusicGen = !!geminiChannel.supportsMusicGeneration(currentModel, channelConfig);
-                }
             } catch (e) {
                 isGeminiImageGen = false;
-                isGeminiMusicGen = false;
             }
         }
 
-        // Android 原生 App + Android Web 浏览器都启用限制，降低多轮改图时内存峰值。
-        const shouldLimitGeminiImageAttachments = isGeminiImageGen && (isAndroidNative || isAndroidWeb);
-        // 默认只携带最近 1 条带附件消息、且最多 1 张图。
-        // 多轮改图场景通常只需要上一轮结果；这样可显著降低 Android 内存峰值。
-        const GEMINI_IMAGE_ATTACHMENT_MESSAGE_LIMIT = 1;
-        const GEMINI_IMAGE_ATTACHMENTS_PER_MESSAGE = 1;
-
-        let geminiImageAttachmentMessageIds = null;
-        if (shouldLimitGeminiImageAttachments) {
-            geminiImageAttachmentMessageIds = new Set();
-            let picked = 0;
-            for (let i = activePath.length - 1; i >= 0; i -= 1) {
-                const item = activePath[i];
-                if (!item || item.id === excludeMessageId || item.role === 'tool') continue;
-                const atts = getMessageAttachmentList(item);
-                if (!atts || atts.length === 0) continue;
-
-                geminiImageAttachmentMessageIds.add(item.id);
-                picked += 1;
-                if (picked >= GEMINI_IMAGE_ATTACHMENT_MESSAGE_LIMIT) {
-                    break;
-                }
+        // Android + Gemini 生图：请求侧使用 Blob 模式传递历史图片附件，
+        // 避免多张 base64 dataUrl 同时驻留 JS 堆导致内存峰值过高。
+        const useImageBlobMode = isGeminiImageGen && (function() {
+            try {
+                if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+                const ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? String(navigator.userAgent) : '';
+                return /Android/i.test(ua);
+            } catch (e) {
+                return false;
             }
-        }
+        })();
 
         let geminiMusicAttachmentMessageId = null;
         if (isGeminiMusicGen) {
@@ -470,16 +441,6 @@
             // 附件：从 store 的轻量引用解析为 dataUrl
             let rawAttachments = getMessageAttachmentList(m);
 
-            if (shouldLimitGeminiImageAttachments && rawAttachments && rawAttachments.length > 0) {
-                // 仅保留最近 N 条带附件消息的附件，降低多轮改图时的内存占用。
-                if (!geminiImageAttachmentMessageIds || !geminiImageAttachmentMessageIds.has(m.id)) {
-                    rawAttachments = null;
-                } else if (rawAttachments.length > GEMINI_IMAGE_ATTACHMENTS_PER_MESSAGE) {
-                    // 单条消息附件也限制数量，避免一次携带过多高分辨率图。
-                    rawAttachments = rawAttachments.slice(-GEMINI_IMAGE_ATTACHMENTS_PER_MESSAGE);
-                }
-            }
-
             if (rawAttachments && rawAttachments.length > 0 && m.role !== 'user') {
                 rawAttachments = rawAttachments.filter(att => inferAttachmentKind(att) !== 'audio');
                 if (rawAttachments.length === 0) {
@@ -501,12 +462,15 @@
                 if (attachmentsApi && typeof attachmentsApi.resolveAttachmentsForPayload === 'function') {
                     // eslint-disable-next-line no-await-in-loop
                     const payloadAttachments = await attachmentsApi.resolveAttachmentsForPayload(rawAttachments, {
-                        cache: attachmentDataUrlCache,
+                        cache: useImageBlobMode ? null : attachmentDataUrlCache,
                         allowAudio: !isGeminiMusicGen,
                         allowPdf: !isGeminiMusicGen,
                         allowText: true,
                         allowImages: true,
-                        maxImages: isGeminiMusicGen ? 10 : undefined
+                        // Blob 模式下仍需限制图片数量：convertMessages 最终会把所有 Blob
+                        // 转为 base64 并序列化到同一个 JSON 请求体，图片过多时峰值仍然很高。
+                        maxImages: isGeminiMusicGen ? 10 : (useImageBlobMode ? 4 : undefined),
+                        returnBlobs: useImageBlobMode
                     });
                     if (payloadAttachments && payloadAttachments.length > 0) {
                         msg.metadata.attachments = payloadAttachments;
@@ -877,6 +841,20 @@
                     } catch (e) {
                         // ignore
                     }
+                }
+            }
+
+            // 释放 Blob 模式 / Gemini 生图产生的临时 ObjectURL，避免内存泄漏
+            if (attachmentsToPersist) {
+                for (const att of attachmentsToPersist) {
+                    if (!att) continue;
+                    try {
+                        if (typeof att.dataUrl === 'string' && att.dataUrl.startsWith('blob:')) {
+                            URL.revokeObjectURL(att.dataUrl);
+                        }
+                        att.blob = null;
+                        att.dataUrl = null;
+                    } catch (_) {}
                 }
             }
 
@@ -2541,6 +2519,20 @@
                                 assistantMessage.metadata.attachmentsPersistFailed = true;
                             }
                         }
+                    }
+                }
+
+                // 释放 Blob 模式 / Gemini 生图产生的临时 ObjectURL，避免内存泄漏
+                if (finalAssistantAttachments) {
+                    for (const att of finalAssistantAttachments) {
+                        if (!att) continue;
+                        try {
+                            if (typeof att.dataUrl === 'string' && att.dataUrl.startsWith('blob:')) {
+                                URL.revokeObjectURL(att.dataUrl);
+                            }
+                            att.blob = null;
+                            att.dataUrl = null;
+                        } catch (_) {}
                     }
                 }
 

@@ -413,6 +413,44 @@
     }
 
     /**
+     * 将 base64 字符串转为 Blob，用于立即释放 JS 堆中的大文本。
+     * Blob 底层数据存储在浏览器原生内存，不占 JS 堆。
+     * @param {string} mimeType
+     * @param {string} base64Data - 纯 base64（不含 data: 前缀）
+     * @returns {Blob|null}
+     */
+    function base64ToBlob(mimeType, base64Data) {
+        try {
+            const binaryStr = atob(base64Data);
+            const len = binaryStr.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+            }
+            return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * 将 Blob 转为纯 base64 字符串（不含 data: 前缀），用于构造 Gemini inlineData。
+     * @param {Blob} blob
+     * @returns {Promise<string>}
+     */
+    function blobToBase64Pure(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const result = reader.result;
+                resolve(typeof result === 'string' ? (result.split(',')[1] || '') : '');
+            };
+            reader.onerror = () => reject(reader.error || new Error('readAsDataURL failed'));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    /**
      * 格式化 Lyria 歌词标记为可读 Markdown。
      * 输入格式示例：
      *   [[A0]] [0.0:] Intro description...
@@ -674,24 +712,42 @@
                 const mimeType = inlineData.mimeType || inlineData.mime_type;
                 const data = inlineData.data;
 
-                if (mimeType && typeof data === 'string') {
+                // 支持两种来源：
+                // 1. 原始 base64（data 为非空字符串）
+                // 2. 已由 sanitizeStreamParts 预处理（data='' 但携带 _blobUrl）
+                const hasPreprocessed = inlineData._blobUrl && inlineData._blob;
+                if (mimeType && (hasPreprocessed || (typeof data === 'string' && data.length > 0))) {
                     const isImage = mimeType.startsWith('image/');
                     const isThought = part.thought === true;
 
-                    // ★ 思维链里的预览图：收进思维链（仅 UI 展示），不进入 attachments（不持久化、不回传）
-                    if (dropThoughtImages && isThought && isImage) {
-                        const dataUrl = `data:${mimeType};base64,${data}`;
+                    let approximateSize;
+                    let blob;
+                    let displayUrl;
 
-                        let approximateSize = undefined;
+                    if (hasPreprocessed) {
+                        // 已预处理：直接复用 Blob + ObjectURL
+                        blob = inlineData._blob;
+                        displayUrl = inlineData._blobUrl;
+                        approximateSize = blob ? blob.size : undefined;
+                    } else {
+                        // 原始 base64：转换为 Blob + ObjectURL
                         try {
                             approximateSize = Math.round((data.length * 3) / 4);
                         } catch (e) {
                             approximateSize = undefined;
                         }
+                        blob = base64ToBlob(mimeType, data);
+                        displayUrl = blob
+                            ? URL.createObjectURL(blob)
+                            : `data:${mimeType};base64,${data}`;
+                    }
 
+                    // ★ 思维链里的预览图：收进思维链（仅 UI 展示），不进入 attachments（不持久化、不回传）
+                    if (dropThoughtImages && isThought && isImage) {
                         const attachmentName = `预览图 ${imageIndex++}`;
                         thoughtAttachments.push({
-                            dataUrl: dataUrl,
+                            dataUrl: displayUrl,
+                            blob: blob || undefined,
                             type: mimeType,
                             name: attachmentName,
                             size: approximateSize,
@@ -703,20 +759,12 @@
                         continue;
                     }
 
-                    const dataUrl = `data:${mimeType};base64,${data}`;
-
-                    let approximateSize = undefined;
-                    try {
-                        approximateSize = Math.round((data.length * 3) / 4);
-                    } catch (e) {
-                        approximateSize = undefined;
-                    }
-
                     const attachmentIndex = attachments.length;
                     const attachmentName = buildInlineAttachmentName(mimeType, imageIndex++);
 
                     attachments.push({
-                        dataUrl: dataUrl,
+                        dataUrl: displayUrl,
+                        blob: blob || undefined,
                         type: mimeType,
                         name: attachmentName,
                         size: approximateSize,
@@ -754,9 +802,9 @@
     }
 
     /**
-     * 过滤流式 parts 中的 thought 预览图 base64，降低 Android WebView 内存峰值。
-     * - 仅在 dropThoughtImages=true 时生效
-     * - 保留 thought/text/signature 等轻量字段
+     * 流式阶段预处理：将 thought 预览图的 base64 就地转为 Blob + ObjectURL。
+     * 释放 JS 堆中的大字符串（数百 KB~数 MB），Blob 底层存储在原生内存。
+     * 保留轻量 inlineData 结构（_blob + _blobUrl），供后续 partsToContent 拾取。
      */
     function sanitizeStreamParts(parts, options) {
         if (!Array.isArray(parts) || parts.length === 0) return [];
@@ -787,24 +835,29 @@
                 continue;
             }
 
-            // thought 图片仅用于中间推理预览，去掉 inlineData 但保留可能有用的签名/文本占位
-            const slimPart = {};
-            if (part.thought === true) {
-                slimPart.thought = true;
-            }
+            // thought 图片：将 base64 转为 Blob + ObjectURL，释放 JS 堆大字符串
+            const base64Data = typeof inlineData.data === 'string' ? inlineData.data : '';
             const thoughtSig = part.thoughtSignature || part.thought_signature;
-            if (typeof part.text === 'string') {
-                slimPart.text = part.text;
-            } else if (thoughtSig) {
-                // 保留一个空 text 占位，确保后续 partsToContent 可生成签名蓝图
-                slimPart.text = '';
-            }
-            if (thoughtSig) {
-                slimPart.thoughtSignature = thoughtSig;
-            }
 
-            if (Object.keys(slimPart).length > 0) {
+            if (base64Data.length > 0) {
+                const blob = base64ToBlob(mimeType, base64Data);
+                const blobUrl = blob ? URL.createObjectURL(blob) : null;
+                const slimPart = {
+                    thought: true,
+                    inlineData: {
+                        mimeType: mimeType,
+                        data: '',
+                        _blob: blob,
+                        _blobUrl: blobUrl
+                    }
+                };
+                // 保留原 part 上的 text（思维文本可能与图片在同一 part 中）
+                if (typeof part.text === 'string') slimPart.text = part.text;
+                if (thoughtSig) slimPart.thoughtSignature = thoughtSig;
                 out.push(slimPart);
+            } else {
+                // 无数据，保留原始 part
+                out.push(part);
             }
         }
 
@@ -947,9 +1000,19 @@
                             replayParts.push(p);
                         } else if (bp.type === 'inlineData' && bp.inlineData && typeof bp.inlineData.attachmentIndex === 'number') {
                             const att = attachmentList[bp.inlineData.attachmentIndex];
-                            const dataUrl = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
-                            if (dataUrl && dataUrl.startsWith('data:')) {
-                                const p = { inlineData: { mimeType: att.type || bp.inlineData.mimeType, data: dataUrl.split(',')[1] } };
+                            let replayBase64 = null;
+                            if (att && att.blob instanceof Blob) {
+                                // eslint-disable-next-line no-await-in-loop
+                                replayBase64 = await blobToBase64Pure(att.blob);
+                                att.blob = null;
+                            } else {
+                                const dataUrl = att && typeof att.dataUrl === 'string' ? att.dataUrl : null;
+                                if (dataUrl && dataUrl.startsWith('data:')) {
+                                    replayBase64 = dataUrl.split(',')[1];
+                                }
+                            }
+                            if (replayBase64) {
+                                const p = { inlineData: { mimeType: (att && att.type) || bp.inlineData.mimeType, data: replayBase64 } };
                                 if (bp.thoughtSignature) p.thoughtSignature = bp.thoughtSignature;
                                 replayParts.push(p);
                             }
@@ -981,7 +1044,15 @@
                 for (const att of attachments) {
                     if (!att) continue;
                     const type = att.type || '';
-                    const base64Data = (att.dataUrl || '').split(',')[1];
+                    let base64Data = null;
+                    if (att.blob instanceof Blob) {
+                        // Blob 模式：逐个转换，避免多张 base64 同时驻留 JS 堆
+                        // eslint-disable-next-line no-await-in-loop
+                        base64Data = await blobToBase64Pure(att.blob);
+                        att.blob = null; // 释放引用，允许 GC 回收
+                    } else {
+                        base64Data = (att.dataUrl || '').split(',')[1];
+                    }
                     if (!base64Data) continue;
                     
                     // 纯 REST 模式：所有附件均使用 inlineData
@@ -1466,6 +1537,9 @@
 
                     let { content, reasoning, attachments, thoughtSignature: extractedSignature, imagePartSignatures: extractedImagePartSignatures, partsBlueprint: extractedPartsBlueprint, functionCalls } = partsToContent(accumulatedParts, partsToContentOpt);
                     
+                    // 释放对原始 API 数据（含大 base64）的引用，降低内存峰值
+                    accumulatedParts = [];
+
                     // 处理 Grounding Metadata，添加引用
                     let citations = null;
                     let searchQueries = null;
