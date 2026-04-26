@@ -282,13 +282,20 @@ const FrameworkMessages = (function() {
 
     async function resolveAttachmentUrl(attachment, attachmentsApi) {
         if (!attachment || typeof attachment !== 'object') return null;
+
+        // 优先通过 id 从 IndexedDB 获取稳定的 ObjectURL
+        // 避免使用流式阶段残留的 blob: URL（底层 Blob 可能已被回收）
+        if (attachment.id && attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
+            const url = await attachmentsApi.getObjectUrl(attachment.id);
+            if (url) return url;
+        }
+
+        // 回退：使用附件自带的 dataUrl / url / src（data: URL 或外部 URL）
         const directUrl = getAttachmentDirectUrl(attachment);
         if (directUrl) {
             return directUrl;
         }
-        if (attachment.id && attachmentsApi && typeof attachmentsApi.getObjectUrl === 'function') {
-            return await attachmentsApi.getObjectUrl(attachment.id);
-        }
+
         return null;
     }
 

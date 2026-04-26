@@ -730,13 +730,15 @@
                         displayUrl = inlineData._blobUrl;
                         approximateSize = blob ? blob.size : undefined;
                     } else {
-                        // 原始 base64：转换为 Blob + ObjectURL
                         try {
                             approximateSize = Math.round((data.length * 3) / 4);
                         } catch (e) {
                             approximateSize = undefined;
                         }
-                        blob = base64ToBlob(mimeType, data);
+                        // 思维链预览图：转 Blob + ObjectURL（短命，不持久化）
+                        // 输出附件：保留 data: URL（稳定，走 normalizeAttachmentsForState 持久化管线）
+                        const useBlob = dropThoughtImages && isThought && isImage;
+                        blob = useBlob ? base64ToBlob(mimeType, data) : null;
                         displayUrl = blob
                             ? URL.createObjectURL(blob)
                             : `data:${mimeType};base64,${data}`;
