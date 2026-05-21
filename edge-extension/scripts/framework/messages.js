@@ -64,6 +64,21 @@ const FrameworkMessages = (function() {
         return `${len}:${head}|${tail}|${checksum.toString(36)}`;
     }
 
+    function buildAttachmentsSignature(list) {
+        if (!Array.isArray(list) || list.length === 0) return '';
+        return list.map(att => {
+            if (!att || typeof att !== 'object') return 'x';
+            const id = att.id || '';
+            const name = att.name || '';
+            const type = att.type || '';
+            const source = att.source || '';
+            const size = att.size || 0;
+            const dataSig = buildStringSampleSignature(att.dataUrl);
+            const refSig = buildStringSampleSignature(typeof att.url === 'string' ? att.url : (typeof att.path === 'string' ? att.path : ''));
+            return `${id}|${name}|${type}|${source}|${size}|${dataSig}|${refSig}`;
+        }).join('::');
+    }
+
     function buildThoughtAttachmentsSignature(list) {
         if (!Array.isArray(list) || list.length === 0) return '';
         return list.map(att => {
@@ -1056,6 +1071,8 @@ const FrameworkMessages = (function() {
         if (imageAttachments.length === 0 && pdfAttachments.length === 0 && audioAttachments.length === 0 && fileAttachments.length === 0) return null;
 
         const attachmentsContainer = document.createElement('div');
+        attachmentsContainer.className = 'ido-message__attachments-root';
+        attachmentsContainer.dataset.attachmentsSig = buildAttachmentsSignature(attachments);
         
         // 处理图片附件
         if (imageAttachments.length > 0) {
@@ -1406,6 +1423,33 @@ const FrameworkMessages = (function() {
         }
 
         return attachmentsContainer;
+    }
+
+    function syncAttachmentsContainer(container, attachments) {
+        if (!container) return;
+
+        const existingAttachmentsRoot = container.querySelector('.ido-message__attachments-root');
+        const legacyAttachmentContainers = existingAttachmentsRoot
+            ? []
+            : Array.from(container.children).filter(el => el && el.classList && el.classList.contains('ido-message__attachments'));
+        const nextSig = buildAttachmentsSignature(attachments);
+
+        if (!Array.isArray(attachments) || attachments.length === 0) {
+            if (existingAttachmentsRoot) {
+                existingAttachmentsRoot.remove();
+            }
+            legacyAttachmentContainers.forEach(el => el.remove());
+            return;
+        }
+
+        if (existingAttachmentsRoot && existingAttachmentsRoot.dataset.attachmentsSig === nextSig) {
+            return;
+        }
+
+        const nextContainer = createAttachmentsContainer(attachments);
+        if (existingAttachmentsRoot) existingAttachmentsRoot.remove();
+        legacyAttachmentContainers.forEach(el => el.remove());
+        if (nextContainer) container.appendChild(nextContainer);
     }
 
     /**
@@ -1865,29 +1909,9 @@ const FrameworkMessages = (function() {
             }
         }
 
-        // 处理附件（沿用现有逻辑）
-        const currentAttachments = message.attachments;
-        if (currentAttachments && currentAttachments.length > 0) {
-            const existingAttachmentsContainer = container.querySelector('.ido-message__attachments');
-
-            if (existingAttachmentsContainer) {
-                const currentImgs = existingAttachmentsContainer.querySelectorAll('img');
-                const imageAttachments = currentAttachments.filter(a => a && a.type && a.type.startsWith('image/'));
-
-                if (currentImgs.length !== imageAttachments.length) {
-                    existingAttachmentsContainer.remove();
-                    const attachmentsContainer = createAttachmentsContainer(currentAttachments);
-                    if (attachmentsContainer) {
-                        container.appendChild(attachmentsContainer);
-                    }
-                }
-            } else {
-                const attachmentsContainer = createAttachmentsContainer(currentAttachments);
-                if (attachmentsContainer) {
-                    container.appendChild(attachmentsContainer);
-                }
-            }
-        }
+        // 处理附件：附件引用从 dataUrl 切换为持久化 id 时，也必须重建 DOM
+        // 否则缩略图点击事件仍会闭包引用旧附件对象，lightbox 会继续拿到失效数据
+        syncAttachmentsContainer(container, message.attachments);
 
         // 滚动（仅流式时）
         if (streaming) {
@@ -2221,33 +2245,8 @@ const FrameworkMessages = (function() {
             // 工具调用状态更新由 toolCallRenderer.updateUI 单独处理
         }
 
-        // 处理附件：如果是流式全量累加模式，需要重新渲染附件容器
-        const currentAttachments = lastMsg.attachments;
-        if (currentAttachments && currentAttachments.length > 0) {
-            // 查找现有的附件容器
-            const existingAttachmentsContainer = container.querySelector('.ido-message__attachments');
-            
-            // 如果已存在附件，且附件数量改变了，需要重新渲染整个附件区域
-            if (existingAttachmentsContainer) {
-                const currentImgs = existingAttachmentsContainer.querySelectorAll('img');
-                const imageAttachments = currentAttachments.filter(a => a && a.type && a.type.startsWith('image/'));
-                
-                // 只有当图片数量变化时才重新渲染，避免闪烁
-                if (currentImgs.length !== imageAttachments.length) {
-                    existingAttachmentsContainer.remove();
-                    const attachmentsContainer = createAttachmentsContainer(currentAttachments);
-                    if (attachmentsContainer) {
-                        container.appendChild(attachmentsContainer);
-                    }
-                }
-            } else {
-                // 首次渲染附件
-                const attachmentsContainer = createAttachmentsContainer(currentAttachments);
-                if (attachmentsContainer) {
-                    container.appendChild(attachmentsContainer);
-                }
-            }
-        }
+        // 处理附件：不仅要关注数量，还要关注附件引用本身是否已切换
+        syncAttachmentsContainer(container, lastMsg.attachments);
 
         // 滚动
         const ui = getUI();
@@ -2384,15 +2383,8 @@ const FrameworkMessages = (function() {
             updateMessageStats(messageId, stats);
         }
 
-        // 确保附件被渲染
-        if (msgState && msgState.attachments && msgState.attachments.length > 0) {
-            const existingWrapper = container.querySelector('.ido-message__attachment-wrapper');
-            if (!existingWrapper) {
-                const attachmentsContainer = createAttachmentsContainer(msgState.attachments);
-                if (attachmentsContainer) {
-                    container.appendChild(attachmentsContainer);
-                }
-            }
+        if (msgState) {
+            syncAttachmentsContainer(container, msgState.attachments);
         }
     }
 
@@ -2508,16 +2500,9 @@ const FrameworkMessages = (function() {
             updateMessageStats(lastMsgId, stats);
         }
 
-        // 确保附件被渲染（修复流式更新期间附件可能未被渲染的问题）
         const lastMsgForAttachments = state.messages[state.messages.length - 1];
-        if (lastMsgForAttachments && lastMsgForAttachments.attachments && lastMsgForAttachments.attachments.length > 0) {
-            const existingWrapper = container.querySelector('.ido-message__attachment-wrapper');
-            if (!existingWrapper) {
-                const attachmentsContainer = createAttachmentsContainer(lastMsgForAttachments.attachments);
-                if (attachmentsContainer) {
-                    container.appendChild(attachmentsContainer);
-                }
-            }
+        if (lastMsgForAttachments) {
+            syncAttachmentsContainer(container, lastMsgForAttachments.attachments);
         }
     }
 

@@ -2522,6 +2522,18 @@
                     }
                 }
 
+                // 将持久化后的附件引用（含 id）同步回 FrameworkMessages UI 状态
+                // 这样 lightbox 打开时 resolveAttachmentUrl 能通过 id 从 IndexedDB 获取有效 URL
+                if (context && shouldRenderUI(conv.id, assistantMessage.id)) {
+                    const syncPayload = {
+                        content: assistantMessage.content,
+                        attachments: assistantMessage.attachments || []
+                    };
+                    if (typeof context.updateMessageById === 'function') {
+                        context.updateMessageById(assistantMessage.id, syncPayload);
+                    }
+                }
+
                 // 释放 Blob 模式 / Gemini 生图产生的临时 ObjectURL，避免内存泄漏
                 if (finalAssistantAttachments) {
                     for (const att of finalAssistantAttachments) {
